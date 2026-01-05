@@ -2,7 +2,7 @@ import { useEventListener } from "@rbxts/pretty-react-hooks";
 import { useState } from "@rbxts/react";
 import { Players } from "@rbxts/services";
 
-import { LocalPlayer } from "client/constants";
+import { LocalPlayer } from "client/constants/local-player";
 
 /**
  * Returns whether the local player has a premium membership or not. This will

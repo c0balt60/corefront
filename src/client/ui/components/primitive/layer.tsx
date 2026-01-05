@@ -1,7 +1,7 @@
 import React from "@rbxts/react";
 
 import { $NODE_ENV } from "rbxts-transform-env";
-import { IS_EDIT } from "shared/constants";
+import { IS_EDIT } from "shared/constants/constants";
 
 import { UltraWideContainer } from "../ultra-wide-container";
 import { Group } from "./group";

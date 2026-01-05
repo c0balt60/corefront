@@ -4,7 +4,7 @@ import { Players } from "@rbxts/services";
 
 import { $NODE_ENV } from "rbxts-transform-env";
 import { events } from "server/network";
-import { IS_EDIT } from "shared/constants";
+import { IS_EDIT } from "shared/constants/constants";
 import type { SerializedSharedState, SharedState } from "shared/store";
 import { slices, stateSerDes } from "shared/store";
 

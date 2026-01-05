@@ -82,7 +82,7 @@ export function setupLogger(): void {
 	Log.SetLogger(
 		Logger.configure()
 			.SetMinLogLevel(LOG_LEVEL)
-			.EnrichWithProperty("Version", $package.version)
+			.EnrichWithProperty("Version", $package.version ?? "2.2.0")
 			.WriteTo(new LogEventOutputSink())
 			.Create(),
 	);

@@ -3,7 +3,7 @@ import { createBroadcastReceiver } from "@rbxts/reflex";
 
 import { events } from "client/network";
 import { $NODE_ENV } from "rbxts-transform-env";
-import { IS_EDIT } from "shared/constants";
+import { IS_EDIT } from "shared/constants/constants";
 import { stateSerDes } from "shared/store";
 
 /**

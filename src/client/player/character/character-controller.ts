@@ -5,7 +5,7 @@ import { Error } from "@rbxts/luau-polyfill";
 import Signal from "@rbxts/rbx-better-signal";
 import { promiseTree } from "@rbxts/validate-tree";
 
-import { LocalPlayer } from "client/constants";
+import { LocalPlayer } from "client/constants/local-player";
 import {
 	CHARACTER_LOAD_TIMEOUT,
 	type CharacterRig,

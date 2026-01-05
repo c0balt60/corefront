@@ -3,9 +3,9 @@ import { ReflexProvider } from "@rbxts/react-reflex";
 import type { Root } from "@rbxts/react-roblox";
 import { createPortal, createRoot } from "@rbxts/react-roblox";
 
-import { PlayerGui } from "client/constants";
-import { store } from "client/store";
+import { PlayerGui } from "client/constants/player-gui";
 
+// import { store } from "client/store";
 import type { RemProviderProps } from "../providers/rem-provider";
 import { RemProvider } from "../providers/rem-provider";
 
@@ -26,15 +26,19 @@ interface MountProps extends RemProviderProps {
  */
 export function mount({ baseRem, key, remOverride, children }: MountProps): Root {
 	const root = createRoot(new Instance("Folder"));
-	root.render(
-		<StrictMode>
-			<RemProvider key="rem-provider" baseRem={baseRem} remOverride={remOverride}>
-				<ReflexProvider key="reflex-provider" producer={store}>
-					{createPortal(children, PlayerGui, key)}
-				</ReflexProvider>
-			</RemProvider>
-		</StrictMode>,
-	);
+
+	print(root, "root folder", PlayerGui);
+
+	root.render(<StrictMode>{createPortal(children, PlayerGui, key)}</StrictMode>);
+
+	// root.render(
+	// 	<StrictMode>
+	// <RemProvider key="rem-provider" baseRem={baseRem}
+	// remOverride={remOverride}> <ReflexProvider key="reflex-provider"
+	// producer={store}> {createPortal(children, PlayerGui, key)}
+	// </ReflexProvider> </RemProvider> </StrictMode>, );
+
+	print("created root");
 
 	return root;
 }

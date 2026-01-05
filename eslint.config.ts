@@ -36,6 +36,7 @@ export default isentinel({
 					allowCompoundWords: true,
 					enabled: true,
 				},
+
 				customWordListFile: "cspell.config.yaml",
 				generateSuggestions: true,
 				numSuggestions: 100,

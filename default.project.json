@@ -1,5 +1,5 @@
 {
-	"name": "flamework-game",
+	"name": "example-development",
 	"globIgnorePaths": ["**/package.json", "**/tsconfig.json"],
 	"tree": {
 		"$className": "DataModel",
@@ -13,6 +13,9 @@
 			"$className": "ReplicatedStorage",
 			"TS": {
 				"$path": "out/shared"
+			},
+			"TS-types": {
+				"$path": "out/types"
 			},
 			"rbxts_include": {
 				"$path": "include",
@@ -48,10 +51,17 @@
 				}
 			}
 		},
+		"TextChatService": {
+			"$className": "TextChatService",
+			"$properties": {
+				"ChatVersion": "TextChatService"
+			}
+		},
 		"Workspace": {
 			"$className": "Workspace",
 			"$properties": {
-				"FilteringEnabled": true
+				"FilteringEnabled": true,
+				"SignalBehavior": "Deferred"
 			}
 		}
 	}
