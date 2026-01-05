@@ -57,10 +57,11 @@ export function getPlayerByName(name: string): Player | undefined {
  * @see character-service.ts which handles retries
  */
 export async function loadCharacter(player: Player): Promise<void> {
-	await Promise.race<unknown>([
+	await Promise.race<number>([
 		Promise.try(() => {
 			cleanupCharacter(player);
 			player.LoadCharacter();
+			return 0;
 		}),
 		Promise.delay(CHARACTER_LOAD_TIMEOUT),
 	]);
