@@ -42,13 +42,14 @@ export default isentinel({
 				numSuggestions: 100,
 			},
 		],
-		// "flawless/naming-convention": [
-		// 	"off",
-		// 	{
-		// 		format: ["StrictPascalCase"],
-		// 		selector: ["variable"],
-		// 	},
-		// ],
+		"comment-length/limit-single-line-comments": ["off"],
+		"flawless/naming-convention": [
+			"off",
+			{
+				format: ["StrictPascalCase"],
+				selector: ["variable"],
+			},
+		],
 		"jsdoc/require-description-complete-sentence": ["off"],
 	},
 	spellCheck: true,

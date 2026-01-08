@@ -4,7 +4,7 @@ import type { Logger } from "@rbxts/log";
 import { Inspect } from "@rbxts/rbx-debug";
 import { SoundService, TweenService } from "@rbxts/services";
 
-import { USER_ID } from "client/constants/local-player";
+import { LocalPlayer } from "client/constants/local-player";
 import { store } from "client/store";
 import SoundSystem from "shared/modules/3d-sound-system";
 import Make from "shared/modules/make";
@@ -52,7 +52,7 @@ export class SoundController implements OnInit, OnStart {
 
 	/** @ignore */
 	public onStart(): void {
-		store.subscribe(selectPlayerSettings(tostring(USER_ID)), (current) => {
+		store.subscribe(selectPlayerSettings(tostring(LocalPlayer.UserId)), (current) => {
 			if (!current) {
 				return;
 			}
