@@ -1,5 +1,4 @@
-import { peek } from "@rbxts/charm";
-import React, { useBinding, useEffect } from "@rbxts/react";
+import React, { useEffect } from "@rbxts/react";
 import { useAtom } from "@rbxts/react-charm";
 
 import { displayAtom } from "client/store/display";
@@ -13,17 +12,15 @@ import { Transition } from "./transition";
 export function App(): React.ReactNode {
 	const display = useAtom(displayAtom);
 
-	const [transition, setTransition] = useBinding(false);
-
 	useEffect(() => {
 		print("display changed: ", display);
-		setTransition(true);
-	}, [display]);
+		// transitionAtom({ delay: 5, type: "in" });
+	});
 
 	return (
 		<>
 			<Layer key="Transition" DisplayOrder={1000}>
-				<Transition setTransition={setTransition} transition={transition} />
+				<Transition />
 			</Layer>
 
 			<Layer key="MainInterface">

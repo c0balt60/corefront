@@ -1,14 +1,22 @@
 import { useMouse, useViewport } from "@rbxts/pretty-react-hooks";
 import type { ReactNode } from "@rbxts/react";
-import React, { useMemo } from "@rbxts/react";
+import React, { useEffect, useMemo, useState } from "@rbxts/react";
 
 import { usePx, useTheme } from "../hooks";
+import { useDisplay } from "../hooks/use-display";
 
 export function MenuBackground(): ReactNode {
+	const display = useDisplay("in-game");
 	const theme = useTheme();
 	const mouse = useMouse();
 	const viewport = useViewport();
 	const px = usePx();
+
+	const [visible, setVisible] = useState(false);
+
+	useEffect(() => {
+		setVisible(!display);
+	}, [display, setVisible]);
 
 	const mouseFromCenter = useMemo(() => {
 		return mouse.map((position) => viewport.getValue().div(2).sub(position));
@@ -20,6 +28,7 @@ export function MenuBackground(): ReactNode {
 			BackgroundColor3={Color3.fromRGB(31, 31, 31)}
 			BackgroundTransparency={0}
 			Size={UDim2.fromScale(1, 1)}
+			Visible={visible}
 			ZIndex={-100}
 		>
 			<imagelabel

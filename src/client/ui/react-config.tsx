@@ -1,5 +1,7 @@
 import type { ProfilerOnRenderCallback } from "@rbxts/react";
+import { StarterGui } from "@rbxts/services";
 
+import { PlayerGui } from "client/constants/player-gui";
 import { $NODE_ENV } from "rbxts-transform-env";
 
 export function reactConfig(): void {
@@ -18,14 +20,24 @@ export function reactConfig(): void {
 
 export async function createApp(): Promise<void> {
 	// Avoid implicit React import before setting the __DEV__ flag
-	// eslint-disable-next-line sonar/no-dead-store, flawless/naming-convention -- False positive
+	// eslint-disable-next-line sonar/no-dead-store -- False positive
 	const React = await import("@rbxts/react");
 	const { App } = await import("client/ui/app/app");
 	const { mount } = await import("client/ui/functions");
 
 	print("before mount");
 
-	print(mount({ key: "app", children: <App /> }));
+	// Disable all screen guis
+	// for (const ui of StarterGui.GetChildren()) {
+	// 	const found = PlayerGui.FindFirstChild(ui.Name) as ScreenGui | undefined;
+	// 	if (!found) {
+	// 		return;
+	// 	}
+
+	// 	found.Enabled = false;
+	// }
+
+	mount({ key: "app", children: <App /> });
 }
 
 export const onRenderProfiler: ProfilerOnRenderCallback = (

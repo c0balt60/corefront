@@ -2,6 +2,8 @@ import { useMotion } from "@rbxts/pretty-react-hooks";
 import type { ReactNode } from "@rbxts/react";
 import React, { useEffect, useRef, useState } from "@rbxts/react";
 
+import { displayAtom } from "client/store/display";
+import { transitionAtom } from "client/store/transition";
 import { DelayRender } from "client/ui/components/delay-render";
 import { usePx } from "client/ui/hooks";
 import { useDisplay } from "client/ui/hooks/use-display";
@@ -18,12 +20,18 @@ export default function MainMenu(): ReactNode {
 	const frameRef = useRef<Frame | undefined>(undefined);
 
 	const [menu, setMenu] = useState<MenuScreens>("home");
+
+	const [visible, setVisible] = useState(true);
 	const [navHovered, setNavHovered] = useState(false);
 	const [navObject, setNavObject] = useState<TextButton | undefined>(undefined);
 
 	const [followNav, setFollowNav] = useMotion<UDim2>(new UDim2());
 	const [navTransparency, setNavTransparency] = useMotion(1);
 	const [navSize, setNavSize] = useMotion(UDim2.fromOffset(px(100), px(5)));
+
+	useEffect(() => {
+		setVisible(menu === "home");
+	}, [menu]);
 
 	useEffect(() => {
 		setNavTransparency.spring(navHovered ? 0 : 1);
@@ -172,7 +180,12 @@ export default function MainMenu(): ReactNode {
 						SubText="Spawn into the game"
 						Text="DEPLOY"
 						onClick={() => {
-							setMenu("home");
+							// setMenu("home");
+							setVisible(false);
+							task.wait(1);
+							transitionAtom({ delay: 5, type: "in" });
+							task.wait(2);
+							displayAtom("in-game");
 						}}
 					/>
 					<HomeButton

@@ -8,9 +8,11 @@ import {
 } from "@rbxts/pretty-react-hooks";
 import type { ReactNode } from "@rbxts/react";
 import React, { useEffect, useMemo, useRef, useState } from "@rbxts/react";
+import { useAtom } from "@rbxts/react-charm";
 import { TweenService } from "@rbxts/services";
 
 import { displayAtom } from "client/store/display";
+import { transitionAtom } from "client/store/transition";
 import { DelayRender } from "client/ui/components/delay-render";
 import { useScreenContext } from "client/ui/context";
 import { usePx, useTheme } from "client/ui/hooks";
@@ -63,6 +65,7 @@ export default function LoadingScreen(): ReactNode {
 	const theme = useTheme();
 	const px = usePx();
 	const display = useDisplay("loading-screen");
+	const displayedAtom = useAtom(displayAtom);
 
 	const barRef = useRef<Frame>();
 
@@ -75,6 +78,7 @@ export default function LoadingScreen(): ReactNode {
 	const [loadPosition, loadPositionMotion] = useMotion<UDim2>(UDim2.fromScale(0, 0.5));
 
 	const [xSize, setXSize] = useMotion(1);
+	const [scaleMotion, setScaleMotion] = useMotion(1);
 
 	useEffect(() => {
 		const bar = barRef.current;
@@ -85,6 +89,7 @@ export default function LoadingScreen(): ReactNode {
 
 		// For any internal state
 		let cancelled = false;
+		let cancelledLoad = false;
 
 		// Set initial spring values
 		loadSizeMotion.set(UDim2.fromScale(0.3, 1));
@@ -124,6 +129,10 @@ export default function LoadingScreen(): ReactNode {
 			let percent = 0;
 
 			for (let index = 0; index < 20; index++) {
+				if (cancelledLoad) {
+					return;
+				}
+
 				loadSizeMotion.spring(UDim2.fromScale((percent += math.random(1, 15) * 0.01), 1), {
 					damping: 1,
 					frequency: 5,
@@ -134,41 +143,42 @@ export default function LoadingScreen(): ReactNode {
 
 			task.wait(1);
 
-			displayAtom("main-menu");
-			print("into main-menu");
+			setXSize.spring(0);
+			task.wait(1);
+			setScaleMotion.spring(20);
+
+			setScaleMotion.onComplete(() => {
+				transitionAtom({ delay: 3, type: "in" });
+				task.wait(1);
+				displayAtom("main-menu");
+			});
+
+			print("ANIMATING ==> into main-menu");
 			// screen.into("Main");
 		});
 
 		return () => {
 			handle.cancel();
 			cancelled = true;
+			cancelledLoad = true;
 			load.cancel();
 		};
-	}, [update, loadSizeMotion, loadPositionMotion]);
+	}, [update, loadSizeMotion, loadPositionMotion, setXSize, setScaleMotion, display]);
 
 	useEffect(() => {
 		setAssetsText(`Assets Loading${".".rep(dotCount)}${" ".rep(3 - dotCount)}`);
 	}, [dotCount]);
 
-	useUnmountEffect(() => {
-		print("Unmounting");
-
-		setXSize.spring(0);
-	});
-
 	useEffect(() => {
-		if (display) {
-			print(display);
-			return;
-		}
-
-		print("display unmount: ", display);
-
-		setXSize.spring(0);
-	});
+		// if (display) {
+		// 	print(display);
+		// 	return;
+		// }
+		// warn("display unmount: ", display, displayedAtom);
+	}, [display, setXSize, setScaleMotion]);
 
 	return (
-		<DelayRender ShouldRender={display} UnmountDelay={3}>
+		<DelayRender ShouldRender={display} UnmountDelay={1}>
 			<frame
 				key="loading-screen"
 				BackgroundColor3={Color3.fromRGB(31, 31, 31)}

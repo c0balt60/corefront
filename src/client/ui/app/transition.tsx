@@ -1,19 +1,36 @@
 import { useMotion } from "@rbxts/pretty-react-hooks";
-import type { Binding, ReactNode } from "@rbxts/react";
-import React, { useEffect, useState } from "@rbxts/react";
+import type { ReactNode } from "@rbxts/react";
+import React, { useEffect } from "@rbxts/react";
+import { useAtom } from "@rbxts/react-charm";
 
-interface ITransitionProps {
-	setTransition: (value: boolean) => void;
-	transition: Binding<boolean>;
-}
+import { transitionAtom } from "client/store/transition";
 
-export function Transition({ setTransition, transition }: Readonly<ITransitionProps>): ReactNode {
-	const [transparencyMotion, setTransparencyMotion] = useMotion(1);
+export function Transition(): ReactNode {
+	const transition = useAtom(transitionAtom);
+
+	const [transparencyMotion, setTransparencyMotion] = useMotion(0);
 
 	useEffect(() => {
-		print("transition: ", transition.getValue());
-		// setTransparency(transition.getValue() ? 0 : 1);
-		setTransparencyMotion.spring(transition.getValue() ? 0 : 1);
+		if (transition.type === "idle") {
+			setTransparencyMotion.set(1);
+			return;
+		}
+
+		let cancelled = false;
+		const animate = new Promise(() => {
+			setTransparencyMotion.spring(0);
+			task.wait(transition.delay);
+			if (cancelled) {
+				return;
+			}
+
+			setTransparencyMotion.spring(1);
+		});
+
+		return () => {
+			cancelled = true;
+			animate.cancel();
+		};
 	}, [transition, setTransparencyMotion]);
 
 	return (
