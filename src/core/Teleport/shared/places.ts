@@ -4,7 +4,7 @@ function findPlaceIds() {
 	for (const [, environment] of pairs(ENVIRONMENTS)) {
 		if (environment.universeId !== 0 && environment.universeId === game.GameId) return environment.places;
 	}
-	return { lobby: 0, match: 0 };
+	return { lobby: 0, game: 0 };
 }
 
 /**
