@@ -1,0 +1,2 @@
+# Packed Studio models (see places/*/assets)
+*.rbxm filter=lfs diff=lfs merge=lfs -text

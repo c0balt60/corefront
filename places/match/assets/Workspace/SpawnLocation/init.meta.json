@@ -1,0 +1,9 @@
+{
+	"className": "SpawnLocation",
+	"properties": {
+		"Anchored": true,
+		"Size": [12, 1, 12],
+		"CFrame": [0, 0.5, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
+		"Duration": 0
+	}
+}

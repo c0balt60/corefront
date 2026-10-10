@@ -1,0 +1,14 @@
+# Rojo/Argon map `node_modules/@rbxts` into the place as one flat folder, and
+# packages require their dependencies as siblings. pnpm's default isolated
+# layout hides transitive packages in `node_modules/.pnpm`, where the sync tool
+# never sees them, so hoisting is required.
+nodeLinker: hoisted
+
+# Transformers must share roblox-ts's copy of typescript. With a second copy,
+# every node check inside the transformer silently fails and the compiler emits
+# untransformed code. (pnpm 10+ ignores `pnpm.overrides` in package.json.)
+overrides:
+  rbxts-transform-debug>typescript: $typescript
+  rbxts-transform-env>typescript: $typescript
+  rbxts-transformer-flamework>typescript: $typescript
+  "@rbxts/destroyable": 1.0.9

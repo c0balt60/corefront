@@ -1,0 +1,5 @@
+# Toolchain managed by Rokit (https://github.com/rojo-rbx/rokit). Run `rokit install`.
+[tools]
+argon = "argon-rbx/argon@2.0.29"
+rbxcloud = "Sleitnick/rbxcloud@0.17.0"
+rojo = "rojo-rbx/rojo@7.7.1"

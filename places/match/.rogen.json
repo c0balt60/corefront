@@ -1,0 +1,61 @@
+{
+	"source": [
+		"../../src/core",
+		"../../src/match"
+	],
+	"ts": {
+		"output": "default.project.json",
+		"build": "out"
+	},
+	"project": {
+		"name": "match",
+		"globIgnorePaths": [
+			"**/package.json",
+			"**/tsconfig.json"
+		],
+		"tree": {
+			"$className": "DataModel",
+			"ReplicatedStorage": {
+				"rbxts_include": {
+					"$path": "include",
+					"node_modules": {
+						"$className": "Folder",
+						"@rbxts": {
+							"$path": "../../node_modules/@rbxts"
+						},
+						"@flamework": {
+							"$path": "../../node_modules/@flamework"
+						}
+					}
+				},
+				"Assets": {
+					"$path": "assets/ReplicatedStorage"
+				}
+			},
+			"Players": {
+				"$properties": {
+					"CharacterAutoLoads": false
+				}
+			},
+			"ServerStorage": {
+				"Assets": {
+					"$path": "assets/ServerStorage"
+				}
+			},
+			"Workspace": {
+				"$path": "assets/Workspace"
+			}
+		},
+		"syncback": {
+			"ignoreGlobs": [
+				"out/**",
+				"include/**",
+				"assets/**/*.rbxm"
+			],
+			"ignoreClasses": [
+				"Camera",
+				"Terrain"
+			]
+		}
+	}
+}

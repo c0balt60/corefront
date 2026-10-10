@@ -1,0 +1,12 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"rootDir": "src",
+		"outDir": "places/lobby/out",
+		"tsBuildInfoFile": "places/lobby/out/tsconfig.tsbuildinfo"
+	},
+	"include": [
+		"src/core",
+		"src/lobby"
+	]
+}

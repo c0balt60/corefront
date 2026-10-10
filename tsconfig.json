@@ -1,0 +1,32 @@
+{
+	"compilerOptions": {
+		// required
+		"allowSyntheticDefaultImports": true,
+		"downlevelIteration": true,
+		"jsx": "react",
+		"jsxFactory": "Vide.jsx",
+		"jsxFragmentFactory": "Vide.Fragment",
+		"module": "commonjs",
+		"moduleResolution": "Node",
+		"noLib": true,
+		"resolveJsonModule": true,
+		"experimentalDecorators": true,
+		"forceConsistentCasingInFileNames": true,
+		"moduleDetection": "force",
+		"strict": true,
+		"target": "ESNext",
+		"typeRoots": ["node_modules/@rbxts", "node_modules/@flamework"],
+
+		// configurable. `scripts/place.mjs` generates a `tsconfig.<place>.json` that extends this and sets its own rootDir/outDir.
+		// This file is only for the editor; never run `rbxtsc` from the root.
+		"baseUrl": "src",
+		"incremental": true,
+
+		"plugins": [
+			{ "transform": "rbxts-transformer-flamework" },
+			{ "transform": "rbxts-transform-env", "defaultEnvironment": "development" },
+			{ "transform": "rbxts-transform-debug" }
+		]
+	},
+	"include": ["src"]
+}
