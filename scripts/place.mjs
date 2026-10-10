@@ -95,6 +95,7 @@ function projectFor(place, name, follow) {
 }
 
 function build(place) {
+	console.log("Starting build...");
 	prepare(place);
 	run(rbxtsc(place, false));
 
@@ -117,6 +118,7 @@ function build(place) {
 }
 
 function serve(place) {
+	console.log("Starting serve...");
 	const name = tool("serve");
 	const child = spawn(name, ["serve", projectFor(place, name, true)], { stdio: "inherit" });
 	child.on("exit", (code) => process.exit(code ?? 1));

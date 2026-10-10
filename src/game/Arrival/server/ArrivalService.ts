@@ -1,4 +1,5 @@
 import { OnStart, Service } from "@flamework/core";
+import { atom } from "@rbxts/charm";
 import type { Logger } from "@rbxts/log";
 import { Players } from "@rbxts/services";
 
@@ -6,17 +7,33 @@ import { DataService } from "core/Data/server/DataService";
 import { IS_STUDIO } from "core/shared/constants";
 import { teleport } from "core/Teleport/server/teleport";
 import { PLACE_IDS } from "core/Teleport/shared/places";
-import { isMatchTeleportData, type MatchTeleportData } from "core/Teleport/shared/teleport-data";
+import { isWorldTeleportData } from "core/Teleport/shared/teleport-data";
+import { getWorld, removeWorld, setWorldPlayers } from "core/Worlds/server/registry";
+import { isValidCode, randomSeed } from "core/Worlds/shared/worlds";
+
+/** The world this server runs, as the registry describes it. */
+export interface World {
+	readonly code: string;
+	readonly seed: number;
+	readonly isPrivate: boolean;
+}
+
+/** Seconds between registry refreshes. The registry drops an entry that goes quiet for longer than that. */
+const REGISTRY_REFRESH = 30;
 
 /**
- * The match's teleport receiver and data loader. Each arriving player's teleport
- * data is checked, then their profile is loaded. Once both are done they count
- * as arrived. Anyone who did not come from the lobby is sent back there.
+ * The world server's teleport receiver and data loader. The first player sent by
+ * the lobby decides which world this server runs: the join code in their teleport
+ * data must match a registry entry that belongs to this very server. Everyone else
+ * must carry the same code, or goes back to the lobby. Players count as arrived
+ * once their profile has loaded too.
  */
 @Service()
 export class ArrivalService implements OnStart {
-	/** What this server was reserved for. Set by the first player to arrive. */
-	private teleportData: MatchTeleportData | undefined;
+	/** The world, once known. Read it with `getWorld`, or subscribe to react when it becomes known. Do not write it. */
+	readonly worldAtom = atom<World>();
+	/** The one registry lookup, shared by everyone who arrives while it runs. */
+	private lookup: Promise<World | undefined> | undefined;
 	private readonly arrived = new Set<Player>();
 
 	constructor(
@@ -25,52 +42,90 @@ export class ArrivalService implements OnStart {
 	) {}
 
 	onStart() {
+		if (IS_STUDIO) {
+			// Studio can neither teleport nor reach the registry, so a playtest is a world of its own.
+			this.worldAtom({ code: "STUDIO", seed: randomSeed(), isPrivate: false });
+		} else {
+			Players.PlayerAdded.Connect(() => this.refreshRegistry());
+			Players.PlayerRemoving.Connect((player) => this.refreshRegistry(player));
+			task.spawn(() => {
+				while (true) {
+					task.wait(REGISTRY_REFRESH);
+					this.refreshRegistry();
+				}
+			});
+			game.BindToClose(() => {
+				const world = this.worldAtom();
+				if (world) removeWorld(world.code);
+			});
+		}
+
 		const arrive = (player: Player) => this.arrive(player);
 		Players.GetPlayers().forEach(arrive);
 		Players.PlayerAdded.Connect(arrive);
 		Players.PlayerRemoving.Connect((player) => this.arrived.delete(player));
 	}
 
-	/** The lobby's teleport data, or `undefined` until the first player arrives. */
-	getTeleportData(): MatchTeleportData | undefined {
-		return this.teleportData;
+	/** The world this server runs, or `undefined` until the first player has been checked. */
+	getWorld(): World | undefined {
+		return this.worldAtom();
 	}
 
-	/** Players whose teleport data was valid and whose data has loaded. */
-	getArrived(): Array<Player> {
-		return [...this.arrived];
-	}
-
-	/** Whether everyone the lobby sent has arrived. */
-	hasEveryoneArrived(): boolean {
-		const expected = this.teleportData?.userIds ?? [];
-		return expected.every((userId) => this.getArrived().some((player) => player.UserId === userId));
+	/** Whether a player belongs in this world and their data has loaded. */
+	isArrived(player: Player): boolean {
+		return this.arrived.has(player);
 	}
 
 	private async arrive(player: Player) {
-		const data = this.readTeleportData(player);
-		if (!data) {
-			this.logger.Warn("{Player} did not come from the lobby. Sending them back", player.Name);
-			teleport(PLACE_IDS.lobby, [player]);
-			return;
-		}
-		// A reserved server only ever receives one group, so every arrival carries the same data.
-		this.teleportData ??= data;
+		const admitted = await this.admit(player);
+		if (!admitted || player.Parent !== Players) return;
 
-		const profile = await this.dataService.waitForData(player);
-		if (!profile) return;
+		const data = await this.dataService.waitForData(player);
+		if (!data || player.Parent !== Players) return;
 
 		this.arrived.add(player);
-		this.logger.Info("{Player} arrived for {Mode}", player.Name, data.mode);
+		this.logger.Info("{Player} arrived in world {Code}", player.Name, this.worldAtom()?.code);
 	}
 
-	private readTeleportData(player: Player): MatchTeleportData | undefined {
-		const joinData = player.GetJoinData();
-		if (isMatchTeleportData(joinData.TeleportData) && joinData.SourcePlaceId === PLACE_IDS.lobby) {
-			return joinData.TeleportData;
+	/** Whether a player belongs in this world. Anyone who does not is sent back to the lobby. */
+	private async admit(player: Player): Promise<boolean> {
+		if (IS_STUDIO) return true;
+
+		const join = player.GetJoinData();
+		const data: unknown = join.TeleportData;
+		if (join.SourcePlaceId === PLACE_IDS.lobby && isWorldTeleportData(data) && isValidCode(data.code)) {
+			// The first valid arrival looks the world up; anyone arriving meanwhile waits on that same lookup.
+			this.lookup ??= Promise.try(() => this.lookupWorld(data.code));
+			const lookup = this.lookup;
+			const world = await lookup;
+			// No world means the lookup failed: forget it so the next arrival tries again.
+			if (!world && this.lookup === lookup) this.lookup = undefined;
+			if (world?.code === data.code) return true;
 		}
-		// Studio cannot teleport, so a playtest of this place acts as a practice match.
-		if (IS_STUDIO) return { mode: "practice", userIds: [player.UserId] };
-		return undefined;
+
+		this.logger.Warn("{Player} does not belong in this world. Sending them back", player.Name);
+		teleport(PLACE_IDS.lobby, [player]);
+		return false;
+	}
+
+	/** Reads the world from the registry, if the entry is the one reserved for this server, and starts hosting it. */
+	private lookupWorld(code: string): World | undefined {
+		const entry = getWorld(code);
+		if (!entry || entry.privateServerId !== game.PrivateServerId) return undefined;
+
+		const world: World = { code, seed: entry.seed, isPrivate: entry.isPrivate };
+		this.worldAtom(world);
+		this.logger.Info("Hosting world {Code} (seed {Seed}, private {Private})", code, world.seed, world.isPrivate);
+		task.spawn(() => this.refreshRegistry());
+		return world;
+	}
+
+	/** Writes the player count, which also renews the registry entry. `leaving` is still listed during `PlayerRemoving`. */
+	private refreshRegistry(leaving?: Player) {
+		const world = this.worldAtom();
+		if (!world) return;
+
+		const players = Players.GetPlayers().filter((player) => player !== leaving);
+		setWorldPlayers(world.code, players.size());
 	}
 }

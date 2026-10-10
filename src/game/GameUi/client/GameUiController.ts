@@ -2,12 +2,12 @@ import { Controller, OnStart } from "@flamework/core";
 import { Players } from "@rbxts/services";
 import { mount } from "@rbxts/vide";
 
-import { MatchApp } from "match/MatchUi/client/match-app";
+import { GameApp } from "game/GameUi/client/game-app";
 
-/** Mounts the match's own interface, next to core's `App`. The match's only bridge between Flamework and Vide. */
+/** Mounts the world server's own interface, next to core's `App`. The game's only bridge between Flamework and Vide. */
 @Controller()
-export class MatchUiController implements OnStart {
+export class GameUiController implements OnStart {
 	onStart() {
-		mount(MatchApp, Players.LocalPlayer.WaitForChild("PlayerGui"));
+		mount(GameApp, Players.LocalPlayer.WaitForChild("PlayerGui"));
 	}
 }

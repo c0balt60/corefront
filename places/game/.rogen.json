@@ -1,14 +1,14 @@
 {
 	"source": [
 		"../../src/core",
-		"../../src/match"
+		"../../src/game"
 	],
 	"ts": {
 		"output": "default.project.json",
 		"build": "out"
 	},
 	"project": {
-		"name": "match",
+		"name": "game",
 		"globIgnorePaths": [
 			"**/package.json",
 			"**/tsconfig.json"
