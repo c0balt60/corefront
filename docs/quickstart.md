@@ -69,7 +69,7 @@ To work on the match instead, stop the lobby with `Ctrl+C` and run `pnpm dev mat
 | `pnpm build <place> --open`                        | Build, then open the place file in Studio                                                            |
 | `pnpm build`                                       | Build every place                                                                                    |
 | `pnpm lint` / `pnpm lint:fix`                      | ESLint and Prettier                                                                                  |
-| `node --env-file=.env scripts/publish.mjs staging` | Publish the built places by hand. Needs `RBXCLOUD_API_KEY` in `.env`. CI normally does this for you. |
+| `node --env-file=.env scripts/publish.mjs testing` | Publish the built places by hand. Needs `RBXCLOUD_API_KEY` in `.env`. CI normally does this for you. |
 
 ## Choosing build and serve tools
 

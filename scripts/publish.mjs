@@ -1,4 +1,4 @@
-// Publishes every built place to one environment: `node scripts/publish.mjs staging`.
+// Publishes every built place to one environment: `node scripts/publish.mjs testing`.
 // Run `pnpm build` first, and set RBXCLOUD_API_KEY.
 import { spawnSync } from "node:child_process";
 

@@ -95,7 +95,7 @@ There is only one pair of entry points, in `src/core`. Their globs (`src/*/*/ser
 - **Interface** (core): `UiController` mounts the Vide `App`, which every place shares. It shows a loading screen until the player's data arrives. Components read Charm atoms through `useAtom` from `@rbxts/vide-charm`. `CoinCounter` animates with a Ripple spring. Stories live in `Interface/client/stories` and open in UI Labs. `TopbarController` adds a topbar button that toggles the HUD. `useServerTime` counts down to times the server sends.
 - **Admin** (core): the Cmdr console (F2). It's open to everyone in Studio. In live servers it's limited to the place owner and `ADMIN_USER_IDS` in `CmdrService.ts`. Try `coins . 100` (`.` means yourself).
 - **Character** (core): `CharacterController` waits for the character to match a validate-tree schema and gives you a fully typed rig. A Janitor cleans up per-character connections.
-- **Teleport** (core): what both places need to agree on. `ENVIRONMENTS` in `environments.ts` lists the universe and place ids for staging and production. `PLACE_IDS` holds the ids for the universe the server is running in. `MATCH_MODES` lists the modes, with their player counts and round length. `MatchTeleportData` is what the lobby sends and the match reads, checked with `isMatchTeleportData`. `teleport()` retries failed teleports, and in Studio, or while a place id is 0, it only logs.
+- **Teleport** (core): what both places need to agree on. `ENVIRONMENTS` in `environments.ts` lists the universe and place ids for testing and production. `PLACE_IDS` holds the ids for the universe the server is running in. `MATCH_MODES` lists the modes, with their player counts and round length. `MatchTeleportData` is what the lobby sends and the match reads, checked with `isMatchTeleportData`. `teleport()` retries failed teleports, and in Studio, or while a place id is 0, it only logs.
 - **Loading** (lobby): `LoadingService` waits for each player's data, then spawns them and respawns them when they die. Other lobby code checks `isLoaded(player)`.
 - **Queue** (lobby): `QueueService` keeps one queue per mode. A queue counts down once it reaches `minPlayers`. It launches when the countdown ends or the queue fills, which reserves a match server and teleports the group there. `QueueController` keeps `queuesAtom` in sync. `ModeSelect` is the picker, with one button per mode showing its queue size and countdown.
 - **LobbyUi** / **MatchUi**: each place's own interface. See [Place-specific UI](#place-specific-ui).
@@ -172,21 +172,21 @@ The syncback rules also keep Studio away from compiled code (`out/**` and `inclu
 
 `.github/workflows/ci.yml` runs on GitHub Actions:
 
-| Trigger                                | What it does                                                            |
-| -------------------------------------- | ----------------------------------------------------------------------- |
-| Pull request                           | Lint and build every place, and upload the `.rbxl` files as an artifact |
-| Push to `main`                         | Same, then publish every place to **staging**                           |
-| Push a `v*` tag (or publish a release) | Same, then publish every place to **production**                        |
+| Trigger        | What it does                                                            |
+| -------------- | ----------------------------------------------------------------------- |
+| Pull request   | Lint and build every place, and upload the `.rbxl` files as an artifact |
+| Push to `dev`  | Same, then publish every place to **testing**                           |
+| Push to `main` | Same, then publish every place to **production**                        |
 
-Publishing runs `node scripts/publish.mjs <environment>`. It reads `ENVIRONMENTS` and calls `rbxcloud experience publish` once for each place. You can run it locally after `pnpm build`: put `RBXCLOUD_API_KEY=...` in `.env` and run `node --env-file=.env scripts/publish.mjs staging`.
+Publishing runs `node scripts/publish.mjs <environment>`. It reads `ENVIRONMENTS` and calls `rbxcloud experience publish` once for each place. You can run it locally after `pnpm build`: put `RBXCLOUD_API_KEY=...` in `.env` and run `node --env-file=.env scripts/publish.mjs testing`.
 
 ### Setup
 
-1. Create two experiences, staging and production. In each, add a place for the lobby, as the start place, and one for the match.
+1. Create two experiences, testing and production. In each, add a place for the lobby, as the start place, and one for the match.
 2. Fill in their universe and place ids in `src/core/Teleport/shared/environments.ts`. Publishing fails while any id is 0. These ids aren't secret.
 3. Create an Open Cloud API key in the [Creator Dashboard](https://create.roblox.com/dashboard/credentials). Give it the **universe-places** API with **write** access for both experiences, and allow requests from any IP, because GitHub runners don't have fixed addresses.
-4. In GitHub > Settings > Environments, create `staging` and `production`. Add the key to each as the secret `RBXCLOUD_API_KEY`. Never commit the key. Locally, keep it in a `.env` file, which git already ignores.
-5. Optional: protect `production` with required reviewers and a `v*` tag rule, so each production publish needs an approval.
+4. In GitHub > Settings > Environments, create `testing` and `production`. Add the key to each as the secret `RBXCLOUD_API_KEY`. Never commit the key. Locally, keep it in a `.env` file, which git already ignores.
+5. Optional: protect `production` with required reviewers and a `main` branch rule, so each production publish needs an approval.
 
 ## Conventions
 
