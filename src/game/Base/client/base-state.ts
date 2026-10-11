@@ -32,6 +32,9 @@ export const noticesAtom = atom<ReadonlyArray<Notice>>([]);
 
 export const buildModeAtom = atom<BuildMode>();
 
+/** Every Sorter on the planet, for the ore pickers floating over them. */
+export const sortersAtom = atom<ReadonlyArray<Model>>([]);
+
 /** The local character's tools in hotbar order, wherever they are (backpack or hand), and the one it has out. */
 export const toolsAtom = atom<ReadonlyArray<Tool>>([]);
 export const equippedAtom = atom<Tool>();

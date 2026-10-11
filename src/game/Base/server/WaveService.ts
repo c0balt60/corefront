@@ -327,8 +327,13 @@ export class WaveService implements OnStart {
 		this.fieldRevision = revision;
 		this.fieldAt = os.clock();
 		const targets = new Array<number>();
-		for (const [cell, building] of this.baseService.cells) if (building.kind === "core") targets.push(cell);
-		this.field = buildFlowfield(this.costs.costs, this.baseService.cells, targets);
+		// What blocks the way: everything but belts, which aliens walk over.
+		const solid = new Map<number, Building>();
+		for (const [cell, building] of this.baseService.cells) {
+			if (building.kind === "core") targets.push(cell);
+			if (!BUILDINGS[building.kind].walkable) solid.set(cell, building);
+		}
+		this.field = buildFlowfield(this.costs.costs, solid, targets);
 	}
 
 	private moveAliens(map: PlanetMap, dt: number) {
@@ -363,7 +368,8 @@ export class WaveService implements OnStart {
 				const cell = cellAt(alien.x, alien.z);
 				const step = cell === undefined ? -1 : this.field[cell];
 				const target = step >= 0 ? cellCenter(step) : map.landing;
-				const building = step >= 0 ? this.baseService.cells.get(step) : undefined;
+				const onStep = step >= 0 ? this.baseService.cells.get(step) : undefined;
+				const building = onStep && !BUILDINGS[onStep.kind].walkable ? onStep : undefined;
 				if (building && flatDistance(target, here) <= CELL_STUDS / 2 + def.reach) {
 					// Its path runs through a building: chew through it.
 					look = target;
@@ -428,14 +434,14 @@ export class WaveService implements OnStart {
 	}
 
 	/**
-	 * Every turret that has cooled down shoots the nearest alien in range, and turns its head to face it.
-	 * Damage scales with its placer's research.
+	 * Every loaded turret that has cooled down shoots the nearest alien in range, and turns its head to face it.
+	 * Damage scales with the ore it fires and its placer's research.
 	 */
 	private fireTurrets(dt: number) {
 		for (const turret of this.baseService.buildings) {
 			const def = BUILDINGS[turret.kind];
 			const head = turret.head;
-			if (!def.turret || !head) continue;
+			if (!def.turret || !head || turret.ammo.isEmpty()) continue;
 			turret.cooldown -= dt;
 			if (turret.cooldown > 0) continue;
 			const from = head.Position;
@@ -453,7 +459,8 @@ export class WaveService implements OnStart {
 			head.CFrame = CFrame.lookAt(from, new Vector3(at.X, from.Y, at.Z));
 			tracer(from, at, TURRET_TRACER);
 			turret.cooldown = def.turret.seconds;
-			this.damageAlien(target.model, def.turret.damage * statOf(turret.owner, "turretDamage"));
+			const hit = this.baseService.shoot(turret) ?? 0;
+			this.damageAlien(target.model, def.turret.damage * hit * statOf(turret.owner, "turretDamage"));
 		}
 	}
 }

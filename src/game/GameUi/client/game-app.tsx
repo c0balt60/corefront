@@ -1,5 +1,5 @@
 import { Players } from "@rbxts/services";
-import Vide, { derive, Show, source } from "@rbxts/vide";
+import Vide, { derive, For, Show, source } from "@rbxts/vide";
 import { useAtom } from "@rbxts/vide-charm";
 
 import { EXIT_TIME } from "core/Interface/client/motion";
@@ -11,6 +11,7 @@ import {
 	equippedAtom,
 	inventoryAtom,
 	noticesAtom,
+	sortersAtom,
 	toggleBuildMode,
 	toggleTool,
 	toolsAtom,
@@ -18,7 +19,8 @@ import {
 import { CargoPanel, CoreStatus, Notices, ResultBanner, WavePanel } from "game/Base/client/components/base-hud";
 import { BuildBar } from "game/Base/client/components/build-bar";
 import { Hotbar } from "game/Base/client/components/hotbar";
-import { BaseMessage, baseMessaging } from "game/Base/shared/base-network";
+import { SorterPicker } from "game/Base/client/components/sorter-picker";
+import { BaseMessage, baseMessaging, BeltMessage, beltMessaging } from "game/Base/shared/base-network";
 import { BUILD_TOOL, BUILDABLE } from "game/Base/shared/buildings";
 import { LoadoutPanel, PlanPanel, TravelOverlay } from "game/Planets/client/components/launch-panel";
 import { PlanetPanel } from "game/Planets/client/components/planet-panel";
@@ -40,6 +42,7 @@ import { canBuild } from "game/Research/shared/research";
 import { ResearchMessage, researchMessaging } from "game/Research/shared/research-network";
 import { TerrainDebugPanel } from "game/Terrain/client/components/terrain-debug";
 import { terrainDebugAtom, terrainDebugOpenAtom } from "game/Terrain/client/terrain-debug-state";
+import { cellCoords } from "game/Terrain/shared/map";
 import { TerrainMessage, terrainMessaging } from "game/Terrain/shared/terrain-network";
 
 /**
@@ -59,6 +62,7 @@ export function GameApp() {
 	const inventory = useAtom(inventoryAtom);
 	const notices = useAtom(noticesAtom);
 	const buildMode = useAtom(buildModeAtom);
+	const sorters = useAtom(sortersAtom);
 	const tools = useAtom(toolsAtom);
 	const equipped = useAtom(equippedAtom);
 	const debugOpen = useAtom(terrainDebugOpenAtom);
@@ -318,6 +322,20 @@ export function GameApp() {
 					)
 				}
 			</Show>
+
+			{/* Billboards in the world, straight under PlayerGui so they take clicks. */}
+			<For each={sorters}>
+				{(sorter) => (
+					<SorterPicker
+						sorter={sorter}
+						enabled={() => visible() && mission() !== undefined}
+						onPick={(resource) => {
+							const [x, z] = cellCoords(sorter.GetAttribute("Cell") as number);
+							beltMessaging.server.emit(BeltMessage.Configure, { x, z, resource });
+						}}
+					/>
+				)}
+			</For>
 		</>
 	);
 }

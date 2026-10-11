@@ -23,6 +23,10 @@ export type GlyphId =
 	| "drill"
 	| "advancedDrill"
 	| "drillBits"
+	| "smelter"
+	| "router"
+	| "sorter"
+	| "junction"
 	| "wall"
 	| "titaniumWall"
 	| "plating"
@@ -82,7 +86,11 @@ export type ResearchId =
 	| "hardenedRounds"
 	| "heavyTurret"
 	| "drillBits"
-	| "advancedDrill";
+	| "advancedDrill"
+	| "smelter"
+	| "router"
+	| "sorter"
+	| "junction";
 
 export interface ResearchNode {
 	readonly name: string;
@@ -292,6 +300,49 @@ export const RESEARCH: Record<ResearchId, ResearchNode> = {
 		unlocks: "advancedDrill",
 		conquered: 1,
 	},
+	smelter: {
+		name: "Smelter",
+		description: "Build smelters, which press coal into graphite: the hardest-hitting common ammo.",
+		glyph: "smelter",
+		requires: ["drillBits"],
+		cost: [
+			{ resource: "copper", amount: 40 },
+			{ resource: "lead", amount: 25 },
+		],
+		unlocks: "smelter",
+		discover: "coal",
+	},
+	router: {
+		name: "Router",
+		description: "Build routers, which pass ore from belts on to every side.",
+		glyph: "router",
+		side: "up",
+		requires: [],
+		cost: [{ resource: "copper", amount: 15 }],
+		unlocks: "router",
+	},
+	sorter: {
+		name: "Sorter",
+		description: "Build sorters, which let one ore through and turn the rest aside.",
+		glyph: "sorter",
+		requires: ["router"],
+		cost: [
+			{ resource: "copper", amount: 25 },
+			{ resource: "lead", amount: 15 },
+		],
+		unlocks: "sorter",
+	},
+	junction: {
+		name: "Junction",
+		description: "Build junctions, which let two belt lines cross.",
+		glyph: "junction",
+		requires: ["router"],
+		cost: [
+			{ resource: "copper", amount: 20 },
+			{ resource: "lead", amount: 10 },
+		],
+		unlocks: "junction",
+	},
 };
 
 /** Every node, in the order the tree lays out siblings left to right, roots on each side of the Core likewise. */
@@ -304,6 +355,10 @@ export const RESEARCH_ORDER: ReadonlyArray<ResearchId> = [
 	"coreSilos",
 	"drillBits",
 	"advancedDrill",
+	"smelter",
+	"router",
+	"sorter",
+	"junction",
 	"wall",
 	"plating",
 	"mender",

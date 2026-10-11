@@ -5,45 +5,200 @@ import { CollectionService, RunService, UserInputService, Workspace } from "@rbx
 import { CharacterController } from "core/Character/client/CharacterController";
 import { COLORS } from "core/Interface/client/theme";
 import {
+	amountOf,
 	baseStateAtom,
 	type BuildMode,
 	buildModeAtom,
-	canAfford,
 	equippedAtom,
 	toggleBuildMode,
 } from "game/Base/client/base-state";
-import { BaseMessage, baseMessaging } from "game/Base/shared/base-network";
-import { BUILD_RANGE, BUILD_TOOL, BUILDINGS, type BuildingKind } from "game/Base/shared/buildings";
+import { BaseMessage, baseMessaging, type Placement } from "game/Base/shared/base-network";
+import {
+	alongPath,
+	BELT_WIDTH,
+	type BeltPath,
+	beltRuns,
+	chevronBars,
+	chevronRun,
+	DIRECTIONS,
+	directionOf,
+	entryOf,
+	feedsBelt,
+	modelPath,
+	type RunBelt,
+	runPaths,
+} from "game/Base/shared/belts";
+import {
+	BUILD_RANGE,
+	BUILD_TOOL,
+	type BuildableKind,
+	BUILDABLE,
+	BUILDINGS,
+	type BuildingKind,
+	MAX_LINE,
+	replaces,
+} from "game/Base/shared/buildings";
+import type { ResourceId } from "game/Base/shared/resources";
 import { deployedAtom } from "game/Planets/client/planets-state";
-import { CELL_STUDS, cellAt, cellCenter, cellCoords, GRID_SIZE } from "game/Terrain/shared/map";
+import { levelsAtom } from "game/Research/client/research-state";
+import { canBuild } from "game/Research/shared/research";
+import { CELL_STUDS, cellAt, cellCenter, cellCoords, cellIndex, GRID_SIZE } from "game/Terrain/shared/map";
 
 const RAY_LENGTH = 1000;
-/** How far above and below a cell's centre to look for the ground under it. */
+/** How far above and below a point to look for the ground under it. */
 const GROUND_SEARCH = 500;
 const GHOST_TRANSPARENCY = 0.55;
 const RING_TRANSPARENCY = 0.85;
+const CHEVRON = new Vector3(0.35, 0.15, 1);
 
-/** The building whose footprint overlaps the `size`×`size` block of cells at (gx, gz), if any. */
-function buildingOver(gx: number, gz: number, size: number): Model | undefined {
-	// ponytail: scans every building each frame; index them by cell if bases grow to thousands.
+/** Every building's model, by each cell it covers. */
+function occupancy(): Map<number, Model> {
+	const taken = new Map<number, Model>();
 	const buildings = Workspace.FindFirstChild("Base")?.FindFirstChild("Buildings");
 	for (const model of buildings?.GetChildren() ?? []) {
 		const cell = model.GetAttribute("Cell");
 		const kind = model.GetAttribute("Kind");
-		if (!typeIs(cell, "number") || !typeIs(kind, "string")) continue;
+		if (!model.IsA("Model") || !typeIs(cell, "number") || !typeIs(kind, "string")) continue;
 		const [x, z] = cellCoords(cell);
 		const span = BUILDINGS[kind as BuildingKind]?.size ?? 1;
-		if (gx < x + span && x < gx + size && gz < z + span && z < gz + size) return model as Model;
+		for (let dz = 0; dz < span; dz++) {
+			for (let dx = 0; dx < span; dx++) taken.set(cellIndex(x + dx, z + dz), model);
+		}
 	}
-	return undefined;
+	return taken;
+}
+
+/** The building covering cell (x, z), if any. */
+function modelOn(taken: ReadonlyMap<number, Model>, x: number, z: number): Model | undefined {
+	if (x < 0 || z < 0 || x >= GRID_SIZE || z >= GRID_SIZE) return undefined;
+	return taken.get(cellIndex(x, z));
 }
 
 /** The building covering the cell under a world point, if any. */
-function buildingAt(point: Vector3) {
+function buildingAt(point: Vector3, taken = occupancy()) {
 	const cell = cellAt(point.X, point.Z);
-	if (cell === undefined) return undefined;
-	const [gx, gz] = cellCoords(cell);
-	return buildingOver(gx, gz, 1);
+	return cell !== undefined ? taken.get(cell) : undefined;
+}
+
+/** The building under the mouse, unless terrain is in the way. */
+function buildingUnderMouse(): Model | undefined {
+	const camera = Workspace.CurrentCamera;
+	const buildings = Workspace.FindFirstChild("Base")?.FindFirstChild("Buildings");
+	if (!camera || !buildings) return undefined;
+	const mouse = UserInputService.GetMouseLocation();
+	const ray = camera.ViewportPointToRay(mouse.X, mouse.Y);
+	const params = new RaycastParams();
+	params.FilterType = Enum.RaycastFilterType.Include;
+	params.FilterDescendantsInstances = [Workspace.Terrain, buildings];
+	const hit = Workspace.Raycast(ray.Origin, ray.Direction.mul(RAY_LENGTH), params);
+	// Just inside whatever was hit, so a building's side counts as its own cell, not its neighbour's.
+	return hit && buildingAt(hit.Position.sub(hit.Normal.mul(0.5)));
+}
+
+/** Whether `model`, on `side` of a belt, puts ore onto it (see `feedsBelt`). */
+function feeds(model: Model | undefined, side: number): boolean {
+	const kind = model?.GetAttribute("Kind");
+	const facing = model?.GetAttribute("Rotation");
+	return typeIs(kind, "string") && typeIs(facing, "number") && feedsBelt(kind as BuildingKind, facing, side);
+}
+
+/** Whether `model` is a straight belt running across a belt line heading `rotation`: the server lays a Junction there. */
+function crossable(model: Model | undefined, rotation: number): boolean {
+	const facing = model?.GetAttribute("Rotation");
+	if (model?.GetAttribute("Kind") !== "conveyor" || !typeIs(facing, "number")) return false;
+	return facing % 2 !== rotation % 2 && model.GetAttribute("Entry") === (facing + 2) % 4;
+}
+
+/** The middle height of belt `ahead`, if a belt heading `rotation` feeds it from the side (see `runPaths`). */
+function mergeHeight(ahead: Model | undefined, rotation: number): number | undefined {
+	const back = (rotation + 2) % 4;
+	const path = ahead && modelPath(ahead);
+	if (ahead?.GetAttribute("Kind") !== "conveyor" || !path) return undefined;
+	const side = ahead.GetAttribute("Rotation") === back || ahead.GetAttribute("Entry") === back;
+	return side ? undefined : alongPath(path, 0.5)[0].Y;
+}
+
+/**
+ * The paths a belt line's belts will take, as the server lays them out: in runs, each belt taking
+ * its ore from the one before or whatever else feeds it. With each, whether it reaches on into a
+ * belt it feeds from the side. None where the line crosses a belt.
+ */
+function linePaths(
+	line: ReadonlyArray<Placement>,
+	crossings: ReadonlyArray<boolean>,
+	taken: ReadonlyMap<number, Model>,
+	groundAt: (x: number, z: number) => number,
+): Array<readonly [path: BeltPath, tail: boolean] | undefined> {
+	const paths = new Array<readonly [path: BeltPath, tail: boolean] | undefined>();
+	let run = new Array<RunBelt>();
+	let first = 0;
+	const finish = (index: number) => {
+		if (run.isEmpty()) return;
+		const { x, z, rotation } = line[index];
+		const [dx, dz] = DIRECTIONS[rotation];
+		const merge = crossings[index + 1] ? undefined : mergeHeight(modelOn(taken, x + dx, z + dz), rotation);
+		const last = run.size() - 1;
+		runPaths(run, groundAt, merge).forEach(
+			(path, i) => (paths[first + i] = [path, i === last && merge !== undefined]),
+		);
+		run = [];
+	};
+	line.forEach(({ x, z, rotation }, index) => {
+		if (crossings[index]) return finish(index - 1);
+		const previous = line[index - 1];
+		const behind = previous && directionOf(previous.x - x, previous.z - z);
+		const entry = entryOf(rotation, (side) => {
+			const [dx, dz] = DIRECTIONS[side];
+			return side !== rotation && (side === behind || feeds(modelOn(taken, x + dx, z + dz), side));
+		});
+		if (entry !== behind) finish(index - 1);
+		if (run.isEmpty()) first = index;
+		run.push({ cell: cellIndex(x, z), rotation, entry });
+	});
+	finish(line.size() - 1);
+	return paths;
+}
+
+/**
+ * The cells from `from` to `to` as an L, the longer way first, at most `MAX_LINE` of them. Belts
+ * (`directed`) each face the next cell, the last on the way the line runs; anything else faces `rotation`.
+ */
+function lineBetween(
+	from: readonly [number, number],
+	to: readonly [number, number],
+	rotation: number,
+	directed: boolean,
+): Array<Placement> {
+	const [x1, z1] = to;
+	let [x, z] = from;
+	const cells: Array<[number, number]> = [[x, z]];
+	const walkX = () => {
+		while (x !== x1) {
+			x += math.sign(x1 - x);
+			cells.push([x, z]);
+		}
+	};
+	const walkZ = () => {
+		while (z !== z1) {
+			z += math.sign(z1 - z);
+			cells.push([x, z]);
+		}
+	};
+	if (math.abs(x1 - x) >= math.abs(z1 - z)) {
+		walkX();
+		walkZ();
+	} else {
+		walkZ();
+		walkX();
+	}
+	const line = cells.filter((_, index) => index < MAX_LINE);
+	return line.map(([cx, cz], index) => {
+		if (!directed || line.size() === 1) return { x: cx, z: cz, rotation };
+		const last = index === line.size() - 1;
+		const [ax, az] = last ? line[index - 1] : [cx, cz];
+		const [bx, bz] = last ? [cx, cz] : line[index + 1];
+		return { x: cx, z: cz, rotation: directionOf(bx - ax, bz - az) ?? rotation };
+	});
 }
 
 /** A local, non-colliding part for the ghost. Hidden until the first frame places it. */
@@ -68,13 +223,17 @@ function ghostPart(parent: Instance, size: Vector3, shape: Enum.PartType = Enum.
  * remove tool; picking the same again puts it down, and so does putting the
  * Build tool away. A building shows as a ghost on the cell under the mouse,
  * green where the server should accept it and red where it won't; R turns it
- * and a click asks the server to build it. The remove tool outlines the
- * building under the mouse in red, or else the tree or rock, and a click asks
- * to remove it.
+ * and a click asks the server to build it. Dragging lays a line of one-cell
+ * buildings. Belts in it face along it and preview as they'll be built: tilted
+ * with the ground, curving where it turns or out of whatever feeds them, and
+ * merging into a belt they run into, with a Junction where they cross one.
+ * The remove tool outlines the building under the mouse in red, or else the
+ * tree or rock, and a click asks to remove it. With no building picked, R turns
+ * the building under the mouse and Q picks it to build, facing the same way.
  */
 @Controller()
 export class BuildController implements OnStart {
-	/** Quarter turns, kept between buildings. Cosmetic until the server's models face their rotation. */
+	/** Quarter turns, kept between buildings: the way a click places, and a line of anything but belts. */
 	private rotation = 0;
 
 	constructor(private readonly characterController: CharacterController) {}
@@ -95,22 +254,59 @@ export class BuildController implements OnStart {
 
 		UserInputService.InputBegan.Connect((input, processed) => {
 			if (processed || !enabled() || UserInputService.GetFocusedTextBox()) return;
-			if (input.KeyCode === Enum.KeyCode.F) toggleBuildMode("remove");
-			else if (input.KeyCode === Enum.KeyCode.R) this.rotation = (this.rotation + 1) % 4;
+			if (input.KeyCode === Enum.KeyCode.F) {
+				toggleBuildMode("remove");
+			} else if (input.KeyCode === Enum.KeyCode.Q) {
+				this.pick();
+			} else if (input.KeyCode === Enum.KeyCode.R) {
+				// R turns the ghost while there is one, and otherwise the building under the mouse.
+				const mode = buildModeAtom();
+				if (mode !== undefined && mode !== "remove") this.rotation = (this.rotation + 1) % 4;
+				else this.turnHovered();
+			}
 		});
 	}
 
-	/** Puts the ghost or the remove outline under the mouse until the returned cleanup runs. */
+	/** Picks the building under the mouse to build, facing the same way, if the local player can build it. */
+	private pick() {
+		const model = buildingUnderMouse();
+		const kind = model?.GetAttribute("Kind") as BuildableKind | undefined;
+		if (!model || kind === undefined || !BUILDABLE.includes(kind) || !canBuild(levelsAtom(), kind)) return;
+		const rotation = model.GetAttribute("Rotation");
+		if (typeIs(rotation, "number")) this.rotation = rotation;
+		buildModeAtom(kind);
+	}
+
+	/** Asks the server to turn the building under the mouse a quarter turn. */
+	private turnHovered() {
+		const cell = buildingUnderMouse()?.GetAttribute("Cell");
+		if (!typeIs(cell, "number")) return;
+		const [x, z] = cellCoords(cell);
+		baseMessaging.server.emit(BaseMessage.Rotate, { x, z });
+	}
+
+	/** Puts the ghosts or the remove outline under the mouse until the returned cleanup runs. */
 	private run(mode: BuildMode) {
 		const kind = mode === "remove" ? undefined : mode;
 		const def = kind ? BUILDINGS[kind] : undefined;
 		const size = def ? def.size : 1;
+		const belt = kind === "conveyor";
+		// Ore never moves, so where it is can be read once.
+		const ores = new Set(CollectionService.GetTagged("Ore").map((ore) => ore.GetAttribute("Cell")));
 
 		const folder = new Instance("Folder");
 		folder.Name = "BuildGhost";
-		const ghost = def
-			? ghostPart(folder, new Vector3(size * CELL_STUDS - 0.4, CELL_STUDS, size * CELL_STUDS - 0.4))
-			: undefined;
+		// One set of parts per cell of the line, as many as what goes there takes to draw.
+		const ghosts = new Array<Array<Part>>();
+		const partsFor = (index: number, count: number) => {
+			const parts = ghosts[index] ?? [];
+			ghosts[index] = parts;
+			while (parts.size() < count) parts.push(ghostPart(folder, Vector3.one));
+			parts.forEach((part, i) => {
+				if (i >= count) part.Transparency = 1;
+			});
+			return parts;
+		};
 		const ring =
 			def?.range !== undefined
 				? ghostPart(folder, new Vector3(0.2, def.range * 2, def.range * 2), Enum.PartType.Cylinder)
@@ -128,9 +324,29 @@ export class BuildController implements OnStart {
 		terrain.FilterDescendantsInstances = [Workspace.Terrain];
 		const solid = new RaycastParams();
 		solid.FilterType = Enum.RaycastFilterType.Include;
+		// The ground itself, read like the server reads it: under any water.
+		const ground = new RaycastParams();
+		ground.FilterType = Enum.RaycastFilterType.Include;
+		ground.FilterDescendantsInstances = [Workspace.Terrain];
+		ground.IgnoreWater = true;
+		const heights = new Map<number, number>();
+		const groundAt = (x: number, z: number) => {
+			const key = math.round(x) * 4096 + math.round(z);
+			let height = heights.get(key);
+			if (height === undefined) {
+				const down = new Vector3(0, -2 * GROUND_SEARCH, 0);
+				height = Workspace.Raycast(new Vector3(x, GROUND_SEARCH, z), down, ground)?.Position.Y ?? 0;
+				heights.set(key, height);
+			}
+			return height;
+		};
 
-		// The cell a click acts on: the ghost's -X/-Z corner, or the outlined building's.
+		// What a remove click acts on: the outlined building's -X/-Z corner cell.
 		let target: [x: number, z: number] | undefined;
+		// The cell under the mouse, where a drag started, and what a click or drag would place now.
+		let hover: [x: number, z: number] | undefined;
+		let anchor: [x: number, z: number] | undefined;
+		let line = new Array<Placement>();
 
 		const frame = RunService.RenderStepped.Connect(() => {
 			target = undefined;
@@ -138,8 +354,9 @@ export class BuildController implements OnStart {
 			if (!camera) return;
 			const mouse = UserInputService.GetMouseLocation();
 			const ray = camera.ViewportPointToRay(mouse.X, mouse.Y);
+			const taken = occupancy();
 
-			if (!def || !ghost) {
+			if (!def || !kind) {
 				const buildings = Workspace.FindFirstChild("Base")?.FindFirstChild("Buildings");
 				const props = Workspace.FindFirstChild("PlanetProps");
 				const filter: Array<Instance> = [Workspace.Terrain];
@@ -149,7 +366,7 @@ export class BuildController implements OnStart {
 				const hit = Workspace.Raycast(ray.Origin, ray.Direction.mul(RAY_LENGTH), solid);
 				// Just inside whatever was hit, so a building's side counts as its own cell, not its neighbour's.
 				const inside = hit?.Position.sub(hit.Normal.mul(0.5));
-				const model = inside && buildingAt(inside);
+				const model = inside && buildingAt(inside, taken);
 				const corner = model?.GetAttribute("Cell");
 
 				if (model) {
@@ -175,59 +392,115 @@ export class BuildController implements OnStart {
 			// Offset by half the extra size, so a block bigger than a cell centres on the cursor.
 			const half = ((size - 1) * CELL_STUDS) / 2;
 			const corner = hit ? cellAt(hit.Position.X - half, hit.Position.Z - half) : undefined;
-			if (!hit || corner === undefined) {
-				ghost.Transparency = 1;
-				if (ring) ring.Transparency = 1;
-				return;
-			}
+			hover = corner !== undefined ? cellCoords(corner) : undefined;
+			if (!hover) line = [];
+			else if (anchor && size === 1) line = lineBetween(anchor, hover, this.rotation, belt);
+			else line = [{ x: hover[0], z: hover[1], rotation: this.rotation }];
 
-			const [gx, gz] = cellCoords(corner);
-			const centre = cellCenter(corner, size);
-			const ground =
-				Workspace.Raycast(
-					centre.add(new Vector3(0, GROUND_SEARCH, 0)),
-					new Vector3(0, -2 * GROUND_SEARCH, 0),
-					terrain,
-				)?.Position.Y ?? hit.Position.Y;
-			const base = new Vector3(centre.X, ground, centre.Z);
 			const root = this.characterController.getRig()?.HumanoidRootPart.Position;
-
-			// For the colour only: the server decides.
-			const valid =
-				gx + size <= GRID_SIZE &&
-				gz + size <= GRID_SIZE &&
-				buildingOver(gx, gz, size) === undefined &&
-				(!def.drill || CollectionService.GetTagged("Ore").some((ore) => ore.GetAttribute("Cell") === corner)) &&
-				canAfford(baseStateAtom()?.pool ?? [], def.cost) &&
-				root !== undefined &&
-				// Across the ground, like the server's check.
-				new Vector2(root.X - base.X, root.Z - base.Z).Magnitude <= BUILD_RANGE;
-			const color = valid ? COLORS.confirm : COLORS.danger;
-
-			ghost.CFrame = new CFrame(base.add(new Vector3(0, CELL_STUDS / 2, 0))).mul(
-				CFrame.Angles(0, (this.rotation * math.pi) / 2, 0),
+			const pool = baseStateAtom()?.pool ?? [];
+			// What the line costs so far: each cell is paid for on top of those before it.
+			const spent = new Map<ResourceId, number>();
+			// A crossing the server can't lay stops the line there.
+			let stopped = false;
+			let color = COLORS.danger;
+			const crossings = line.map(
+				({ x, z, rotation }, index) =>
+					belt && index > 0 && index < line.size() - 1 && crossable(modelOn(taken, x, z), rotation),
 			);
-			ghost.Color = color;
-			ghost.Transparency = GHOST_TRANSPARENCY;
-			if (ring) {
+			const paths = belt ? linePaths(line, crossings, taken, groundAt) : [];
+			line.forEach(({ x, z, rotation }, index) => {
+				const cell = cellIndex(x, z);
+				const centre = cellCenter(cell, size);
+				const crossing = crossings[index];
+				for (const { resource, amount } of (crossing ? BUILDINGS.junction : def).cost) {
+					spent.set(resource, (spent.get(resource) ?? 0) + amount);
+				}
+				// Like the server: a belt line keeps the routers and such it runs through, anything else swaps them.
+				const there = modelOn(taken, x, z)?.GetAttribute("Kind") as BuildingKind | undefined;
+				const swapping = there !== undefined && (!belt || line.size() === 1) && replaces(kind, there);
+				let free = !crossing;
+				for (let dz = 0; dz < size; dz++) {
+					for (let dx = 0; dx < size; dx++) free &&= swapping || modelOn(taken, x + dx, z + dz) === undefined;
+				}
+				let affordable = true;
+				for (const [resource, amount] of spent) affordable &&= amountOf(pool, resource) >= amount;
+				// For the colour only: the server decides.
+				const valid =
+					!stopped &&
+					x + size <= GRID_SIZE &&
+					z + size <= GRID_SIZE &&
+					(crossing ? canBuild(levelsAtom(), "junction") : free) &&
+					(!def.drill || ores.has(cell)) &&
+					affordable &&
+					root !== undefined &&
+					// Across the ground, like the server's check.
+					new Vector2(root.X - centre.X, root.Z - centre.Z).Magnitude <= BUILD_RANGE;
+				stopped ||= crossing && !valid;
+				color = valid ? COLORS.confirm : COLORS.danger;
+
+				const shaped = paths[index];
+				if (shaped) {
+					// As it will be built: following the ground within its grade, curving where the line
+					// turns or out of what feeds it, and reaching into a belt it runs into from the side.
+					const [path, tail] = shaped;
+					const runs = beltRuns(path, 0, tail);
+					const parts = partsFor(index, runs.size() + 2);
+					runs.forEach(([run, length], i) => {
+						parts[i].Size = new Vector3(BELT_WIDTH, 0.4, length + 0.05);
+						parts[i].CFrame = run.mul(new CFrame(0, -0.2, 0));
+						parts[i].Color = color;
+						parts[i].Transparency = GHOST_TRANSPARENCY;
+					});
+					// The chevron stays white, so it reads against the runs.
+					chevronBars(chevronRun(path)).forEach((bar, i) => {
+						const part = parts[runs.size() + i];
+						part.Size = CHEVRON;
+						part.CFrame = bar;
+						part.Color = COLORS.text;
+						part.Transparency = 0.1;
+					});
+				} else {
+					const [part] = partsFor(index, 1);
+					const width = size * CELL_STUDS - 0.4;
+					const base = new CFrame(centre.X, groundAt(centre.X, centre.Z) + CELL_STUDS / 2, centre.Z);
+					part.Size = new Vector3(width, CELL_STUDS, width);
+					part.CFrame = base.mul(CFrame.Angles(0, (rotation * math.pi) / 2, 0));
+					part.Color = color;
+					part.Transparency = GHOST_TRANSPARENCY;
+				}
+			});
+			for (let index = line.size(); index < ghosts.size(); index++) partsFor(index, 0);
+
+			if (ring && hover) {
+				const centre = cellCenter(cellIndex(hover[0], hover[1]), size);
 				// A cylinder's axis is X, so tip it onto its side to lie flat.
-				ring.CFrame = new CFrame(base).mul(CFrame.Angles(0, 0, math.pi / 2));
+				ring.CFrame = new CFrame(centre.X, groundAt(centre.X, centre.Z), centre.Z).mul(
+					CFrame.Angles(0, 0, math.pi / 2),
+				);
 				ring.Color = color;
 				ring.Transparency = RING_TRANSPARENCY;
+			} else if (ring) {
+				ring.Transparency = 1;
 			}
-			target = [gx, gz];
 		});
 
-		const click = UserInputService.InputBegan.Connect((input, processed) => {
-			if (processed || input.UserInputType !== Enum.UserInputType.MouseButton1 || !target) return;
-			const [x, z] = target;
-			if (kind) baseMessaging.server.emit(BaseMessage.Place, { kind, x, z, rotation: this.rotation });
-			else baseMessaging.server.emit(BaseMessage.Remove, { x, z });
+		// A building places on release, so a press can start a drag instead.
+		const press = UserInputService.InputBegan.Connect((input, processed) => {
+			if (processed || input.UserInputType !== Enum.UserInputType.MouseButton1) return;
+			if (kind) anchor = hover;
+			else if (target) baseMessaging.server.emit(BaseMessage.Remove, { x: target[0], z: target[1] });
+		});
+		const release = UserInputService.InputEnded.Connect((input) => {
+			if (input.UserInputType !== Enum.UserInputType.MouseButton1 || !kind || !anchor) return;
+			anchor = undefined;
+			if (!line.isEmpty()) baseMessaging.server.emit(BaseMessage.Place, { kind, cells: line });
 		});
 
 		return () => {
 			frame.Disconnect();
-			click.Disconnect();
+			press.Disconnect();
+			release.Disconnect();
 			folder.Destroy();
 		};
 	}

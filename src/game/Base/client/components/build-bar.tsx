@@ -1,4 +1,5 @@
-import Vide, { effect, For, source } from "@rbxts/vide";
+import { Workspace } from "@rbxts/services";
+import Vide, { cleanup, effect, For, source } from "@rbxts/vide";
 import { useSpring } from "@rbxts/vide-ripple";
 
 import { Brackets } from "core/Interface/client/components/hud";
@@ -14,6 +15,8 @@ const CARD = new Vector2(112, 84);
 const GAP = 8;
 /** Clear of the hotbar, which takes the bottom 80 pixels of the middle. */
 const BOTTOM = 92;
+/** Pixels kept clear either side when the bar has to shrink to fit the screen. */
+const MARGIN = 16;
 
 const clamp01 = (value: number) => math.clamp(value, 0, 1);
 
@@ -151,8 +154,8 @@ interface BuildBarProps {
 
 /**
  * The buildings and the remove tool as cards, bottom centre above the hotbar,
- * with the controls for the current mode over them. Shown while the Build tool
- * is out. Rises in from the bottom.
+ * with the controls for the current mode over them, shrunk to fit narrow screens.
+ * Shown while the Build tool is out. Rises in from the bottom.
  */
 export function BuildBar({ kinds, pool, mode, onSelect, show }: BuildBarProps) {
 	const rise = useAppear(show, 0.1);
@@ -160,13 +163,18 @@ export function BuildBar({ kinds, pool, mode, onSelect, show }: BuildBarProps) {
 		"hud",
 		() => {
 			const current = mode();
-			if (current === undefined) return "CLICK A CARD  BUILD   ·   F  REMOVE / CLEAR";
+			if (current === undefined) return "CLICK A CARD  BUILD   ·   F  REMOVE   ·   R  TURN   ·   Q  COPY";
 			if (current === "remove") return "CLICK  REMOVE BUILDINGS, TREES, ROCKS   ·   F  CANCEL";
-			return "CLICK  PLACE   ·   R  ROTATE   ·   CLICK CARD  CANCEL";
+			return "CLICK  PLACE   ·   DRAG  LINE   ·   R  ROTATE   ·   CLICK CARD  CANCEL";
 		},
 		0.2,
 		0.3,
 	);
+	// The shown cards, the remove tool's included.
+	const width = () => (kinds().size() + 1) * (CARD.X + GAP) - GAP;
+	const camera = Workspace.CurrentCamera!;
+	const screen = source(camera.ViewportSize.X);
+	cleanup(camera.GetPropertyChangedSignal("ViewportSize").Connect(() => screen(camera.ViewportSize.X)));
 
 	return (
 		<frame
@@ -174,9 +182,9 @@ export function BuildBar({ kinds, pool, mode, onSelect, show }: BuildBarProps) {
 			AnchorPoint={new Vector2(0.5, 1)}
 			BackgroundTransparency={1}
 			Position={() => new UDim2(0.5, 0, 1, -BOTTOM + 240 * (1 - rise()))}
-			// Room for every card; the layout centres however many show.
-			Size={UDim2.fromOffset((BUILDABLE.size() + 1) * (CARD.X + GAP) - GAP, CARD.Y + 26)}
+			Size={() => UDim2.fromOffset(width(), CARD.Y + 26)}
 		>
+			<uiscale Scale={() => math.min(1, (screen() - 2 * MARGIN) / width())} />
 			<Label alignX={Enum.TextXAlignment.Center} size={new UDim2(1, 0, 0, 16)} text={hint} />
 			<frame
 				AnchorPoint={new Vector2(0, 1)}

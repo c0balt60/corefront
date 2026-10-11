@@ -1,7 +1,17 @@
 import { Debris, Workspace } from "@rbxts/services";
 
 import type { AlienKind } from "game/Base/server/WaveService";
+import {
+	BELT_WIDTH,
+	type BeltPath,
+	beltRuns,
+	chevronBars,
+	chevronRun,
+	isCorner,
+	pointOn,
+} from "game/Base/shared/belts";
 import { BUILDINGS, type BuildingKind } from "game/Base/shared/buildings";
+import { type ResourceId, RESOURCES } from "game/Base/shared/resources";
 import { CELL_STUDS } from "game/Terrain/shared/map";
 
 /*
@@ -16,6 +26,9 @@ const DARK = Color3.fromRGB(46, 48, 56);
 const GLOW = Color3.fromRGB(255, 170, 60);
 const TITANIUM = Color3.fromRGB(140, 195, 225);
 const REPAIR = Color3.fromRGB(110, 230, 120);
+const FURNACE = Color3.fromRGB(255, 110, 40);
+/** A sorter's light with no ore picked. */
+const UNSORTED = Color3.fromRGB(235, 235, 240);
 
 const ALIEN_BODIES: Record<AlienKind, readonly [size: Vector3, color: Color3, glow: Color3]> = {
 	crawler: [new Vector3(2.6, 1.2, 3.2), Color3.fromRGB(58, 34, 72), Color3.fromRGB(190, 255, 90)],
@@ -102,6 +115,41 @@ export function setHealth(model: Model, health: number, maxHealth: number) {
 	fill.BackgroundColor3 = Color3.fromRGB(255, 80, 80).Lerp(Color3.fromRGB(110, 230, 120), fraction);
 }
 
+/** Writes a turret's `Ammo` (items loaded), and shows NO AMMO over it while that's none. */
+export function setAmmo(model: Model, items: number) {
+	model.SetAttribute("Ammo", items);
+	const root = model.PrimaryPart;
+	if (!root) return;
+
+	let sign = model.FindFirstChild("NoAmmo") as BillboardGui | undefined;
+	if (!sign) {
+		sign = new Instance("BillboardGui");
+		sign.Name = "NoAmmo";
+		sign.Adornee = root;
+		sign.Size = UDim2.fromOffset(90, 18);
+		sign.StudsOffsetWorldSpace = new Vector3(0, root.Size.Y / 2 + 5, 0);
+		sign.MaxDistance = 160;
+		const text = new Instance("TextLabel");
+		text.BackgroundTransparency = 1;
+		text.Size = UDim2.fromScale(1, 1);
+		text.Font = Enum.Font.GothamBold;
+		text.Text = "NO AMMO";
+		text.TextColor3 = Color3.fromRGB(255, 80, 80);
+		text.TextSize = 14;
+		text.TextStrokeTransparency = 0.4;
+		text.Parent = sign;
+		sign.Parent = model;
+	}
+	sign.Enabled = items === 0;
+}
+
+/** Writes a sorter's `Filter`, and lights it in that ore's colour (white for none). */
+export function setFilter(model: Model, resource: ResourceId | undefined) {
+	model.SetAttribute("Filter", resource);
+	const light = model.FindFirstChild("Light");
+	if (light?.IsA("BasePart")) light.Color = resource !== undefined ? RESOURCES[resource].color : UNSORTED;
+}
+
 /** A neon flash from `from` to `to`, seen by everyone. Shots are hitscan; this is only the look. */
 export function tracer(from: Vector3, to: Vector3, color: Color3) {
 	const length = to.sub(from).Magnitude;
@@ -115,20 +163,98 @@ export function tracer(from: Vector3, to: Vector3, color: Color3) {
 	Debris.AddItem(part, 0.08);
 }
 
+/** How a belt meets what's around it, beyond its own path. */
+export interface BeltLook {
+	/** Its left and right rails: missing on a side something feeds it from. */
+	readonly rails: readonly [left: boolean, right: boolean];
+	/** Nothing feeds its back, so it's closed off there. */
+	readonly capped: boolean;
+	/** It feeds another belt from the side, so it reaches on into that one (see `beltRuns`). */
+	readonly tail: boolean;
+}
+
+/** How deep a belt's frame is, under its surface. */
+const BELT_FRAME = 0.8;
+/** Where a belt's legs stand: a pair this far along it, one under each edge. */
+const LEGS = [0.25, 0.75];
+
 /**
- * A building: a foundation from `bottom` up to the top of the footprint's
- * highest corner, so it never floats on a slope, and a body on top turned by
+ * A belt's parts, in `model`, along `path` (see `runPaths`): short straight pieces following its
+ * curve, each tilted with it on a frame, standing on four legs down to the ground (`groundAt`)
+ * wherever it's raised. Rails line it but where `look` opens them, and a chevron near its front
+ * shows which way it carries. Returns its first piece, the PrimaryPart.
+ */
+export function beltModel(
+	model: Model,
+	path: BeltPath,
+	groundAt: (x: number, z: number) => number,
+	look: BeltLook,
+): BasePart {
+	model.Name = BUILDINGS.conveyor.name;
+	// Pieces overlap so no seam shows (a curve's chords more, to close their outer edges), and
+	// every other one sits a hair higher so they never flicker where they overlap.
+	const seam = isCorner(path) ? 0.7 : 0.1;
+	const raised = (run: CFrame, index: number) => run.mul(new CFrame(0, (index % 2) * 0.02, 0));
+	const runs = beltRuns(path, 0, look.tail);
+	const pieces = runs.map(([run, length], index) => {
+		const frame = raised(run, index);
+		const under = frame.mul(new CFrame(0, -0.3 - BELT_FRAME / 2, 0));
+		block(
+			model,
+			new Vector3(BELT_WIDTH + 1, BELT_FRAME, length + seam + 0.2),
+			under,
+			FOUNDATION,
+			Enum.Material.Metal,
+		);
+		const surface = frame.mul(new CFrame(0, -0.15, 0));
+		return block(model, new Vector3(BELT_WIDTH, 0.3, length + seam), surface, DARK, Enum.Material.Fabric);
+	});
+	for (const t of LEGS) {
+		for (const side of [-1, 1]) {
+			const point = pointOn(path, t, (side * BELT_WIDTH) / 2);
+			// From inside the frame to a little into the ground; none where the frame is down on it.
+			const top = point.Y - 0.3 - BELT_FRAME / 2;
+			const ground = groundAt(point.X, point.Z);
+			if (top - ground < 0.2) continue;
+			const bottom = ground - 1;
+			const leg = new CFrame(point.X, (top + bottom) / 2, point.Z);
+			block(model, new Vector3(0.7, top - bottom, 0.7), leg, METAL, Enum.Material.Metal);
+		}
+	}
+	look.rails.forEach((present, index) => {
+		if (!present) return;
+		const offset = ((index === 0 ? -1 : 1) * (BELT_WIDTH + 0.5)) / 2;
+		beltRuns(path, offset, look.tail).forEach(([run, length], piece) => {
+			block(model, new Vector3(0.5, 0.7, length + 0.1), raised(run, piece), METAL, Enum.Material.Metal);
+		});
+	});
+	if (look.capped) {
+		const [run, length] = runs[0];
+		const back = run.mul(new CFrame(0, 0, length / 2 + 0.25));
+		block(model, new Vector3(BELT_WIDTH + 1, 0.7, 0.5), back, METAL, Enum.Material.Metal);
+	}
+	for (const bar of chevronBars(chevronRun(path))) {
+		block(model, new Vector3(0.35, 0.1, 1), bar.mul(new CFrame(0, 0.03, 0)), GLOW, Enum.Material.Neon).CanCollide =
+			false;
+	}
+	model.PrimaryPart = pieces[0];
+	return pieces[0];
+}
+
+/**
+ * A building's parts, in `model`: a foundation from `bottom` up to the top of the
+ * footprint's highest corner, so it never floats on a slope, and a body on top turned by
  * `rotation` quarter turns. `top` is the centre of the footprint at that height.
  * The body is the PrimaryPart; a turret also returns its turning `Head`.
  */
 export function buildingModel(
+	model: Model,
 	kind: BuildingKind,
 	top: Vector3,
 	bottom: number,
 	rotation: number,
 	oreColor?: Color3,
-): [model: Model, head: BasePart | undefined] {
-	const model = new Instance("Model");
+): [body: BasePart, head: BasePart | undefined] {
 	model.Name = BUILDINGS[kind].name;
 	const width = BUILDINGS[kind].size * CELL_STUDS - 0.4;
 	// Named, so the travel cutscene can fly the core off it.
@@ -164,6 +290,24 @@ export function buildingModel(
 		body = block(model, new Vector3(5, 2, 5), at(1), DARK, Enum.Material.Metal);
 		const orb = block(model, new Vector3(3, 3, 3), at(3.5), REPAIR, Enum.Material.Neon);
 		orb.Shape = Enum.PartType.Ball;
+	} else if (kind === "router") {
+		body = block(model, new Vector3(5, 2.5, 5), at(1.25), METAL, Enum.Material.DiamondPlate);
+		block(model, new Vector3(5.3, 0.5, 5.3), at(1.6), GLOW, Enum.Material.Neon);
+		block(model, new Vector3(2.4, 0.8, 2.4), at(2.9), DARK, Enum.Material.Metal);
+	} else if (kind === "sorter") {
+		body = block(model, new Vector3(5, 2.5, 5), at(1.25), DARK, Enum.Material.Metal);
+		// Lit in the colour of the ore it lets through (see `setFilter`).
+		block(model, new Vector3(3, 0.8, 3), at(2.9), UNSORTED, Enum.Material.Neon).Name = "Light";
+	} else if (kind === "junction") {
+		body = block(model, new Vector3(6, 1.5, 6), at(0.75), METAL, Enum.Material.DiamondPlate);
+		block(model, new Vector3(6.2, 0.4, 1.4), at(1.6), GLOW, Enum.Material.Neon);
+		block(model, new Vector3(1.4, 0.4, 6.2), at(1.6), GLOW, Enum.Material.Neon);
+	} else if (kind === "smelter") {
+		body = block(model, new Vector3(13, 6, 13), at(3), DARK, Enum.Material.Metal);
+		block(model, new Vector3(13.2, 0.5, 13.2), at(5.2), GLOW, Enum.Material.Neon);
+		// The furnace's mouth on its front, and a chimney at the back.
+		block(model, new Vector3(6, 2.4, 0.4), at(2).mul(new CFrame(0, 0, -6.6)), FURNACE, Enum.Material.Neon);
+		block(model, new Vector3(2.4, 5, 2.4), at(8.5).mul(new CFrame(4, 0, 4)), METAL, Enum.Material.Metal);
 	} else {
 		// Turrets, the heavy one twice the size.
 		const scale = kind === "heavyTurret" ? 2 : 1;
@@ -177,7 +321,7 @@ export function buildingModel(
 		}
 	}
 	model.PrimaryPart = body;
-	return [model, head];
+	return [body, head];
 }
 
 /**

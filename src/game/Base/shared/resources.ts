@@ -1,12 +1,13 @@
 import type { Planet, PlanetKind } from "core/Worlds/shared/star-system";
 
-export type ResourceId = "copper" | "lead" | "coal" | "titanium" | "scrap" | "thorium";
+export type ResourceId = "copper" | "lead" | "coal" | "titanium" | "scrap" | "thorium" | "graphite";
 
 export interface ResourceStack {
 	readonly resource: ResourceId;
 	readonly amount: number;
 }
 
+/** Every resource. Graphite is made, not mined: smelters press it from coal. */
 export const RESOURCES: Record<ResourceId, { readonly name: string; readonly color: Color3 }> = {
 	copper: { name: "Copper", color: Color3.fromRGB(217, 140, 84) },
 	lead: { name: "Lead", color: Color3.fromRGB(150, 150, 200) },
@@ -14,10 +15,19 @@ export const RESOURCES: Record<ResourceId, { readonly name: string; readonly col
 	titanium: { name: "Titanium", color: Color3.fromRGB(140, 195, 225) },
 	scrap: { name: "Scrap", color: Color3.fromRGB(130, 118, 98) },
 	thorium: { name: "Thorium", color: Color3.fromRGB(205, 105, 165) },
+	graphite: { name: "Graphite", color: Color3.fromRGB(104, 112, 140) },
 };
 
 /** Display order, everywhere resources are listed. */
-export const RESOURCE_ORDER: ReadonlyArray<ResourceId> = ["copper", "lead", "coal", "titanium", "scrap", "thorium"];
+export const RESOURCE_ORDER: ReadonlyArray<ResourceId> = [
+	"copper",
+	"lead",
+	"coal",
+	"titanium",
+	"scrap",
+	"thorium",
+	"graphite",
+];
 
 /**
  * The ores each kind of planet spawns, with relative weights. Copper and lead

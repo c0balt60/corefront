@@ -5,16 +5,28 @@ import type { Logger } from "@rbxts/log";
 import { CollectionService, Players, StarterPack, Workspace } from "@rbxts/services";
 import { t } from "@rbxts/t";
 
-import { buildingModel, buildToolHandle, setHealth } from "game/Base/server/models";
-import { BaseMessage, baseMessaging, type Phase } from "game/Base/shared/base-network";
 import {
+	type BeltLook,
+	beltModel,
+	buildingModel,
+	buildToolHandle,
+	setAmmo,
+	setFilter,
+	setHealth,
+} from "game/Base/server/models";
+import { BaseMessage, baseMessaging, BeltMessage, beltMessaging, type Phase } from "game/Base/shared/base-network";
+import { alongPath, type BeltPath, DIRECTIONS, entryOf, feedsBelt, runPaths } from "game/Base/shared/belts";
+import {
+	AMMO,
 	BUILD_RANGE,
 	BUILD_TOOL,
 	type BuildableKind,
 	BUILDABLE,
 	BUILDINGS,
 	type BuildingKind,
+	MAX_LINE,
 	REFUND,
+	replaces,
 } from "game/Base/shared/buildings";
 import { KIND_ORES, RESOURCE_ORDER, RESOURCES, type ResourceId, type ResourceStack } from "game/Base/shared/resources";
 import { PlanetsService } from "game/Planets/server/PlanetsService";
@@ -26,16 +38,26 @@ import { CELL_STUDS, cellAt, cellCenter, cellCoords, cellIndex, GRID_SIZE } from
 /** Resource amounts by id. A missing key is zero. */
 export type Stock = Partial<Record<ResourceId, number>>;
 
+/** Ore on a belt, or held by a router. */
+export interface Item {
+	readonly resource: ResourceId;
+	/** Belts: how far along, from 0 at the back of its path to 1 at the front. Routers: seconds held. */
+	progress: number;
+	/** Routers: the building it came from, which they never send it straight back to. */
+	readonly from?: Building;
+}
+
 /** A building on the map. Its model carries the same facts as attributes, for the client. */
 export interface Building {
 	readonly kind: BuildingKind;
+	/** Stays for the building's life: turning it or reshaping a belt remakes the parts inside. */
 	readonly model: Model;
 	/** The -X/-Z corner cell. */
 	readonly cell: number;
 	/** The body's centre: what range checks and shots use. */
-	readonly position: Vector3;
-	/** Quarter turns, 0-3. */
-	readonly rotation: number;
+	position: Vector3;
+	/** Quarter turns, 0-3: the way it faces (see `DIRECTIONS`). A belt carries ore that way. */
+	rotation: number;
 	/** The UserId of the player who placed it, whose research its stats use. 0 for the Core. */
 	readonly owner: number;
 	health: number;
@@ -43,17 +65,35 @@ export interface Building {
 	maxHealth: number;
 	/** Turrets: seconds until they can fire again. */
 	cooldown: number;
-	/** Drills: what they mine. */
+	/** Drills and smelters: what they make. */
 	readonly resource?: ResourceId;
-	/** Drills: mined and waiting to be collected. */
+	/** Drills and smelters: made and waiting to go out, to a neighbour or a player. */
 	stored: number;
 	/** Turrets: the part that turns to aim. */
-	readonly head?: BasePart;
+	head?: BasePart;
+	/** Belts: the side their path comes in from, and the path, as laid with the rest of their run (see `runPaths`). */
+	entry: number;
+	path?: BeltPath;
+	/** Belts: the ore on them, back to front. Routers: the one they hold. */
+	readonly items: Array<Item>;
+	/** Turrets: the ore loaded, fired from the front, and how many shots the front one has given. */
+	readonly ammo: Array<ResourceId>;
+	fired: number;
+	/** Smelters: how much of their input they hold. */
+	input: number;
+	/** Sorters: the ore they let straight through. Everything else turns aside. */
+	filter?: ResourceId;
+	/** Which neighbour it hands ore to next, so it takes turns. */
+	turn: number;
+	/** Belts: what their parts were last made for (see `beltLook`), so they're only remade when it changes. */
+	look: string;
 }
 
 /** A liberated planet's base while the team is away: everything but the Core, which left with them. */
 interface SavedBase {
-	readonly buildings: ReadonlyArray<Pick<Building, "kind" | "cell" | "rotation" | "owner" | "health" | "stored">>;
+	readonly buildings: ReadonlyArray<
+		Pick<Building, "kind" | "cell" | "rotation" | "owner" | "health" | "stored" | "filter">
+	>;
 	/** What stayed in storage: whatever wasn't loaded as cargo or burnt as fuel. */
 	readonly pool: Stock;
 }
@@ -71,14 +111,14 @@ const MAX_SLOPE = 6;
 /** How far a foundation's top stands above the highest ground under it, so it never shares a plane with the terrain. */
 const GROUND_CLEARANCE = 0.5;
 const FULL = "Your pack is full. Deposit at the Core.";
+const OCCUPIED = "Something is already built there.";
 
 const isPlaceData = t.interface({
 	kind: (value: unknown): value is BuildableKind => BUILDABLE.includes(value as BuildableKind),
-	x: t.integer,
-	z: t.integer,
-	rotation: t.integer,
+	cells: t.array(t.interface({ x: t.integer, z: t.integer, rotation: t.integer })),
 });
-const isRemoveData = t.interface({ x: t.integer, z: t.integer });
+const isCellData = t.interface({ x: t.integer, z: t.integer });
+const isConfigureData = t.interface({ x: t.integer, z: t.integer, resource: t.optional(t.keyOf(RESOURCES)) });
 
 function makeFolder(name: string, parent: Instance): Folder {
 	const instance = new Instance("Folder");
@@ -109,9 +149,11 @@ function prompt(parent: Instance, name: string, object: string, hold: number, di
 
 /**
  * The team's base on the active planet: the Core and its shared pool, every
- * player's carried inventory, buildings and their placement rules, and the
- * Mine, Collect and Deposit prompts. `WaveService` drives it: it calls
- * {@link BaseService.reset} for each new planet and attacks what is built here.
+ * player's carried inventory, buildings and their placement rules, what each
+ * building takes in, and the Mine, Collect, Load and Deposit prompts.
+ * `WaveService` drives it: it calls {@link BaseService.reset} for each new
+ * planet and attacks what is built here. `LogisticsService` moves ore between
+ * the buildings.
  */
 @Service()
 export class BaseService implements OnStart {
@@ -157,6 +199,8 @@ export class BaseService implements OnStart {
 	onStart() {
 		baseMessaging.server.on(BaseMessage.Place, (player, data) => this.place(player, data));
 		baseMessaging.server.on(BaseMessage.Remove, (player, data) => this.remove(player, data));
+		baseMessaging.server.on(BaseMessage.Rotate, (player, data) => this.rotate(player, data));
+		beltMessaging.server.on(BeltMessage.Configure, (player, data) => this.configure(player, data));
 
 		// Only tells the client to show the build bar.
 		const tool = new Instance("Tool");
@@ -250,8 +294,10 @@ export class BaseService implements OnStart {
 			const building = this.build(map, old.kind, old.cell, old.rotation, old.owner);
 			building.health = math.min(old.health, building.maxHealth);
 			building.stored = old.stored;
+			building.filter = old.filter;
 			setHealth(building.model, building.health, building.maxHealth);
 			if (building.resource !== undefined) building.model.SetAttribute("Stored", old.stored);
+			if (old.filter !== undefined) setFilter(building.model, old.filter);
 		}
 	}
 
@@ -270,8 +316,8 @@ export class BaseService implements OnStart {
 	/** Keeps the active planet's base, all but the Core, for when the team comes back to `planet`. */
 	save(planet: number) {
 		const buildings = new Array<SavedBase["buildings"][number]>();
-		for (const { kind, cell, rotation, owner, health, stored } of this.buildings) {
-			if (kind !== "core") buildings.push({ kind, cell, rotation, owner, health, stored });
+		for (const { kind, cell, rotation, owner, health, stored, filter } of this.buildings) {
+			if (kind !== "core") buildings.push({ kind, cell, rotation, owner, health, stored, filter });
 		}
 		this.saved.set(planet, { buildings, pool: { ...this.poolAtom() } });
 	}
@@ -332,6 +378,61 @@ export class BaseService implements OnStart {
 		return true;
 	}
 
+	/**
+	 * Takes one `resource` into a building that keeps or uses ore: the Core's pool (up to its capacity),
+	 * a turret's ammo or a smelter's input. False when it won't take it; carriers are `LogisticsService`'s.
+	 */
+	receive(building: Building, resource: ResourceId): boolean {
+		const def = BUILDINGS[building.kind];
+		if (building === this.core) {
+			if ((this.poolAtom()[resource] ?? 0) >= teamStat("coreCapacity")) return false;
+			this.pay([{ resource, amount: 1 }], 1);
+		} else if (def.turret) {
+			if (AMMO[resource] === undefined || building.ammo.size() >= def.turret.magazine) return false;
+			building.ammo.push(resource);
+			setAmmo(building.model, building.ammo.size());
+		} else if (def.craft) {
+			if (resource !== def.craft.input || building.input >= def.craft.storage) return false;
+			building.input++;
+		} else {
+			return false;
+		}
+		return true;
+	}
+
+	/** Spends one of a turret's shots. Returns how hard it hits, times the turret's damage, or undefined with no ammo. */
+	shoot(turret: Building): number | undefined {
+		const def = BUILDINGS[turret.kind].turret;
+		const resource = turret.ammo[0];
+		if (!def || resource === undefined) return undefined;
+		turret.fired++;
+		if (turret.fired >= def.shots) {
+			turret.ammo.shift();
+			turret.fired = 0;
+			setAmmo(turret.model, turret.ammo.size());
+		}
+		return AMMO[resource];
+	}
+
+	/** The building on the cell next to `cell` toward `side` (see `DIRECTIONS`), if any. */
+	neighbour(cell: number, side: number): Building | undefined {
+		const [gx, gz] = cellCoords(cell);
+		const [dx, dz] = DIRECTIONS[side];
+		return this.buildingOn(gx + dx, gz + dz);
+	}
+
+	/** Every building touching `building`, and the side of it each is on: one entry per cell they touch along. */
+	around(building: Building): Array<[neighbour: Building, side: number]> {
+		const touching = new Array<[Building, number]>();
+		for (const covered of footprint(building.cell, BUILDINGS[building.kind].size)) {
+			for (let side = 0; side < 4; side++) {
+				const other = this.neighbour(covered, side);
+				if (other && other !== building) touching.push([other, side]);
+			}
+		}
+		return touching;
+	}
+
 	/** Puts up to `amount` into a player's inventory, within its capacity. Returns how many fit. */
 	give(player: Player, resource: ResourceId, amount: number): number {
 		const items = this.inventories.get(player) ?? {};
@@ -377,40 +478,132 @@ export class BaseService implements OnStart {
 		this.poolAtom(pool);
 	}
 
+	/**
+	 * Builds each cell of a click or dragged line in turn. A line skips what's built already, except
+	 * that a belt line crossing a straight belt swaps it for a Junction, so both lines flow on; where
+	 * it can't, the line stops there and feeds into it. Any other refusal is told once.
+	 */
 	private place(player: Player, data: unknown) {
-		if (!isPlaceData(data)) return;
+		if (!isPlaceData(data) || data.cells.isEmpty() || data.cells.size() > MAX_LINE) return;
 		const refuse = (text: string) => this.notify(player, text);
 		const map = this.map;
 		const def = BUILDINGS[data.kind];
 		if (!map || this.phase() !== "active") return refuse("You can't build right now.");
 		if (!canBuild(levelsOf(player.UserId), data.kind)) return refuse(`Research the ${def.name} first.`);
-		if (!this.inReach(player, cellCenter(cellIndex(data.x, data.z), def.size))) {
-			return refuse("That's too far away to build.");
-		}
-		if (data.x < 0 || data.z < 0 || data.x + def.size > GRID_SIZE || data.z + def.size > GRID_SIZE) {
-			return refuse("That's off the map.");
-		}
 
-		const cell = cellIndex(data.x, data.z);
-		const cells = footprint(cell, def.size);
-		if (cells.some((covered) => this.cells.has(covered))) return refuse("Something is already built there.");
-		if (cells.some((covered) => this.nearSpawn(covered))) return refuse("Too close to an alien spawn.");
-		if (cells.some((covered) => map.isLiquid(cellCenter(covered).X, cellCenter(covered).Z))) {
-			return refuse("You can't build on liquid.");
+		// A belt line keeps the routers and such it runs through; anything else, or one belt, swaps them out.
+		const swap = data.kind !== "conveyor" || data.cells.size() === 1;
+		let refusal: string | undefined;
+		for (let index = 0; index < data.cells.size(); index++) {
+			const { x, z, rotation } = data.cells[index];
+			// Crossing happens on the way through, not where a line starts or ends.
+			const through = data.kind === "conveyor" && index > 0 && index < data.cells.size() - 1;
+			const crossed = through ? this.crossable(x, z, rotation % 4) : undefined;
+			const reason = crossed
+				? this.cross(player, map, crossed)
+				: this.placeOne(player, map, data.kind, x, z, rotation % 4, swap);
+			if (reason !== OCCUPIED || data.cells.size() === 1) refusal ??= reason;
+			if (crossed && reason !== undefined) break;
 		}
-		const [low, high] = map.groundRange(cell, def.size);
-		if (high - low > MAX_SLOPE) return refuse("The ground is too steep there.");
-		if (def.drill && !this.ores.has(cell)) return refuse("Drills must go on ore.");
+		if (refusal !== undefined) refuse(refusal);
+	}
+
+	/** The straight belt on cell (x, z) running across a line heading `rotation`, which a Junction can stand in for. */
+	private crossable(x: number, z: number, rotation: number): Building | undefined {
+		const belt = this.buildingOn(x, z);
+		if (belt?.kind !== "conveyor" || belt.rotation % 2 === rotation % 2) return undefined;
+		return belt.entry === (belt.rotation + 2) % 4 ? belt : undefined;
+	}
+
+	/** Swaps a belt a line crosses for a Junction, the belt refunded like a removal. Returns why not, if it can't. */
+	private cross(player: Player, map: PlanetMap, belt: Building): string | undefined {
+		if (!canBuild(levelsOf(player.UserId), "junction")) return "Research the Junction to cross belts.";
+		if (!this.inReach(player, belt.position)) return "That's too far away to build.";
+		const short = this.shortOf(BUILDINGS.junction.cost);
+		if (short !== undefined) return short;
+
+		this.demolish(belt);
+		this.pay(BUILDINGS.conveyor.cost, REFUND);
+		this.pay(BUILDINGS.junction.cost, -1);
+		this.build(map, "junction", belt.cell, 0, player.UserId);
+		return undefined;
+	}
+
+	/** Why the pool can't pay `cost`, if it can't. */
+	private shortOf(cost: ReadonlyArray<ResourceStack>): string | undefined {
 		const pool = this.poolAtom();
-		const missing = def.cost.find(({ resource, amount }) => (pool[resource] ?? 0) < amount);
-		if (missing) return refuse(`Not enough ${RESOURCES[missing.resource].name}.`);
+		const missing = cost.find(({ resource, amount }) => (pool[resource] ?? 0) < amount);
+		return missing && `Not enough ${RESOURCES[missing.resource].name}.`;
+	}
 
+	/**
+	 * Builds `kind` with its -X/-Z corner on cell (x, z), paid from the pool. With `swap`, a belt piece
+	 * of another kind there is replaced (see `replaces`). Returns why not, if it can't.
+	 */
+	private placeOne(
+		player: Player,
+		map: PlanetMap,
+		kind: BuildableKind,
+		x: number,
+		z: number,
+		rotation: number,
+		swap: boolean,
+	): string | undefined {
+		const def = BUILDINGS[kind];
+		if (x < 0 || z < 0 || x + def.size > GRID_SIZE || z + def.size > GRID_SIZE) return "That's off the map.";
+		const cell = cellIndex(x, z);
+		if (!this.inReach(player, cellCenter(cell, def.size))) return "That's too far away to build.";
+		const cells = footprint(cell, def.size);
+		const there = this.cells.get(cell);
+		const replaced = swap && there && replaces(kind, there.kind) ? there : undefined;
+		if (cells.some((covered) => this.cells.has(covered) && this.cells.get(covered) !== replaced)) return OCCUPIED;
+		if (cells.some((covered) => this.nearSpawn(covered))) return "Too close to an alien spawn.";
+		if (cells.some((covered) => map.isLiquid(cellCenter(covered).X, cellCenter(covered).Z))) {
+			return "You can't build on liquid.";
+		}
+		// Belts go anywhere: they keep their grade and stand on their supports (see `runPaths`).
+		const [low, high] = map.groundRange(cell, def.size);
+		if (kind !== "conveyor" && high - low > MAX_SLOPE) return "The ground is too steep there.";
+		if (def.drill && !this.ores.has(cell)) return "Drills must go on ore.";
+		const short = this.shortOf(def.cost);
+		if (short !== undefined) return short;
+
+		if (replaced) {
+			this.demolish(replaced);
+			this.pay(BUILDINGS[replaced.kind].cost, REFUND);
+		}
 		this.pay(def.cost, -1);
-		this.build(map, data.kind, cell, data.rotation % 4, player.UserId);
+		this.build(map, kind, cell, rotation, player.UserId);
+		return undefined;
+	}
+
+	/** Turns a building a quarter turn, free. A belt then carries the new way. */
+	private rotate(player: Player, data: unknown) {
+		if (!isCellData(data)) return;
+		const map = this.map;
+		if (!map || this.phase() !== "active") return this.notify(player, "You can't turn anything right now.");
+		const building = this.buildingOn(data.x, data.z);
+		if (!building || building.kind === "core") return;
+		if (!this.inReach(player, building.position)) return this.notify(player, "That's too far away to turn.");
+
+		building.rotation = (building.rotation + 1) % 4;
+		// A belt is remade with its neighbours, which its new way can change.
+		if (building.kind !== "conveyor") this.dress(map, building);
+		this.refreshAround(map, building);
+	}
+
+	/** Sets the ore a Sorter lets straight through, or none. */
+	private configure(player: Player, data: unknown) {
+		if (!isConfigureData(data) || this.phase() !== "active") return;
+		const sorter = this.buildingOn(data.x, data.z);
+		if (sorter?.kind !== "sorter") return;
+		if (!this.inReach(player, sorter.position)) return this.notify(player, "That's too far away to set.");
+		sorter.filter = data.resource;
+		setFilter(sorter.model, data.resource);
 	}
 
 	private remove(player: Player, data: unknown) {
-		if (!isRemoveData(data)) return;
+		if (!isCellData(data)) return;
 		const refuse = (text: string) => this.notify(player, text);
 		const map = this.map;
 		if (!map || this.phase() !== "active") return refuse("You can't remove anything right now.");
@@ -438,35 +631,32 @@ export class BaseService implements OnStart {
 	/** Builds without any checks; `place` does those. */
 	private build(map: PlanetMap, kind: BuildingKind, cell: number, rotation: number, owner: number): Building {
 		const def = BUILDINGS[kind];
-		const [low, high] = map.groundRange(cell, def.size);
-		const center = cellCenter(cell, def.size);
-		const ore = def.drill ? this.ores.get(cell) : undefined;
 		const maxHealth =
 			kind === "core" ? teamStat("coreHealth") : math.round(def.health * statOf(owner, "buildingHealth"));
-		const top = new Vector3(center.X, high + GROUND_CLEARANCE, center.Z);
-		const [model, head] = buildingModel(kind, top, low - 2, rotation, ore && RESOURCES[ore.resource].color);
-		const body = model.PrimaryPart!;
+		const model = new Instance("Model");
 		model.SetAttribute("Kind", kind);
 		model.SetAttribute("Cell", cell);
-		if (ore) model.SetAttribute("Stored", 0);
-		setHealth(model, maxHealth, maxHealth);
-		this.clearProps(map, top, def.size * CELL_STUDS, low);
-		model.Parent = this.buildingsFolder;
-
 		const building: Building = {
 			kind,
 			model,
 			cell,
-			position: body.Position,
+			position: cellCenter(cell, def.size),
 			rotation,
 			owner,
 			health: maxHealth,
 			maxHealth,
 			cooldown: 0,
-			resource: ore?.resource,
+			resource: def.drill ? this.ores.get(cell)?.resource : def.craft?.output,
 			stored: 0,
-			head,
+			entry: (rotation + 2) % 4,
+			items: [],
+			ammo: [],
+			fired: 0,
+			input: 0,
+			turn: 0,
+			look: "",
 		};
+		if (building.resource !== undefined) model.SetAttribute("Stored", 0);
 		this.buildings.add(building);
 		for (const covered of footprint(cell, def.size)) {
 			this.cells.set(covered, building);
@@ -475,12 +665,175 @@ export class BaseService implements OnStart {
 		}
 		this.revision++;
 
+		const [low, high] = map.groundRange(cell, def.size);
+		const center = cellCenter(cell, def.size);
+		this.clearProps(map, new Vector3(center.X, high + GROUND_CLEARANCE, center.Z), def.size * CELL_STUDS, low);
+		// A belt is made with its run, once it's in (see `reshape`).
+		if (kind === "conveyor") building.entry = this.beltEntry(building);
+		else this.dress(map, building);
+		model.Parent = this.buildingsFolder;
+		this.refreshAround(map, building);
+		return building;
+	}
+
+	/**
+	 * (Re)makes a building's parts inside its model, for its kind, facing and (belts) shape, with
+	 * its prompts. The Model itself stays, and so do its attributes and the client's hold on it.
+	 */
+	private dress(map: PlanetMap, building: Building) {
+		const { kind, model } = building;
+		const def = BUILDINGS[kind];
+		model.ClearAllChildren();
+		const [low, high] = map.groundRange(building.cell, def.size);
+		let body: BasePart;
+		if (kind === "conveyor") {
+			const path = building.path!;
+			const [look, key] = this.beltLook(building);
+			building.look = key;
+			body = beltModel(model, path, map.heightAt, look);
+			model.SetAttribute("Entry", building.entry);
+			model.SetAttribute("PathIn", path[0]);
+			model.SetAttribute("PathMid", path[1]);
+			model.SetAttribute("PathOut", path[2]);
+			model.SetAttribute("PathEnds", path[3]);
+		} else {
+			const center = cellCenter(building.cell, def.size);
+			const top = new Vector3(center.X, high + GROUND_CLEARANCE, center.Z);
+			const color = building.resource !== undefined ? RESOURCES[building.resource].color : undefined;
+			const [made, head] = buildingModel(model, kind, top, low - 2, building.rotation, color);
+			body = made;
+			building.head = head;
+		}
+		model.SetAttribute("Rotation", building.rotation);
+		building.position = body.Position;
+		setHealth(model, building.health, building.maxHealth);
+		if (def.turret) setAmmo(model, building.ammo.size());
+		if (kind === "sorter") setFilter(model, building.filter);
+
 		if (kind === "core") {
 			prompt(body, "Deposit", "Core", 0, 16).Triggered.Connect((player) => this.deposit(player));
-		} else if (ore) {
-			prompt(body, "Collect", "Drill", 0).Triggered.Connect((player) => this.collect(player, building));
+		} else if (building.resource !== undefined) {
+			prompt(body, "Collect", def.name, 0).Triggered.Connect((player) => this.collect(player, building));
+		} else if (def.turret) {
+			prompt(body, "Load", def.name, 0).Triggered.Connect((player) => this.load(player, building));
 		}
-		return building;
+	}
+
+	/** Whether the building beside a belt on `side` puts ore onto it. Never what's in front of it. */
+	private fedFrom(belt: Building, side: number): boolean {
+		const other = this.neighbour(belt.cell, side);
+		return side !== belt.rotation && other !== undefined && feedsBelt(other.kind, other.rotation, side);
+	}
+
+	/** The side a belt's path comes in from (see `entryOf`): a corner when one side alone feeds it. */
+	private beltEntry(belt: Building): number {
+		return entryOf(belt.rotation, (side) => this.fedFrom(belt, side));
+	}
+
+	/** The belt this one feeds from the side, if it does: that one takes its ore in by the side facing back at it. */
+	private mergeInto(belt: Building): Building | undefined {
+		const back = (belt.rotation + 2) % 4;
+		const ahead = this.neighbour(belt.cell, belt.rotation);
+		return ahead?.kind === "conveyor" && ahead.rotation !== back && ahead.entry !== back ? ahead : undefined;
+	}
+
+	/**
+	 * How a belt meets what's around it, and a key that changes whenever that or its path does.
+	 * Rails open on the sides feeding a straight belt, and its back closes when nothing feeds it
+	 * there. Feeding the side of the belt ahead, it reaches on into it.
+	 */
+	private beltLook(belt: Building): [look: BeltLook, key: string] {
+		const back = (belt.rotation + 2) % 4;
+		const straight = belt.entry === back;
+		const look: BeltLook = {
+			rails: [
+				!straight || !this.fedFrom(belt, (belt.rotation + 1) % 4),
+				!straight || !this.fedFrom(belt, (belt.rotation + 3) % 4),
+			],
+			capped: straight && !this.fedFrom(belt, back),
+			tail: this.mergeInto(belt) !== undefined,
+		};
+		const [from, middle, to, ends] = belt.path!;
+		return [look, `${look.rails[0]}/${look.rails[1]}/${look.capped}/${look.tail}/${from}/${middle}/${to}/${ends}`];
+	}
+
+	/** The belts a belt is in a run with (see `runPaths`): each passing its ore to the next by that one's entry. */
+	private runOf(belt: Building): Array<Building> {
+		// The belt before one faces into it from its entry; the one after takes its ore in by its entry.
+		const before = (other: Building) => {
+			const prior = this.neighbour(other.cell, other.entry);
+			return prior?.kind === "conveyor" && prior.rotation === (other.entry + 2) % 4 ? prior : undefined;
+		};
+		const after = (other: Building) => {
+			const onward = this.neighbour(other.cell, other.rotation);
+			return onward?.kind === "conveyor" && onward.entry === (other.rotation + 2) % 4 ? onward : undefined;
+		};
+		// Back to the first, or round to where it started on a loop.
+		let first = belt;
+		for (let prior = before(first); prior && prior !== belt; prior = before(first)) first = prior;
+		const run = [first];
+		for (let onward = after(first); onward && onward !== first; onward = after(onward)) run.push(onward);
+		return run;
+	}
+
+	/**
+	 * Lays out again the runs `belts` are in, and remakes those of their belts whose look that
+	 * changed; then the runs feeding those from the side, which meet them at their height.
+	 */
+	private reshape(map: PlanetMap, belts: ReadonlySet<Building>) {
+		const queue = new Array<Building>();
+		for (const belt of belts) queue.push(belt);
+		const done = new Set<Building>();
+		// ponytail: belts feeding each other's sides in a ring could keep moving each other; stop after this many runs.
+		let budget = 256;
+		while (!queue.isEmpty() && budget > 0) {
+			const belt = queue.pop()!;
+			if (done.has(belt) || !this.buildings.has(belt)) continue;
+			budget--;
+			const run = this.runOf(belt);
+			const receiver = this.mergeInto(run[run.size() - 1]);
+			const merge = receiver?.path && alongPath(receiver.path, 0.5)[0].Y;
+			const paths = runPaths(run, map.heightAt, merge);
+			run.forEach((member, index) => {
+				done.add(member);
+				member.path = paths[index];
+				if (this.beltLook(member)[1] === member.look) return;
+				this.dress(map, member);
+				for (const side of [(member.rotation + 1) % 4, (member.rotation + 3) % 4]) {
+					const feeder = this.neighbour(member.cell, side);
+					if (side === member.entry || feeder?.kind !== "conveyor" || feeder.rotation !== (side + 2) % 4)
+						continue;
+					done.delete(feeder);
+					queue.push(feeder);
+				}
+			});
+		}
+	}
+
+	/**
+	 * Remakes the belts near `building`, just built, turned or removed, whose look that changed:
+	 * those beside it may have gained or lost a feeder. Their runs are laid out again whole, as a
+	 * belt anywhere in one can raise the rest.
+	 */
+	private refreshAround(map: PlanetMap, building: Building) {
+		const [gx, gz] = cellCoords(building.cell);
+		const size = BUILDINGS[building.kind].size;
+		const near = new Set<Building>();
+		for (let z = gz - 2; z < gz + size + 2; z++) {
+			for (let x = gx - 2; x < gx + size + 2; x++) {
+				const belt = this.buildingOn(x, z);
+				if (belt?.kind === "conveyor") near.add(belt);
+			}
+		}
+		// Every shape first: which belts make a run depends on them.
+		for (const belt of near) belt.entry = this.beltEntry(belt);
+		this.reshape(map, near);
+	}
+
+	/** The building covering cell (x, z), if any. */
+	private buildingOn(x: number, z: number): Building | undefined {
+		if (x < 0 || z < 0 || x >= GRID_SIZE || z >= GRID_SIZE) return undefined;
+		return this.cells.get(cellIndex(x, z));
 	}
 
 	private demolish(building: Building) {
@@ -493,6 +846,7 @@ export class BaseService implements OnStart {
 		}
 		if (building === this.core) this.core = undefined;
 		this.revision++;
+		if (this.map) this.refreshAround(this.map, building);
 	}
 
 	/**
@@ -521,12 +875,31 @@ export class BaseService implements OnStart {
 		if (this.give(player, resource, MINE_AMOUNT) < MINE_AMOUNT) this.notify(player, FULL);
 	}
 
-	private collect(player: Player, drill: Building) {
-		if (!this.buildings.has(drill) || drill.resource === undefined) return;
-		if (drill.stored === 0) return this.notify(player, "Nothing to collect yet.");
-		drill.stored -= this.give(player, drill.resource, drill.stored);
-		drill.model.SetAttribute("Stored", drill.stored);
-		if (drill.stored > 0) this.notify(player, FULL);
+	/** Moves what a drill or smelter has made into a player's pack, as much as fits. */
+	private collect(player: Player, building: Building) {
+		if (!this.buildings.has(building) || building.resource === undefined) return;
+		if (building.stored === 0) return this.notify(player, "Nothing to collect yet.");
+		building.stored -= this.give(player, building.resource, building.stored);
+		building.model.SetAttribute("Stored", building.stored);
+		if (building.stored > 0) this.notify(player, FULL);
+	}
+
+	/** Loads a turret with whatever ammo a player carries, until it's full. The rest stays carried. */
+	private load(player: Player, turret: Building) {
+		if (!this.buildings.has(turret)) return;
+		const left: Stock = {};
+		let loaded = 0;
+		for (const [resource, amount] of pairs(this.inventories.get(player) ?? {})) {
+			let kept = amount;
+			while (kept > 0 && this.receive(turret, resource)) kept--;
+			loaded += amount - kept;
+			if (kept > 0) left[resource] = kept;
+		}
+		if (loaded === 0) {
+			const full = turret.ammo.size() >= (BUILDINGS[turret.kind].turret?.magazine ?? 0);
+			return this.notify(player, full ? "It's fully loaded." : "Carry ore to load it. Coal won't fire.");
+		}
+		this.setInventory(player, left);
 	}
 
 	/** Moves a player's inventory into the pool, as much as the Core has room for. The rest stays carried. */
@@ -551,13 +924,18 @@ export class BaseService implements OnStart {
 		if (kept > 0) this.notify(player, "The Core is full. Research Core Silos for more room.");
 	}
 
-	/** Drills mine, and menders repair every damaged building in their range. */
+	/** Drills mine, smelters smelt, and menders repair every damaged building in their range. */
 	private runMachines() {
 		for (const building of this.buildings) {
 			const def = BUILDINGS[building.kind];
 			if (def.drill && building.resource !== undefined && building.stored < def.drill.storage) {
 				const mined = def.drill.yield + statOf(building.owner, "drillYield");
 				building.stored = math.min(building.stored + mined, def.drill.storage);
+				building.model.SetAttribute("Stored", building.stored);
+			}
+			if (def.craft && building.input >= def.craft.amount && building.stored < def.craft.storage) {
+				building.input -= def.craft.amount;
+				building.stored++;
 				building.model.SetAttribute("Stored", building.stored);
 			}
 			if (def.repair !== undefined && def.range !== undefined) {
