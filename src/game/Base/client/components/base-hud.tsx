@@ -13,12 +13,8 @@ import { type ResourceId, RESOURCES } from "game/Base/shared/resources";
 
 const clamp01 = (value: number) => math.clamp(value, 0, 1);
 
-/** Slower than any `SPRINGS` preset, so the trail behind the core's health bar lingers long enough to show a hit. */
-const TRAIL = { tension: 40, friction: 14 };
 /** Pixels between the HUD and the screen's edges. */
 const EDGE = 16;
-/** Pixels between the top of the screen (below Roblox's topbar) and the Core's readout. */
-const TOP = EDGE;
 
 /** `seconds` as m:ss, never below 0:00. */
 function clock(seconds: number) {
@@ -138,103 +134,6 @@ interface MissionProps {
 	readonly state: () => BaseState;
 	/** Turns false to slide it away. Return `$tuple(node, EXIT_TIME)` from the Show that renders it. */
 	readonly show: () => boolean;
-}
-
-/**
- * The Core, top centre: its health as a bar that springs
- * to each new value, green to red as it falls, with a pale trail that drains
- * after it on every hit. Under it, a swatch and count for each resource the core
- * holds. Drops in from the top.
- */
-export function CoreStatus({ state, show }: MissionProps) {
-	const drop = useAppear(show, 0.05);
-	const health = () => {
-		const { coreHealth, coreMaxHealth } = state();
-		return coreMaxHealth > 0 ? clamp01(coreHealth / coreMaxHealth) : 0;
-	};
-	const [fill, fillSpring] = useSpring(health(), SPRINGS.responsive);
-	const [trail, trailSpring] = useSpring(health(), TRAIL);
-	effect(() => {
-		fillSpring.setGoal(health());
-		trailSpring.setGoal(health());
-	});
-
-	return (
-		<HudBox
-			name="CoreStatus"
-			anchorPoint={new Vector2(0.5, 0)}
-			position={() => new UDim2(0.5, 0, 0, TOP - 160 * (1 - drop()))}
-			size={UDim2.fromOffset(360, 74)}
-		>
-			<Label text={useScramble("hud", () => "CORE", 0.2)} size={new UDim2(0.5, 0, 0, 14)} />
-			<Label
-				alignX={Enum.TextXAlignment.Right}
-				anchorPoint={new Vector2(1, 0)}
-				color={COLORS.text}
-				font={FONT_DISPLAY}
-				position={UDim2.fromScale(1, 0)}
-				size={new UDim2(0.5, 0, 0, 14)}
-				text={() => `${math.ceil(state().coreHealth)} / ${state().coreMaxHealth}`}
-				textSize={14}
-			/>
-			<frame
-				BackgroundColor3={COLORS.disabled}
-				BackgroundTransparency={0.4}
-				BorderSizePixel={0}
-				Position={UDim2.fromOffset(0, 20)}
-				Size={new UDim2(1, 0, 0, 8)}
-			>
-				<frame
-					BackgroundColor3={COLORS.text}
-					BackgroundTransparency={0.4}
-					BorderSizePixel={0}
-					Size={() => UDim2.fromScale(clamp01(trail()), 1)}
-				/>
-				<frame
-					BackgroundColor3={() => COLORS.danger.Lerp(COLORS.confirm, clamp01(fill()))}
-					BorderSizePixel={0}
-					Size={() => UDim2.fromScale(clamp01(fill()), 1)}
-				/>
-			</frame>
-			<frame BackgroundTransparency={1} Position={UDim2.fromOffset(0, 36)} Size={new UDim2(1, 0, 0, 20)}>
-				<uilistlayout
-					FillDirection={Enum.FillDirection.Horizontal}
-					HorizontalAlignment={Enum.HorizontalAlignment.Center}
-					Padding={new UDim(0, 16)}
-					SortOrder={Enum.SortOrder.LayoutOrder}
-				/>
-				<Index each={() => state().pool}>
-					{(stack, index) => (
-						<frame
-							AutomaticSize={Enum.AutomaticSize.X}
-							BackgroundTransparency={1}
-							LayoutOrder={index}
-							Size={UDim2.fromOffset(0, 20)}
-						>
-							<uilistlayout
-								FillDirection={Enum.FillDirection.Horizontal}
-								Padding={new UDim(0, 6)}
-								SortOrder={Enum.SortOrder.LayoutOrder}
-								VerticalAlignment={Enum.VerticalAlignment.Center}
-							/>
-							<Swatch resource={() => stack().resource} />
-							<textlabel
-								AutomaticSize={Enum.AutomaticSize.X}
-								BackgroundTransparency={1}
-								FontFace={FONT_DISPLAY}
-								LayoutOrder={1}
-								Size={UDim2.fromOffset(0, 20)}
-								Text={() => tostring(stack().amount)}
-								// Red once full: deposits stop there.
-								TextColor3={() => (stack().amount >= state().capacity ? COLORS.danger : COLORS.text)}
-								TextSize={15}
-							/>
-						</frame>
-					)}
-				</Index>
-			</frame>
-		</HudBox>
-	);
 }
 
 interface WavePanelProps extends MissionProps {
@@ -584,14 +483,14 @@ function Toast({ text, layoutOrder }: { readonly text: string; readonly layoutOr
 	);
 }
 
-/** The server's toasts, stacked under the core status, newest at the bottom. */
+/** The server's toasts, stacked top centre, newest at the bottom. */
 export function Notices({ notices }: { readonly notices: () => ReadonlyArray<Notice> }) {
 	return (
 		<frame
 			Name="Notices"
 			AnchorPoint={new Vector2(0.5, 0)}
 			BackgroundTransparency={1}
-			Position={new UDim2(0.5, 0, 0, TOP + 88)}
+			Position={new UDim2(0.5, 0, 0, EDGE)}
 			Size={UDim2.fromOffset(420, 200)}
 		>
 			<uilistlayout

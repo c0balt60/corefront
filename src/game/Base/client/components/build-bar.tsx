@@ -173,6 +173,8 @@ interface BuildBarProps {
 	/** The buildings the local player can place, in `BUILDABLE` order. */
 	readonly kinds: () => ReadonlyArray<BuildableKind>;
 	readonly pool: () => ReadonlyArray<ResourceStack>;
+	/** The local player's backpack, counted with the pool in each cost's total. */
+	readonly held: () => ReadonlyArray<ResourceStack>;
 	readonly mode: () => BuildMode | undefined;
 	readonly onSelect: (mode: BuildMode) => void;
 	/** Turns false to put it away. Return `$tuple(node, EXIT_TIME)` from the Show that renders it. */
@@ -182,12 +184,12 @@ interface BuildBarProps {
 /**
  * The build menu, bottom right: a rail of categories with the remove tool under them, the open
  * category's buildings as a grid of glyphs beside it, and over both a header naming whatever is
- * hovered (or else picked), with its cost, red where the Core can't pay, and description. Picking a
- * building any other way, like copying one with Q, opens its category. The controls for the current
- * mode sit above the hotbar. Shown while the Build tool is out, shrunk to stay under the wave panel.
- * Slides in from the right.
+ * hovered (or else picked), with its cost, red where the Core can't pay, how much of each the Core
+ * and backpack hold together, and description. Picking a building any other way, like copying one
+ * with Q, opens its category. The controls for the current mode sit above the hotbar. Shown while
+ * the Build tool is out, shrunk to stay under the wave panel. Slides in from the right.
  */
-export function BuildBar({ kinds, pool, mode, onSelect, show }: BuildBarProps) {
+export function BuildBar({ kinds, pool, held, mode, onSelect, show }: BuildBarProps) {
 	const appear = useAppear(show, 0.1);
 	const hint = useScramble(
 		"hud",
@@ -313,9 +315,18 @@ export function BuildBar({ kinds, pool, mode, onSelect, show }: BuildBarProps) {
 											}
 											font={FONT_DISPLAY}
 											position={UDim2.fromOffset(16, 0)}
-											size={new UDim2(1, -16, 1, 0)}
+											size={new UDim2(0.6, -16, 1, 0)}
 											text={() => `${stack().amount} ${RESOURCES[stack().resource].name.upper()}`}
 											textSize={12}
+										/>
+										<Label
+											alignX={Enum.TextXAlignment.Right}
+											anchorPoint={new Vector2(1, 0)}
+											position={UDim2.fromScale(1, 0)}
+											size={UDim2.fromScale(0.4, 1)}
+											text={() =>
+												`HAVE ${amountOf(pool(), stack().resource) + amountOf(held(), stack().resource)}`
+											}
 										/>
 									</frame>
 								)}

@@ -106,19 +106,22 @@ export function buildToolHandle(tool: Tool) {
 	weld(handle, block(tool, new Vector3(0.5, 0.5, 0.15), new CFrame(0, 0.1, -1.15), GLOW, Enum.Material.Neon));
 }
 
-/** Writes `Health` and `MaxHealth`, and shows a small bar over the model once it is damaged. */
+/** Writes `Health` and `MaxHealth`, and shows a bar over the model while it is damaged: a small one, or a wide one over the Core. */
 export function setHealth(model: Model, health: number, maxHealth: number) {
 	model.SetAttribute("Health", health);
 	model.SetAttribute("MaxHealth", maxHealth);
 	const root = model.PrimaryPart;
-	if (health >= maxHealth || !root) return;
-
 	let bar = model.FindFirstChild("HealthBar") as BillboardGui | undefined;
+	if (health >= maxHealth || !root) {
+		bar?.Destroy();
+		return;
+	}
+
 	if (!bar) {
 		bar = new Instance("BillboardGui");
 		bar.Name = "HealthBar";
 		bar.Adornee = root;
-		bar.Size = UDim2.fromOffset(44, 6);
+		bar.Size = model.GetAttribute("Kind") === "core" ? UDim2.fromOffset(140, 12) : UDim2.fromOffset(44, 6);
 		bar.StudsOffsetWorldSpace = new Vector3(0, root.Size.Y / 2 + 3, 0);
 		bar.MaxDistance = 160;
 		const back = new Instance("Frame");

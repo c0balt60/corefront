@@ -18,14 +18,7 @@ import {
 	toggleTool,
 	toolsAtom,
 } from "game/Base/client/base-state";
-import {
-	CargoPanel,
-	CoreStatus,
-	Notices,
-	ResultBanner,
-	SandboxPanel,
-	WavePanel,
-} from "game/Base/client/components/base-hud";
+import { CargoPanel, Notices, ResultBanner, SandboxPanel, WavePanel } from "game/Base/client/components/base-hud";
 import { BuildBar } from "game/Base/client/components/build-bar";
 import { BuildingPanel } from "game/Base/client/components/building-panel";
 import { Hotbar } from "game/Base/client/components/hotbar";
@@ -127,15 +120,6 @@ export function GameApp() {
 	return (
 		<>
 			<screengui Name="GameApp" Enabled={visible} ResetOnSpawn={false}>
-				<Show when={world}>
-					{() => (
-						<WorldHeader
-							star={star}
-							code={() => world()?.code ?? ""}
-							isPrivate={() => world()?.isPrivate ?? false}
-						/>
-					)}
-				</Show>
 				<Show when={browsing}>
 					{(state, show) => {
 						// Set by Deploy, so the button says the terrain is generating instead of offering Deploy again.
@@ -143,6 +127,12 @@ export function GameApp() {
 						// Stays mounted for EXIT_TIME after closing, so the panel can slide out.
 						return $tuple(
 							<>
+								<WorldHeader
+									star={star}
+									code={() => state().code}
+									isPrivate={() => state().isPrivate}
+									show={show}
+								/>
 								<PlanetPanel
 									show={show}
 									planet={() => planets()[selected()]}
@@ -236,7 +226,6 @@ export function GameApp() {
 					{(state, show) =>
 						$tuple(
 							<>
-								<CoreStatus state={state} show={show} />
 								{/* A sandbox has no waves: its panel sends aliens instead. */}
 								<Show when={() => !state().sandbox}>
 									{(_, shown) =>
@@ -282,6 +271,7 @@ export function GameApp() {
 							<BuildBar
 								kinds={() => BUILDABLE.filter((kind) => canBuild(levels(), kind, base()?.sandbox))}
 								pool={() => base()?.pool ?? []}
+								held={() => inventory().items}
 								mode={buildMode}
 								onSelect={toggleBuildMode}
 								show={show}
