@@ -4,7 +4,8 @@ import { RunService, Workspace } from "@rbxts/services";
 
 import { selectedAtom, selectedOreAtom } from "game/Base/client/base-state";
 import { BeltMessage, beltMessaging, type HeldItem, type ItemMove } from "game/Base/shared/base-network";
-import { alongPath, BELT_SPACING, BELT_SPEED, modelPath } from "game/Base/shared/belts";
+import { alongPath, BELT_SPACING, modelPath } from "game/Base/shared/belts";
+import { BUILDINGS, type BuildingKind } from "game/Base/shared/buildings";
 import { type ResourceId, RESOURCES } from "game/Base/shared/resources";
 
 /** An ore's size, in studs. */
@@ -120,10 +121,10 @@ export class LogisticsController implements OnStart {
 	/** Puts ore on the building on `cell`: `progress` along a belt, held by a router, or sinking into anything else. */
 	private land(cell: number, ore: Ore, progress: number) {
 		const model = this.models.get(cell);
-		const kind = model?.GetAttribute("Kind");
+		const kind = model?.GetAttribute("Kind") as BuildingKind | undefined;
 		if (!model) {
 			ore.part.Destroy();
-		} else if (kind === "conveyor") {
+		} else if (kind !== undefined && BUILDINGS[kind]?.belt !== undefined) {
 			ore.progress = progress;
 			const ores = this.belts.get(cell) ?? [];
 			this.belts.set(cell, ores);
@@ -185,11 +186,12 @@ export class LogisticsController implements OnStart {
 			// ponytail: reads four attributes per busy belt per frame; cache on AttributeChanged if bases get huge.
 			const model = !ores.isEmpty() ? this.models.get(cell) : undefined;
 			const path = model && modelPath(model);
-			if (!path) continue;
+			const speed = model && BUILDINGS[model.GetAttribute("Kind") as BuildingKind]?.belt;
+			if (!path || speed === undefined) continue;
 			for (let i = ores.size() - 1; i >= 0; i--) {
 				const ore = ores[i];
 				const limit = i === ores.size() - 1 ? 1 : ores[i + 1].progress - BELT_SPACING;
-				ore.progress = math.max(ore.progress, math.min(ore.progress + BELT_SPEED * dt, limit));
+				ore.progress = math.max(ore.progress, math.min(ore.progress + speed * dt, limit));
 				const [goal, heading] = alongPath(path, ore.progress);
 				draw(ore, goal, heading);
 			}

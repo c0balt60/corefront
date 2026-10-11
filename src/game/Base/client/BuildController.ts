@@ -35,6 +35,7 @@ import {
 	BUILDABLE,
 	BUILDINGS,
 	type BuildingKind,
+	isBelt,
 	MAX_LINE,
 	replaces,
 } from "game/Base/shared/buildings";
@@ -129,10 +130,16 @@ function feeds(model: Model | undefined, side: number): boolean {
 	return typeIs(kind, "string") && typeIs(facing, "number") && feedsBelt(kind as BuildingKind, facing, side);
 }
 
+/** Whether `model` is a belt. */
+function isBeltModel(model: Model | undefined): model is Model {
+	const kind = model?.GetAttribute("Kind");
+	return typeIs(kind, "string") && BUILDINGS[kind as BuildingKind]?.belt !== undefined;
+}
+
 /** Whether `model` is a straight belt running across a belt line heading `rotation`: the server lays a Junction there. */
 function crossable(model: Model | undefined, rotation: number): boolean {
 	const facing = model?.GetAttribute("Rotation");
-	if (model?.GetAttribute("Kind") !== "conveyor" || !typeIs(facing, "number")) return false;
+	if (!isBeltModel(model) || !typeIs(facing, "number")) return false;
 	return facing % 2 !== rotation % 2 && model.GetAttribute("Entry") === (facing + 2) % 4;
 }
 
@@ -140,7 +147,7 @@ function crossable(model: Model | undefined, rotation: number): boolean {
 function mergeHeight(ahead: Model | undefined, rotation: number): number | undefined {
 	const back = (rotation + 2) % 4;
 	const path = ahead && modelPath(ahead);
-	if (ahead?.GetAttribute("Kind") !== "conveyor" || !path) return undefined;
+	if (!isBeltModel(ahead) || !path) return undefined;
 	const side = ahead.GetAttribute("Rotation") === back || ahead.GetAttribute("Entry") === back;
 	return side ? undefined : alongPath(path, 0.5)[0].Y;
 }
@@ -317,7 +324,7 @@ export class BuildController implements OnStart {
 		const kind = mode === "remove" ? undefined : mode;
 		const def = kind ? BUILDINGS[kind] : undefined;
 		const size = def ? def.size : 1;
-		const belt = kind === "conveyor";
+		const belt = kind !== undefined && isBelt(kind);
 		// Ore never moves, so where it is can be read once.
 		const ores = new Set(CollectionService.GetTagged("Ore").map((ore) => ore.GetAttribute("Cell")));
 
@@ -428,10 +435,14 @@ export class BuildController implements OnStart {
 				}
 				// Like the server: a belt line keeps the routers and such it runs through, anything else swaps them.
 				const there = modelOn(taken, x, z)?.GetAttribute("Kind") as BuildingKind | undefined;
-				const swapping = there !== undefined && (!belt || line.size() === 1) && replaces(kind, there);
+				const swapping = there !== undefined && replaces(kind, there, belt && line.size() > 1);
 				let free = !crossing;
+				let onOre = false;
 				for (let dz = 0; dz < size; dz++) {
-					for (let dx = 0; dx < size; dx++) free &&= swapping || modelOn(taken, x + dx, z + dz) === undefined;
+					for (let dx = 0; dx < size; dx++) {
+						free &&= swapping || modelOn(taken, x + dx, z + dz) === undefined;
+						onOre ||= ores.has(cellIndex(x + dx, z + dz));
+					}
 				}
 				let affordable = true;
 				for (const [resource, amount] of spent) affordable &&= amountOf(pool, resource) >= amount;
@@ -441,7 +452,7 @@ export class BuildController implements OnStart {
 					x + size <= GRID_SIZE &&
 					z + size <= GRID_SIZE &&
 					(crossing ? canBuild(levelsAtom(), "junction") : free) &&
-					(!def.drill || ores.has(cell)) &&
+					(!def.drill || onOre) &&
 					affordable &&
 					root !== undefined &&
 					// Across the ground, like the server's check.

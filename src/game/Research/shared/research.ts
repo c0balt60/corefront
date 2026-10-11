@@ -22,17 +22,23 @@ export type GlyphId =
 	| "silo"
 	| "drill"
 	| "advancedDrill"
+	| "laserDrill"
 	| "drillBits"
-	| "smelter"
+	| "graphitePress"
+	| "siliconSmelter"
 	| "router"
 	| "sorter"
 	| "junction"
+	| "titaniumConveyor"
 	| "wall"
 	| "titaniumWall"
 	| "plating"
 	| "mender"
 	| "turret"
-	| "heavyTurret"
+	| "autoTurret"
+	| "cannon"
+	| "swarmer"
+	| "ripple"
 	| "crosshair";
 
 export type StatId =
@@ -84,13 +90,19 @@ export type ResearchId =
 	| "mender"
 	| "turret"
 	| "hardenedRounds"
-	| "heavyTurret"
+	| "autoTurret"
+	| "swarmer"
+	| "cannon"
+	| "ripple"
 	| "drillBits"
 	| "advancedDrill"
-	| "smelter"
+	| "laserDrill"
+	| "graphitePress"
+	| "siliconSmelter"
 	| "router"
 	| "sorter"
-	| "junction";
+	| "junction"
+	| "titaniumConveyor";
 
 export interface ResearchNode {
 	readonly name: string;
@@ -262,18 +274,59 @@ export const RESEARCH: Record<ResearchId, ResearchNode> = {
 		levels: 3,
 		effect: { stat: "turretDamage", step: 0.2 },
 	},
-	heavyTurret: {
-		name: "Heavy Turret",
-		description: "Build heavy turrets: slow, long-range and hard-hitting.",
-		glyph: "heavyTurret",
+	autoTurret: {
+		name: "Auto-Turret",
+		description: "Build auto-turrets: twin barrels that fire very fast.",
+		glyph: "autoTurret",
+		requires: ["turret"],
+		cost: [
+			{ resource: "copper", amount: 50 },
+			{ resource: "lead", amount: 40 },
+			{ resource: "graphite", amount: 20 },
+		],
+		unlocks: "autoTurret",
+		discover: "graphite",
+	},
+	swarmer: {
+		name: "Swarmer",
+		description: "Build swarmers, whose rockets curve into aliens and blast those around them.",
+		glyph: "swarmer",
+		requires: ["autoTurret"],
+		cost: [
+			{ resource: "copper", amount: 80 },
+			{ resource: "graphite", amount: 50 },
+			{ resource: "silicon", amount: 40 },
+		],
+		unlocks: "swarmer",
+		discover: "silicon",
+		conquered: 1,
+	},
+	cannon: {
+		name: "Cannon",
+		description: "Build cannons: slow, long-range shots that hit very hard.",
+		glyph: "cannon",
 		requires: ["turret"],
 		cost: [
 			{ resource: "copper", amount: 80 },
 			{ resource: "titanium", amount: 40 },
 		],
-		unlocks: "heavyTurret",
+		unlocks: "cannon",
 		discover: "titanium",
 		conquered: 1,
+	},
+	ripple: {
+		name: "Ripple",
+		description: "Build ripples: artillery that lobs volleys of shells far across the map.",
+		glyph: "ripple",
+		requires: ["cannon"],
+		cost: [
+			{ resource: "copper", amount: 150 },
+			{ resource: "titanium", amount: 60 },
+			{ resource: "silicon", amount: 60 },
+		],
+		unlocks: "ripple",
+		discover: "silicon",
+		conquered: 2,
 	},
 	drillBits: {
 		name: "Drill Bits",
@@ -300,17 +353,43 @@ export const RESEARCH: Record<ResearchId, ResearchNode> = {
 		unlocks: "advancedDrill",
 		conquered: 1,
 	},
-	smelter: {
-		name: "Smelter",
-		description: "Build smelters, which press coal into graphite: the hardest-hitting common ammo.",
-		glyph: "smelter",
+	laserDrill: {
+		name: "Laser Drill",
+		description: "Build laser drills: 2×2, mining fast from every cell of ore under them.",
+		glyph: "laserDrill",
+		requires: ["advancedDrill"],
+		cost: [
+			{ resource: "copper", amount: 80 },
+			{ resource: "graphite", amount: 40 },
+			{ resource: "silicon", amount: 30 },
+		],
+		unlocks: "laserDrill",
+		discover: "silicon",
+	},
+	graphitePress: {
+		name: "Graphite Press",
+		description: "Build graphite presses, which press coal into graphite: the hardest-hitting common ammo.",
+		glyph: "graphitePress",
 		requires: ["drillBits"],
 		cost: [
 			{ resource: "copper", amount: 40 },
 			{ resource: "lead", amount: 25 },
 		],
-		unlocks: "smelter",
+		unlocks: "graphitePress",
 		discover: "coal",
+	},
+	siliconSmelter: {
+		name: "Silicon Smelter",
+		description: "Build silicon smelters, which smelt sand, coal and lead into silicon.",
+		glyph: "siliconSmelter",
+		requires: ["graphitePress"],
+		cost: [
+			{ resource: "copper", amount: 60 },
+			{ resource: "lead", amount: 40 },
+			{ resource: "graphite", amount: 20 },
+		],
+		unlocks: "siliconSmelter",
+		discover: "sand",
 	},
 	router: {
 		name: "Router",
@@ -343,6 +422,18 @@ export const RESEARCH: Record<ResearchId, ResearchNode> = {
 		],
 		unlocks: "junction",
 	},
+	titaniumConveyor: {
+		name: "Titanium Conveyor",
+		description: "Build faster belts. Lay them over conveyors to upgrade them.",
+		glyph: "titaniumConveyor",
+		requires: ["router"],
+		cost: [
+			{ resource: "copper", amount: 30 },
+			{ resource: "titanium", amount: 20 },
+		],
+		unlocks: "titaniumConveyor",
+		discover: "titanium",
+	},
 };
 
 /** Every node, in the order the tree lays out siblings left to right, roots on each side of the Core likewise. */
@@ -355,17 +446,23 @@ export const RESEARCH_ORDER: ReadonlyArray<ResearchId> = [
 	"coreSilos",
 	"drillBits",
 	"advancedDrill",
-	"smelter",
+	"laserDrill",
+	"graphitePress",
+	"siliconSmelter",
 	"router",
 	"sorter",
 	"junction",
+	"titaniumConveyor",
 	"wall",
 	"plating",
 	"mender",
 	"titaniumWall",
 	"turret",
 	"hardenedRounds",
-	"heavyTurret",
+	"autoTurret",
+	"swarmer",
+	"cannon",
+	"ripple",
 ];
 
 // A node missing from the order would never be drawn, so catch it on load.

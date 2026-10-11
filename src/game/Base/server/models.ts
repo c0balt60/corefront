@@ -7,6 +7,7 @@ import {
 	beltRuns,
 	chevronBars,
 	chevronRun,
+	DIRECTIONS,
 	isCorner,
 	pointOn,
 } from "game/Base/shared/belts";
@@ -29,6 +30,30 @@ const REPAIR = Color3.fromRGB(110, 230, 120);
 const FURNACE = Color3.fromRGB(255, 110, 40);
 /** A sorter's light with no ore picked. */
 const UNSORTED = Color3.fromRGB(235, 235, 240);
+
+/** How thick a wall's post is, and how tall it stands above its footprint: thinner than a cell. */
+const WALL_WIDTH = 6;
+const WALL_HEIGHT = 6;
+
+/** Each turret's barrels, welded to its head: their size, their centres on it, and their tilt up, in degrees. */
+const BARRELS: Partial<Record<BuildingKind, readonly [size: Vector3, centres: ReadonlyArray<Vector3>, pitch: number]>> =
+	{
+		turret: [new Vector3(0.8, 0.8, 4), [new Vector3(0, 0, -3)], 0],
+		autoTurret: [new Vector3(0.5, 0.5, 4.4), [new Vector3(-0.55, 0, -3.2), new Vector3(0.55, 0, -3.2)], 0],
+		cannon: [new Vector3(1.8, 1.8, 9), [new Vector3(0, 0, -6.5)], 0],
+		// A pod of rocket tubes on its face.
+		swarmer: [
+			new Vector3(1.2, 1.2, 1),
+			[
+				new Vector3(-1.3, 0.8, -3.1),
+				new Vector3(1.3, 0.8, -3.1),
+				new Vector3(-1.3, -0.8, -3.1),
+				new Vector3(1.3, -0.8, -3.1),
+			],
+			0,
+		],
+		ripple: [new Vector3(1.4, 1.4, 9), [-3, -1, 1, 3].map((x) => new Vector3(x, 0, -6)), 25],
+	};
 
 const ALIEN_BODIES: Record<AlienKind, readonly [size: Vector3, color: Color3, glow: Color3]> = {
 	crawler: [new Vector3(2.6, 1.2, 3.2), Color3.fromRGB(58, 34, 72), Color3.fromRGB(190, 255, 90)],
@@ -150,12 +175,12 @@ export function setFilter(model: Model, resource: ResourceId | undefined) {
 	if (light?.IsA("BasePart")) light.Color = resource !== undefined ? RESOURCES[resource].color : UNSORTED;
 }
 
-/** A neon flash from `from` to `to`, seen by everyone. Shots are hitscan; this is only the look. */
-export function tracer(from: Vector3, to: Vector3, color: Color3) {
+/** A neon flash from `from` to `to`, `width` studs thick, seen by everyone. Shots are hitscan; this is only the look. */
+export function tracer(from: Vector3, to: Vector3, color: Color3, width = 0.18) {
 	const length = to.sub(from).Magnitude;
 	if (length < 0.1) return;
 	const cframe = CFrame.lookAt(from, to).mul(new CFrame(0, 0, -length / 2));
-	const part = block(Workspace, new Vector3(0.18, 0.18, length), cframe, color, Enum.Material.Neon);
+	const part = block(Workspace, new Vector3(width, width, length), cframe, color, Enum.Material.Neon);
 	part.CanCollide = false;
 	part.CanQuery = false;
 	part.CanTouch = false;
@@ -186,11 +211,13 @@ const LEGS = [0.25, 0.75];
  */
 export function beltModel(
 	model: Model,
+	kind: BuildingKind,
 	path: BeltPath,
 	groundAt: (x: number, z: number) => number,
 	look: BeltLook,
 ): BasePart {
-	model.Name = BUILDINGS.conveyor.name;
+	model.Name = BUILDINGS[kind].name;
+	const rail = kind === "titaniumConveyor" ? TITANIUM : METAL;
 	// Pieces overlap so no seam shows (a curve's chords more, to close their outer edges), and
 	// every other one sits a hair higher so they never flicker where they overlap.
 	const seam = isCorner(path) ? 0.7 : 0.1;
@@ -225,13 +252,13 @@ export function beltModel(
 		if (!present) return;
 		const offset = ((index === 0 ? -1 : 1) * (BELT_WIDTH + 0.5)) / 2;
 		beltRuns(path, offset, look.tail).forEach(([run, length], piece) => {
-			block(model, new Vector3(0.5, 0.7, length + 0.1), raised(run, piece), METAL, Enum.Material.Metal);
+			block(model, new Vector3(0.5, 0.7, length + 0.1), raised(run, piece), rail, Enum.Material.Metal);
 		});
 	});
 	if (look.capped) {
 		const [run, length] = runs[0];
 		const back = run.mul(new CFrame(0, 0, length / 2 + 0.25));
-		block(model, new Vector3(BELT_WIDTH + 1, 0.7, 0.5), back, METAL, Enum.Material.Metal);
+		block(model, new Vector3(BELT_WIDTH + 1, 0.7, 0.5), back, rail, Enum.Material.Metal);
 	}
 	for (const bar of chevronBars(chevronRun(path))) {
 		block(model, new Vector3(0.35, 0.1, 1), bar.mul(new CFrame(0, 0.03, 0)), GLOW, Enum.Material.Neon).CanCollide =
@@ -245,7 +272,9 @@ export function beltModel(
  * A building's parts, in `model`: a foundation from `bottom` up to the top of the
  * footprint's highest corner, so it never floats on a slope, and a body on top turned by
  * `rotation` quarter turns. `top` is the centre of the footprint at that height.
- * The body is the PrimaryPart; a turret also returns its turning `Head`.
+ * The body is the PrimaryPart; a turret also returns its turning `Head`, and its barrels' tips,
+ * looking out of them, relative to the head. A wall stands on no foundation: it reaches down
+ * itself, and out to the walls beside it (`joined`, by side).
  */
 export function buildingModel(
 	model: Model,
@@ -254,22 +283,27 @@ export function buildingModel(
 	bottom: number,
 	rotation: number,
 	oreColor?: Color3,
-): [body: BasePart, head: BasePart | undefined] {
-	model.Name = BUILDINGS[kind].name;
-	const width = BUILDINGS[kind].size * CELL_STUDS - 0.4;
+	joined: ReadonlyArray<boolean> = [],
+): [body: BasePart, head: BasePart | undefined, muzzles: Array<CFrame>] {
+	const def = BUILDINGS[kind];
+	model.Name = def.name;
+	const width = def.size * CELL_STUDS - 0.4;
 	// Named, so the travel cutscene can fly the core off it.
-	block(
-		model,
-		new Vector3(width, top.Y - bottom, width),
-		new CFrame(top.X, (top.Y + bottom) / 2, top.Z),
-		FOUNDATION,
-		Enum.Material.Concrete,
-	).Name = "Foundation";
+	if (!def.wall) {
+		block(
+			model,
+			new Vector3(width, top.Y - bottom, width),
+			new CFrame(top.X, (top.Y + bottom) / 2, top.Z),
+			FOUNDATION,
+			Enum.Material.Concrete,
+		).Name = "Foundation";
+	}
 
 	const base = new CFrame(top).mul(CFrame.Angles(0, (rotation * math.pi) / 2, 0));
 	const at = (y: number) => base.mul(new CFrame(0, y, 0));
 	let body: Part;
 	let head: Part | undefined;
+	const muzzles = new Array<CFrame>();
 	if (kind === "core") {
 		body = block(model, new Vector3(12, 8, 12), at(4), METAL, Enum.Material.DiamondPlate);
 		block(model, new Vector3(13, 1, 13), at(1), GLOW, Enum.Material.Neon);
@@ -281,11 +315,52 @@ export function buildingModel(
 			block(model, new Vector3(4, 1, 4), at(3.5), DARK, Enum.Material.Metal);
 			block(model, new Vector3(1, 2, 1), at(7), GLOW, Enum.Material.Neon);
 		}
-	} else if (kind === "wall" || kind === "titaniumWall") {
-		const titanium = kind === "titaniumWall";
-		body = block(model, new Vector3(width, 6, width), at(3), titanium ? TITANIUM : DARK, Enum.Material.Metal);
-		block(model, new Vector3(width + 0.1, 0.4, width + 0.1), at(4.5), GLOW, Enum.Material.Neon);
-		if (titanium) block(model, new Vector3(width + 0.1, 0.4, width + 0.1), at(1.5), GLOW, Enum.Material.Neon);
+	} else if (kind === "laserDrill") {
+		body = block(model, new Vector3(13, 3, 13), at(1.5), METAL, Enum.Material.DiamondPlate);
+		// A beam the ore's colour between four legs, under a plate and its lens.
+		for (const [x, z] of [
+			[-4.5, -4.5],
+			[4.5, -4.5],
+			[-4.5, 4.5],
+			[4.5, 4.5],
+		]) {
+			block(model, new Vector3(2, 5, 2), at(5.5).mul(new CFrame(x, 0, z)), DARK, Enum.Material.Metal);
+		}
+		block(model, new Vector3(3, 5, 3), at(5.5), oreColor ?? GLOW, Enum.Material.Neon);
+		block(model, new Vector3(11, 1, 11), at(8.5), DARK, Enum.Material.Metal);
+		block(model, new Vector3(4, 1, 4), at(9.5), GLOW, Enum.Material.Neon);
+	} else if (def.wall) {
+		// A post thinner than a cell, from the foundation's depth up, with an arm out to each wall beside it.
+		const color = kind === "titaniumWall" ? TITANIUM : DARK;
+		const bands = kind === "titaniumWall" ? [1.5, 4.5] : [4.5];
+		const height = top.Y + WALL_HEIGHT - bottom;
+		const middle = new Vector3(top.X, (top.Y + WALL_HEIGHT + bottom) / 2, top.Z);
+		body = block(
+			model,
+			new Vector3(WALL_WIDTH, height, WALL_WIDTH),
+			new CFrame(middle),
+			color,
+			Enum.Material.Metal,
+		);
+		for (const y of bands) {
+			const band = new Vector3(WALL_WIDTH + 0.1, 0.4, WALL_WIDTH + 0.1);
+			block(model, band, new CFrame(top.add(new Vector3(0, y, 0))), GLOW, Enum.Material.Neon);
+		}
+		const arm = (CELL_STUDS - WALL_WIDTH) / 2;
+		DIRECTIONS.forEach(([dx, dz], side) => {
+			if (!joined[side]) return;
+			const toward = new Vector3(dx, 0, dz);
+			const shape = (length: number, tall: number, thick: number) =>
+				dx !== 0 ? new Vector3(length, tall, thick) : new Vector3(thick, tall, length);
+			// From the post's side to the cell's edge, where the next wall's arm meets it.
+			const out = new CFrame(middle.add(toward.mul((WALL_WIDTH + CELL_STUDS) / 4)));
+			block(model, shape(arm, height, WALL_WIDTH), out, color, Enum.Material.Metal);
+			for (const y of bands) {
+				// Clear of the post's band, so their faces never overlap.
+				const spot = top.add(toward.mul((WALL_WIDTH + 0.1 + CELL_STUDS) / 4)).add(new Vector3(0, y, 0));
+				block(model, shape(arm - 0.05, 0.4, WALL_WIDTH + 0.1), new CFrame(spot), GLOW, Enum.Material.Neon);
+			}
+		});
 	} else if (kind === "mender") {
 		body = block(model, new Vector3(5, 2, 5), at(1), DARK, Enum.Material.Metal);
 		const orb = block(model, new Vector3(3, 3, 3), at(3.5), REPAIR, Enum.Material.Neon);
@@ -302,26 +377,35 @@ export function buildingModel(
 		body = block(model, new Vector3(6, 1.5, 6), at(0.75), METAL, Enum.Material.DiamondPlate);
 		block(model, new Vector3(6.2, 0.4, 1.4), at(1.6), GLOW, Enum.Material.Neon);
 		block(model, new Vector3(1.4, 0.4, 6.2), at(1.6), GLOW, Enum.Material.Neon);
-	} else if (kind === "smelter") {
+	} else if (kind === "graphitePress") {
 		body = block(model, new Vector3(13, 6, 13), at(3), DARK, Enum.Material.Metal);
 		block(model, new Vector3(13.2, 0.5, 13.2), at(5.2), GLOW, Enum.Material.Neon);
 		// The furnace's mouth on its front, and a chimney at the back.
 		block(model, new Vector3(6, 2.4, 0.4), at(2).mul(new CFrame(0, 0, -6.6)), FURNACE, Enum.Material.Neon);
 		block(model, new Vector3(2.4, 5, 2.4), at(8.5).mul(new CFrame(4, 0, 4)), METAL, Enum.Material.Metal);
+	} else if (kind === "siliconSmelter") {
+		body = block(model, new Vector3(13, 5, 13), at(2.5), METAL, Enum.Material.DiamondPlate);
+		block(model, new Vector3(13.2, 0.5, 13.2), at(4.2), GLOW, Enum.Material.Neon);
+		// A crucible glowing on top, between two chimneys at the back.
+		block(model, new Vector3(5, 1, 5), at(5.5), FURNACE, Enum.Material.Neon);
+		for (const x of [-4.5, 4.5]) {
+			block(model, new Vector3(2, 6, 2), at(8).mul(new CFrame(x, 0, 4)), DARK, Enum.Material.Metal);
+		}
 	} else {
-		// Turrets, the heavy one twice the size.
-		const scale = kind === "heavyTurret" ? 2 : 1;
+		// Turrets: a body, and a head that turns to aim with its barrels welded on. Bigger ones scale up.
+		const scale = def.size;
 		body = block(model, new Vector3(6, 2, 6).mul(scale), at(scale), DARK, Enum.Material.Metal);
 		head = block(model, new Vector3(3, 2, 3).mul(scale), at(3 * scale), METAL, Enum.Material.DiamondPlate);
 		head.Name = "Head";
-		const barrel = new Vector3(0.8, 0.8, 4).mul(scale);
-		for (const side of scale > 1 ? [-1, 1] : [0]) {
-			const offset = new CFrame(side * 1.2, 0, -3 * scale);
+		const [barrel, centres, pitch] = BARRELS[kind]!;
+		for (const centre of centres) {
+			const offset = new CFrame(centre).mul(CFrame.Angles(math.rad(pitch), 0, 0));
 			weld(head, block(model, barrel, head.CFrame.mul(offset), GLOW, Enum.Material.Neon));
+			muzzles.push(offset.mul(new CFrame(0, 0, -barrel.Z / 2)));
 		}
 	}
 	model.PrimaryPart = body;
-	return [body, head];
+	return [body, head, muzzles];
 }
 
 /**

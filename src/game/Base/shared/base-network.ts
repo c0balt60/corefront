@@ -72,9 +72,9 @@ export interface BaseMessageData {
 	[BaseMessage.Rotate]: { readonly x: number; readonly z: number };
 	/** Client -> server, every `MINE_SECONDS` while a click is held on it: mine one ore from the deposit on cell (x, z). */
 	[BaseMessage.Mine]: { readonly x: number; readonly z: number };
-	/** Client -> server: take what the drill or smelter covering cell (x, z) has made, or the ore on the belt there: just `resource`, if given. */
+	/** Client -> server: take what the drill or crafter covering cell (x, z) has made, or the ore on the belt there: just `resource`, if given. */
 	[BaseMessage.Collect]: { readonly x: number; readonly z: number; readonly resource?: ResourceId };
-	/** Client -> server: from my pack into the building covering cell (x, z): all of it into the Core, ammo into a turret, coal into a smelter. */
+	/** Client -> server: from my pack into the building covering cell (x, z): all of it into the Core, ammo into a turret, inputs into a crafter. */
 	[BaseMessage.Load]: { readonly x: number; readonly z: number };
 	/** Client -> server: throw away all of `resource` that I carry. */
 	[BaseMessage.Drop]: { readonly resource: ResourceId };
@@ -128,4 +128,32 @@ export interface BeltMessageData {
 	[BeltMessage.Configure]: { readonly x: number; readonly z: number; readonly resource?: ResourceId };
 	/** Server -> clients, when ore is taken off a belt by hand: all that's left on the building on `cell`. */
 	[BeltMessage.Left]: { readonly cell: number; readonly items: ReadonlyArray<HeldItem> };
+}
+
+/** Turret shots, for clients to draw: the server deals their damage. Its own emitter: 150+. */
+export const shotMessaging = MessageEmitter.create<ShotMessageData>();
+
+export const enum ShotMessage {
+	Fired = 150,
+	Hit,
+}
+
+/** A rocket or shell, flying a curve from `from` that bends toward `control`, for `seconds`. */
+export interface Shot {
+	readonly kind: "rocket" | "shell";
+	readonly from: Vector3;
+	readonly control: Vector3;
+	/** Where it lands, unless it chases `target` while that lives. */
+	readonly to: Vector3;
+	readonly target?: Model;
+	readonly seconds: number;
+	/** Its blast's radius, in studs. */
+	readonly splash: number;
+}
+
+export interface ShotMessageData {
+	/** Server -> clients: a turret fired a rocket or shell. */
+	[ShotMessage.Fired]: Shot;
+	/** Server -> clients: a turret's shot hit at once, from its barrel at `from` to `to`. `size` is the turret's, in cells. */
+	[ShotMessage.Hit]: { readonly from: Vector3; readonly to: Vector3; readonly size: number };
 }

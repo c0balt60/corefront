@@ -7,8 +7,8 @@ import { t } from "@rbxts/t";
 import { BaseService, type Building } from "game/Base/server/BaseService";
 import { buildFlowfield, terrainCosts } from "game/Base/server/flowfield";
 import { alienModel, setHealth, tracer } from "game/Base/server/models";
-import { BaseMessage, baseMessaging, type BaseState } from "game/Base/shared/base-network";
-import { BUILDINGS } from "game/Base/shared/buildings";
+import { BaseMessage, baseMessaging, type BaseState, ShotMessage, shotMessaging } from "game/Base/shared/base-network";
+import { BUILDINGS, type BuildingDef } from "game/Base/shared/buildings";
 import { RESOURCE_ORDER } from "game/Base/shared/resources";
 import { PlanetsService } from "game/Planets/server/PlanetsService";
 import { TravelService } from "game/Planets/server/TravelService";
@@ -60,6 +60,16 @@ interface Alien {
 	aim?: Vector3;
 }
 
+/** A turret's rocket or shell in the air (see `Shot`). It lands at `lands`, an `os.clock()` time. */
+interface Projectile {
+	/** Where it lands: its target's position, while that lives. */
+	to: Vector3;
+	readonly target?: Alien;
+	readonly lands: number;
+	readonly damage: number;
+	readonly splash: number;
+}
+
 const GRACE_SECONDS = 90;
 const WAVE_SECONDS = 60;
 const CALL_DEBOUNCE = 2;
@@ -69,8 +79,13 @@ const SPAWN_SPREAD = 6;
 const RESULT_SECONDS = 8;
 const FIELD_SECONDS = 0.5;
 const STATE_SECONDS = 0.2;
-const TURRET_TRACER = Color3.fromRGB(255, 200, 90);
 const SPIT_TRACER = Color3.fromRGB(80, 255, 160);
+/** How fast rockets and shells fly, in studs per second, after a moment to clear the turret. */
+const ROCKET_SPEED = 90;
+const SHELL_SPEED = 110;
+const LAUNCH_SECONDS = 0.3;
+/** Seconds between the shots of a turret's burst. */
+const BURST_SECONDS = 0.4;
 
 const random = new Random();
 
@@ -149,6 +164,7 @@ export class WaveService implements OnStart {
 	});
 
 	private readonly aliens = new Map<Model, Alien>();
+	private projectiles = new Array<Projectile>();
 	private pending = new Array<AlienKind>();
 	private healthScale = 1;
 	private spawnIndex = 0;
@@ -233,6 +249,7 @@ export class WaveService implements OnStart {
 		for (const [model] of this.aliens) model.Destroy();
 		this.aliens.clear();
 		this.alienCount(0);
+		this.projectiles = [];
 		this.pending = [];
 		this.baseService.reset(map);
 
@@ -279,7 +296,8 @@ export class WaveService implements OnStart {
 		this.spawnPending(map, dt);
 		this.refreshField();
 		this.moveAliens(map, dt);
-		this.fireTurrets(dt);
+		this.fireTurrets(map, dt);
+		this.landProjectiles();
 
 		if (!this.liberated() && this.wave() >= this.waves() && this.pending.isEmpty() && this.aliens.isEmpty()) {
 			this.baseService.end("won");
@@ -435,13 +453,14 @@ export class WaveService implements OnStart {
 
 	/**
 	 * Every loaded turret that has cooled down shoots the nearest alien in range, and turns its head to face it.
-	 * Damage scales with the ore it fires and its placer's research.
+	 * Damage scales with the ore it fires and its placer's research. Rockets and shells land later.
 	 */
-	private fireTurrets(dt: number) {
+	private fireTurrets(map: PlanetMap, dt: number) {
 		for (const turret of this.baseService.buildings) {
 			const def = BUILDINGS[turret.kind];
+			const gun = def.turret;
 			const head = turret.head;
-			if (!def.turret || !head || turret.ammo.isEmpty()) continue;
+			if (!gun || !head || turret.ammo.isEmpty()) continue;
 			turret.cooldown -= dt;
 			if (turret.cooldown > 0) continue;
 			const from = head.Position;
@@ -457,10 +476,89 @@ export class WaveService implements OnStart {
 
 			const at = target.root.Position;
 			head.CFrame = CFrame.lookAt(from, new Vector3(at.X, from.Y, at.Z));
-			tracer(from, at, TURRET_TRACER);
-			turret.cooldown = def.turret.seconds;
-			const hit = this.baseService.shoot(turret) ?? 0;
-			this.damageAlien(target.model, def.turret.damage * hit * statOf(turret.owner, "turretDamage"));
+			// Each shot from the next barrel round, and each shell of a volley from its own.
+			const fired = turret.fired;
+			const muzzle = (index: number) => {
+				const tip = turret.muzzles[(fired + index) % math.max(turret.muzzles.size(), 1)];
+				return tip ? head.CFrame.mul(tip) : head.CFrame;
+			};
+			// A burst's shots come in quick succession, then it reloads.
+			turret.burst = (turret.burst + 1) % (gun.burst ?? 1);
+			turret.cooldown = turret.burst === 0 ? gun.seconds : BURST_SECONDS;
+			const damage = gun.damage * (this.baseService.shoot(turret) ?? 0) * statOf(turret.owner, "turretDamage");
+			if (gun.projectile) {
+				for (let i = 0; i < (gun.volley ?? 1); i++) this.loose(map, muzzle(i), target, gun, damage);
+			} else {
+				shotMessaging.client.emitAll(ShotMessage.Hit, { from: muzzle(0).Position, to: at, size: def.size });
+				this.damageAlien(target.model, damage);
+			}
 		}
+	}
+
+	/**
+	 * Fires a rocket or shell out of `muzzle` at `target`, which lands once clients have drawn its
+	 * flight: a rocket shoots out the front, veering off to a random side before curving round into
+	 * the target, chasing it; a shell arcs high and comes down anywhere within the turret's `spread`
+	 * of where the target stood.
+	 */
+	private loose(
+		map: PlanetMap,
+		muzzle: CFrame,
+		target: Alien,
+		gun: NonNullable<BuildingDef["turret"]>,
+		damage: number,
+	) {
+		const from = muzzle.Position;
+		const at = target.root.Position;
+		const distance = at.sub(from).Magnitude;
+		const rocket = gun.projectile === "rocket";
+		let to = at;
+		let control: Vector3;
+		let seconds: number;
+		if (rocket) {
+			const ahead = muzzle.LookVector.mul(distance * 0.5);
+			const veer = muzzle.RightVector.mul(random.NextNumber(-0.3, 0.3) * distance);
+			control = from
+				.add(ahead)
+				.add(veer)
+				.add(new Vector3(0, random.NextNumber(2, 8), 0));
+			seconds = LAUNCH_SECONDS + distance / ROCKET_SPEED;
+		} else {
+			// Evenly over the circle, not bunched at its middle.
+			const angle = random.NextNumber(0, 2 * math.pi);
+			const off = (gun.spread ?? 0) * math.sqrt(random.NextNumber());
+			const x = at.X + math.cos(angle) * off;
+			const z = at.Z + math.sin(angle) * off;
+			to = new Vector3(x, map.heightAt(x, z), z);
+			control = from
+				.add(to)
+				.div(2)
+				.add(new Vector3(0, distance * 0.6, 0));
+			seconds = LAUNCH_SECONDS + distance / SHELL_SPEED;
+		}
+		const splash = gun.splash ?? 0;
+		this.projectiles.push({ to, target: rocket ? target : undefined, lands: os.clock() + seconds, damage, splash });
+		shotMessaging.client.emitAll(ShotMessage.Fired, {
+			kind: rocket ? "rocket" : "shell",
+			from,
+			control,
+			to,
+			target: rocket ? target.model : undefined,
+			seconds,
+			splash,
+		});
+	}
+
+	/** Lands the rockets and shells that are due, hurting every alien within each one's splash of where it comes down. */
+	private landProjectiles() {
+		const now = os.clock();
+		this.projectiles = this.projectiles.filter((shot) => {
+			if (shot.target && this.aliens.has(shot.target.model)) shot.to = shot.target.root.Position;
+			if (now < shot.lands) return true;
+			for (const [model, alien] of this.aliens) {
+				if (flatDistance(alien.root.Position, shot.to) <= shot.splash) this.damageAlien(model, shot.damage);
+			}
+			return false;
+		});
 	}
 }

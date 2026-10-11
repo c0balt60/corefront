@@ -45,7 +45,7 @@ export function cellOf(model: Model) {
  * (`selectedAtom`), until something else is clicked or the character walks out of `BUILD_RANGE`;
  * one that reaches out (turrets, menders) also shows its range as a ring on the ground.
  * Double-clicking it also moves items: in what it takes from the pack (everything for the Core,
- * ammo for a turret, coal for a smelter), then out what a drill or smelter made or a belt carries.
+ * ammo for a turret, inputs for a crafter), then out what a drill or crafter made or a belt carries.
  */
 @Controller()
 export class InteractController implements OnStart {
@@ -211,7 +211,7 @@ export class InteractController implements OnStart {
 		const def = BUILDINGS[kind];
 		const at = cellOf(building);
 		if (kind === "core" || def.turret || def.craft) baseMessaging.server.emit(BaseMessage.Load, at);
-		if (def.drill || def.craft || kind === "conveyor") baseMessaging.server.emit(BaseMessage.Collect, at);
+		if (def.drill || def.craft || def.belt !== undefined) baseMessaging.server.emit(BaseMessage.Collect, at);
 	}
 
 	/** How far the character stands from `point`, across the ground, like the server measures. Infinite without one. */

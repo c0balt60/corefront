@@ -3,7 +3,8 @@ import { RunService } from "@rbxts/services";
 
 import { BaseService, type Building, type Item } from "game/Base/server/BaseService";
 import { BeltMessage, beltMessaging, type HeldItem, type ItemMove } from "game/Base/shared/base-network";
-import { BELT_SPACING, BELT_SPEED } from "game/Base/shared/belts";
+import { BELT_SPACING } from "game/Base/shared/belts";
+import { BUILDINGS, isBelt } from "game/Base/shared/buildings";
 import type { ResourceId } from "game/Base/shared/resources";
 
 /** Seconds between ticks. Clients run the belts in between, so ore glides. */
@@ -38,10 +39,10 @@ function sideSlot(items: ReadonlyArray<Item>): number | undefined {
 }
 
 /**
- * Moves ore between buildings, Mindustry-style: drills and smelters hand what they make to their
+ * Moves ore between buildings, Mindustry-style: drills and crafters hand what they make to their
  * neighbours, belts carry it the way they face, routers pass it round, sorters split it and
  * junctions let it cross, until something takes it in for good (see `BaseService.receive`): the
- * Core, a turret's ammo or a smelter's input. Clients hear every move and animate it.
+ * Core, a turret's ammo or a crafter's inputs. Clients hear every move and animate it.
  */
 @Service()
 export class LogisticsService implements OnStart {
@@ -71,7 +72,7 @@ export class LogisticsService implements OnStart {
 
 	private tick() {
 		for (const building of this.baseService.buildings) {
-			if (building.kind === "conveyor") this.carry(building);
+			if (isBelt(building.kind)) this.carry(building);
 			else if (building.kind === "router") this.route(building);
 			else if (building.resource !== undefined && building.stored > 0) this.offload(building);
 		}
@@ -80,10 +81,11 @@ export class LogisticsService implements OnStart {
 	/** Moves a belt's ore along, each stopping short of the one ahead, and hands the front one on. */
 	private carry(belt: Building) {
 		const items = belt.items;
+		const step = BUILDINGS[belt.kind].belt! * TICK;
 		for (let i = items.size() - 1; i >= 0; i--) {
 			const item = items[i];
 			const limit = i === items.size() - 1 ? 1 : items[i + 1].progress - BELT_SPACING;
-			item.progress = math.max(item.progress, math.min(item.progress + BELT_SPEED * TICK, limit));
+			item.progress = math.max(item.progress, math.min(item.progress + step, limit));
 		}
 		const front = items[items.size() - 1];
 		if (front === undefined || front.progress < 1) return;
@@ -108,7 +110,7 @@ export class LogisticsService implements OnStart {
 		}
 	}
 
-	/** Hands one of what a drill or smelter made to the next neighbour round that takes it. */
+	/** Hands one of what a drill or crafter made to the next neighbour round that takes it. */
 	private offload(source: Building) {
 		const around = this.baseService.around(source);
 		for (let i = 0; i < around.size(); i++) {
@@ -137,7 +139,7 @@ export class LogisticsService implements OnStart {
 		// The side of `target` it comes in by.
 		const face = (side + 2) % 4;
 		let joined = 0;
-		if (target.kind === "conveyor") {
+		if (isBelt(target.kind)) {
 			// Ore joins at the back of the belt's path, or from a side into a gap near the middle. Never by its front.
 			if (face === target.rotation) return false;
 			const at = face === target.entry ? (clear(target.items, 0) ? 0 : undefined) : sideSlot(target.items);

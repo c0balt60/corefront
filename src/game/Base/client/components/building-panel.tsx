@@ -105,7 +105,7 @@ export function BuildingPanel({
 	cleanup(building.GetPropertyChangedSignal("PrimaryPart").Connect(() => body(building.PrimaryPart)));
 	const read = (name: string) => (attributes().get(name) as number | undefined) ?? 0;
 	const filter = () => attributes().get("Filter") as ResourceId | undefined;
-	const belt = kind === "conveyor";
+	const belt = def.belt !== undefined;
 	// Belts: from the body's middle to just over the belt's top.
 	const lift = () => {
 		const part = body();
@@ -129,13 +129,15 @@ export function BuildingPanel({
 			list.push({ label: RESOURCES[made].name.upper(), value: stored, resource: made });
 		}
 		if (def.craft) {
-			const { input, output, amount, storage } = def.craft;
-			list.push({ label: "RATE", value: `1 PER ${amount} / ${MACHINE_SECONDS}s` });
-			list.push({
-				label: RESOURCES[input].name.upper(),
-				value: `${read("Input")} / ${storage}`,
-				resource: input,
-			});
+			const { inputs, output, storage } = def.craft;
+			list.push({ label: "RATE", value: `1 / ${MACHINE_SECONDS}s` });
+			for (const { resource, amount } of inputs) {
+				list.push({
+					label: `${RESOURCES[resource].name.upper()} x${amount}`,
+					value: `${read(`Input_${resource}`)} / ${storage}`,
+					resource,
+				});
+			}
 			list.push({
 				label: RESOURCES[output].name.upper(),
 				value: `${read("Stored")} / ${storage}`,
@@ -156,7 +158,13 @@ export function BuildingPanel({
 	const actions = new Array<[text: string, onClick: () => void]>();
 	if (kind === "core") actions.push(["DEPOSIT ALL", onLoad]);
 	if (def.turret) actions.push(["LOAD AMMO", onLoad]);
-	if (def.craft) actions.push([`LOAD ${RESOURCES[def.craft.input].name.upper()}`, onLoad]);
+	if (def.craft) {
+		const { inputs } = def.craft;
+		actions.push([
+			inputs.size() > 1 ? "LOAD INPUTS" : `LOAD ${RESOURCES[inputs[0].resource].name.upper()}`,
+			onLoad,
+		]);
+	}
 	if (def.drill || def.craft || belt) actions.push(["COLLECT ALL", onCollect]);
 	const sorter = kind === "sorter";
 	// Below the rows: the swatches, then the buttons.

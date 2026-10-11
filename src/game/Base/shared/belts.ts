@@ -1,4 +1,4 @@
-import { BUILDINGS, type BuildingKind } from "game/Base/shared/buildings";
+import { BUILDINGS, type BuildingKind, isBelt } from "game/Base/shared/buildings";
 import { CELL_STUDS, cellCenter } from "game/Terrain/shared/map";
 
 /*
@@ -19,8 +19,6 @@ export function directionOf(dx: number, dz: number): number | undefined {
 	return side >= 0 ? side : undefined;
 }
 
-/** Cells per second ore rides a belt. */
-export const BELT_SPEED = 1.25;
 /** How close ore rides behind the ore ahead, as a share of a belt: at most 4 fit on one. */
 export const BELT_SPACING = 0.3;
 /** A belt's width in studs, rails aside. */
@@ -39,7 +37,7 @@ const TAIL = CELL_STUDS / 2 - BELT_WIDTH / 2 - 0.05;
 
 /** Whether a building of `kind` facing `rotation`, on `side` of a belt, puts ore onto it. */
 export function feedsBelt(kind: BuildingKind, rotation: number, side: number): boolean {
-	return kind === "conveyor" ? rotation === (side + 2) % 4 : BUILDINGS[kind].outputs === true;
+	return isBelt(kind) ? rotation === (side + 2) % 4 : BUILDINGS[kind].outputs === true;
 }
 
 /**

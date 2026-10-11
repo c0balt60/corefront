@@ -4,9 +4,9 @@ import type { ResourceId, ResourceStack } from "game/Base/shared/resources";
  * The server keeps the planet's gameplay instances in `Workspace.Base`:
  * - `Base.Buildings`: one Model per building, with attributes `Kind` (BuildingKind),
  *   `Cell` (the -X/-Z corner cell, see map.ts), `Rotation`, `Health` and `MaxHealth`. Drills and
- *   smelters also have `Resource` (what they make) and `Stored`, drills `Yield` (per tick), smelters
- *   `Input`, turrets `Ammo`, sorters `Filter`, and belts `Entry`, `PathIn`, `PathMid`, `PathOut`
- *   and `PathEnds` (see `BeltPath`).
+ *   crafters also have `Resource` (what they make) and `Stored`, drills `Yield` (per tick), crafters
+ *   `Input_<resource>` for each input, turrets `Ammo`, sorters `Filter`, and belts `Entry`, `PathIn`,
+ *   `PathMid`, `PathOut` and `PathEnds` (see `BeltPath`).
  * - `Base.Aliens`: one Model per alien, with `Health` and `MaxHealth`.
  * Ore deposits are Models tagged "Ore" (CollectionService), with attributes `Resource` and `Cell`.
  */
@@ -15,15 +15,21 @@ export type BuildingKind =
 	| "core"
 	| "drill"
 	| "advancedDrill"
+	| "laserDrill"
 	| "conveyor"
+	| "titaniumConveyor"
 	| "router"
 	| "sorter"
 	| "junction"
-	| "smelter"
+	| "graphitePress"
+	| "siliconSmelter"
 	| "wall"
 	| "titaniumWall"
 	| "turret"
-	| "heavyTurret"
+	| "autoTurret"
+	| "cannon"
+	| "swarmer"
+	| "ripple"
 	| "mender";
 export type BuildableKind = Exclude<BuildingKind, "core">;
 
@@ -39,22 +45,34 @@ export interface BuildingDef {
 	/**
 	 * Turrets: damage per shot, and seconds between shots. They shoot within `range`, firing ore
 	 * (see `AMMO`): each item loaded is `shots` shots, and they hold up to `magazine` items.
+	 * With a `burst`, they fire that many shots in quick succession, and `seconds` is the reload
+	 * after each burst. Without a `projectile` a shot hits at once; rockets curve into their target
+	 * and shells arc down near it, `volley` at a time, landing up to `spread` studs off. Either
+	 * hurts every alien within `splash` studs of where it lands.
 	 */
 	readonly turret?: {
 		readonly damage: number;
 		readonly seconds: number;
 		readonly shots: number;
 		readonly magazine: number;
+		readonly burst?: number;
+		readonly projectile?: "rocket" | "shell";
+		readonly volley?: number;
+		readonly spread?: number;
+		readonly splash?: number;
 	};
-	/** Drills, which must go on ore: mined per tick, and the most they hold. */
+	/** Drills, which must go on ore: mined per tick for each cell of its ore under them, and the most they hold. */
 	readonly drill?: { readonly yield: number; readonly storage: number };
-	/** Smelters: each tick, `amount` of `input` becomes one `output`. They hold up to `storage` of each. */
+	/** Crafters: each tick, the `inputs` become one `output`. They hold up to `storage` of each. */
 	readonly craft?: {
-		readonly input: ResourceId;
-		readonly amount: number;
+		readonly inputs: ReadonlyArray<ResourceStack>;
 		readonly output: ResourceId;
 		readonly storage: number;
 	};
+	/** Belts: cells per second ore rides them. */
+	readonly belt?: number;
+	/** Walls join the walls beside them. */
+	readonly wall?: true;
 	/** Health given back per tick to every damaged building within `range`. */
 	readonly repair?: number;
 	/** Aliens walk over it: it never blocks their path, and they never chew it. */
@@ -92,12 +110,39 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		drill: { yield: 2, storage: 60 },
 		outputs: true,
 	},
+	laserDrill: {
+		name: "Laser Drill",
+		description: "Place over ore. Mines fast from every cell of ore under it.",
+		cost: [
+			{ resource: "copper", amount: 40 },
+			{ resource: "graphite", amount: 30 },
+			{ resource: "silicon", amount: 20 },
+		],
+		health: 500,
+		size: 2,
+		drill: { yield: 3, storage: 120 },
+		outputs: true,
+	},
 	conveyor: {
 		name: "Conveyor",
 		description: "Carries ore the way it faces. Drag a line; across a belt it lays a Junction.",
 		cost: [{ resource: "copper", amount: 2 }],
 		health: 45,
 		size: 1,
+		belt: 1.25,
+		walkable: true,
+	},
+	titaniumConveyor: {
+		name: "Ti Conveyor",
+		description: "A faster belt. Lay it over conveyors to upgrade them.",
+		cost: [
+			{ resource: "copper", amount: 2 },
+			{ resource: "lead", amount: 1 },
+			{ resource: "titanium", amount: 1 },
+		],
+		health: 65,
+		size: 1,
+		belt: 2.25,
 		walkable: true,
 	},
 	router: {
@@ -130,8 +175,8 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		size: 1,
 		outputs: true,
 	},
-	smelter: {
-		name: "Smelter",
+	graphitePress: {
+		name: "Graphite Press",
 		description: "Presses 2 coal into 1 graphite, the hardest-hitting common ammo.",
 		cost: [
 			{ resource: "copper", amount: 40 },
@@ -139,7 +184,28 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		],
 		health: 400,
 		size: 2,
-		craft: { input: "coal", amount: 2, output: "graphite", storage: 20 },
+		craft: { inputs: [{ resource: "coal", amount: 2 }], output: "graphite", storage: 20 },
+		outputs: true,
+	},
+	siliconSmelter: {
+		name: "Si Smelter",
+		description: "Smelts 2 sand, 1 coal and 1 lead into 1 silicon.",
+		cost: [
+			{ resource: "copper", amount: 50 },
+			{ resource: "lead", amount: 30 },
+			{ resource: "graphite", amount: 20 },
+		],
+		health: 450,
+		size: 2,
+		craft: {
+			inputs: [
+				{ resource: "sand", amount: 2 },
+				{ resource: "coal", amount: 1 },
+				{ resource: "lead", amount: 1 },
+			],
+			output: "silicon",
+			storage: 20,
+		},
 		outputs: true,
 	},
 	wall: {
@@ -148,6 +214,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		cost: [{ resource: "copper", amount: 6 }],
 		health: 400,
 		size: 1,
+		wall: true,
 	},
 	titaniumWall: {
 		name: "Ti Wall",
@@ -155,10 +222,11 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		cost: [{ resource: "titanium", amount: 6 }],
 		health: 1000,
 		size: 1,
+		wall: true,
 	},
 	turret: {
 		name: "Turret",
-		description: "Shoots aliens in range. Fires ore: feed it by belt, or double-click it to load.",
+		description: "Shoots aliens in range, quickly. Fires ore: feed it by belt, or double-click it to load.",
 		cost: [
 			{ resource: "copper", amount: 25 },
 			{ resource: "lead", amount: 15 },
@@ -166,19 +234,68 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		health: 250,
 		size: 1,
 		range: 56,
-		turret: { damage: 12, seconds: 0.5, shots: 4, magazine: 12 },
+		turret: { damage: 9, seconds: 0.3, shots: 6, magazine: 12 },
 	},
-	heavyTurret: {
-		name: "Heavy Turret",
-		description: "Slow, long-range shots that hit hard. Fires ore, like the Turret.",
+	autoTurret: {
+		name: "Auto-Turret",
+		description: "Twin barrels that fire very fast, each shot a little lighter than the Turret's.",
+		cost: [
+			{ resource: "copper", amount: 35 },
+			{ resource: "lead", amount: 25 },
+			{ resource: "graphite", amount: 15 },
+		],
+		health: 300,
+		size: 1,
+		range: 60,
+		turret: { damage: 7, seconds: 0.12, shots: 10, magazine: 20 },
+	},
+	cannon: {
+		name: "Cannon",
+		description: "Slow, long-range shots that hit very hard. Fires ore, like the Turret.",
+		cost: [
+			{ resource: "copper", amount: 75 },
+			{ resource: "titanium", amount: 40 },
+		],
+		health: 1000,
+		size: 2,
+		range: 100,
+		turret: { damage: 130, seconds: 2.4, shots: 2, magazine: 8 },
+	},
+	swarmer: {
+		name: "Swarmer",
+		description: "Looses rockets that curve into their target and blast everything near it.",
 		cost: [
 			{ resource: "copper", amount: 60 },
-			{ resource: "titanium", amount: 30 },
+			{ resource: "graphite", amount: 35 },
+			{ resource: "silicon", amount: 30 },
 		],
-		health: 900,
+		health: 700,
 		size: 2,
-		range: 90,
-		turret: { damage: 45, seconds: 1.2, shots: 2, magazine: 10 },
+		range: 80,
+		turret: { damage: 20, seconds: 0.35, shots: 4, magazine: 16, projectile: "rocket", splash: 8 },
+	},
+	ripple: {
+		name: "Ripple",
+		description: "Lobs bursts of shell volleys a long way. Slow to reload and inaccurate, but each blasts an area.",
+		cost: [
+			{ resource: "copper", amount: 150 },
+			{ resource: "titanium", amount: 60 },
+			{ resource: "silicon", amount: 40 },
+		],
+		health: 1400,
+		size: 3,
+		range: 220,
+		turret: {
+			damage: 40,
+			seconds: 4,
+			shots: 1,
+			magazine: 12,
+			burst: 3,
+			projectile: "shell",
+			volley: 4,
+			spread: 14,
+			splash: 10,
+		},
 	},
 	mender: {
 		name: "Mender",
@@ -194,7 +311,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 	},
 };
 
-/** The ores turrets fire, and how hard each hits, times the turret's damage. Coal isn't ammo: smelt it. */
+/** The ores turrets fire, and how hard each hits, times the turret's damage. Coal isn't ammo: press it. */
 export const AMMO: Partial<Record<ResourceId, number>> = {
 	scrap: 0.8,
 	copper: 1,
@@ -208,15 +325,21 @@ export const AMMO: Partial<Record<ResourceId, number>> = {
 export const BUILDABLE: ReadonlyArray<BuildableKind> = [
 	"drill",
 	"advancedDrill",
+	"laserDrill",
 	"conveyor",
+	"titaniumConveyor",
 	"router",
 	"sorter",
 	"junction",
-	"smelter",
+	"graphitePress",
+	"siliconSmelter",
 	"wall",
 	"titaniumWall",
 	"turret",
-	"heavyTurret",
+	"autoTurret",
+	"cannon",
+	"swarmer",
+	"ripple",
 	"mender",
 ];
 
@@ -238,16 +361,25 @@ export const TRANSFER_RANGE = 24;
 /** Seconds between the ores a held click mines, one at a time. */
 export const MINE_SECONDS = 0.27;
 
-/** Seconds between drill, smelter and mender ticks. */
+/** Seconds between drill, crafter and mender ticks. */
 export const MACHINE_SECONDS = 2;
 
 /** The most buildings one drag lays. */
 export const MAX_LINE = 64;
 
-/** Belt pieces: any of them can be laid straight over another kind, which is refunded like a removal. */
-const LOGISTICS: ReadonlySet<BuildingKind> = new Set(["conveyor", "router", "sorter", "junction"]);
+/** Whether `kind` is a belt: it carries ore along a path, and joins the belts it meets in runs. */
+export function isBelt(kind: BuildingKind): boolean {
+	return BUILDINGS[kind].belt !== undefined;
+}
 
-/** Whether placing `kind` swaps out an `existing` building on its cell instead of being blocked by it. */
-export function replaces(kind: BuildingKind, existing: BuildingKind): boolean {
-	return kind !== existing && LOGISTICS.has(kind) && LOGISTICS.has(existing);
+/** Belt pieces: any of them can be laid straight over another kind, which is refunded like a removal. */
+const LOGISTICS: ReadonlySet<BuildingKind> = new Set(["conveyor", "titaniumConveyor", "router", "sorter", "junction"]);
+
+/**
+ * Whether placing `kind` swaps out an `existing` building on its cell instead of being blocked by it.
+ * A dragged belt `line` only swaps slower belts, upgrading them, and runs through the rest.
+ */
+export function replaces(kind: BuildingKind, existing: BuildingKind, line = false): boolean {
+	if (kind === existing || !LOGISTICS.has(kind) || !LOGISTICS.has(existing)) return false;
+	return !line || (BUILDINGS[existing].belt ?? math.huge) < (BUILDINGS[kind].belt ?? 0);
 }
