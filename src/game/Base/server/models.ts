@@ -55,6 +55,19 @@ export function weld<T extends BasePart>(root: BasePart, part: T): T {
 	return part;
 }
 
+/** Gives the Build tool its Handle: a stubby emitter with the team's glow at the tip. */
+export function buildToolHandle(tool: Tool) {
+	const handle = new Instance("Part");
+	handle.Name = "Handle";
+	handle.Size = new Vector3(0.4, 0.6, 1.4);
+	handle.Color = DARK;
+	handle.Material = Enum.Material.Metal;
+	handle.CanCollide = false;
+	handle.Parent = tool;
+	weld(handle, block(tool, new Vector3(0.8, 0.8, 0.5), new CFrame(0, 0.1, -0.85), METAL, Enum.Material.Metal));
+	weld(handle, block(tool, new Vector3(0.5, 0.5, 0.15), new CFrame(0, 0.1, -1.15), GLOW, Enum.Material.Neon));
+}
+
 /** Writes `Health` and `MaxHealth`, and shows a small bar over the model once it is damaged. */
 export function setHealth(model: Model, health: number, maxHealth: number) {
 	model.SetAttribute("Health", health);

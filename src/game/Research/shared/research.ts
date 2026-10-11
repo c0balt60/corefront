@@ -57,7 +57,7 @@ export interface StatDef {
 
 export const STATS: Record<StatId, StatDef> = {
 	carryCapacity: { name: "Carry capacity", base: 50 },
-	walkSpeed: { name: "Walk speed", base: 16 },
+	walkSpeed: { name: "Walk speed", base: 30 },
 	blasterDamage: { name: "Blaster damage", base: 15 },
 	blasterCooldown: { name: "Seconds between shots", base: 0.25 },
 	coreHealth: { name: "Core health", base: 1500, team: true },
@@ -132,7 +132,7 @@ export const RESEARCH: Record<ResearchId, ResearchNode> = {
 			{ resource: "lead", amount: 15 },
 		],
 		levels: 3,
-		effect: { stat: "walkSpeed", step: 2 },
+		effect: { stat: "walkSpeed", step: 4 },
 	},
 	blasterCells: {
 		name: "Overcharged Cells",

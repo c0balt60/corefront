@@ -89,7 +89,7 @@ function OrbitRing({ radius, glow, reveal }: OrbitRingProps) {
 			<beam
 				Attachment0={point}
 				Attachment1={points[(quarter + 1) % 4]}
-				Color={() => new ColorSequence(ORBIT_COLOR.Lerp(COLORS.accent, glow()))}
+				Color={() => new ColorSequence(ORBIT_COLOR.Lerp(COLORS.accent, math.clamp(glow(), 0, 1)))}
 				CurveSize0={radius * ARC_HANDLE}
 				CurveSize1={radius * ARC_HANDLE}
 				FaceCamera={true}

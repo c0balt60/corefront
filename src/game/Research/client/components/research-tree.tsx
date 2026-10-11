@@ -186,6 +186,8 @@ const LINE_COLORS: Record<NodeState, Color3> = { done: AMBER, open: BLUE, locked
 const CHIP: ChipPalette = { live: BLUE, mission: AMBER, locked: RED };
 /** How bright the Core's pulse lights a node, against hovering's 0.5 and picking's 1. */
 const PULSE_SHINE = 0.4;
+/** How much bigger the side panel's text is than the planet panel's, so it reads from across the screen. */
+const TEXT_SCALE = 1.35;
 const LINE_WIDTHS: Record<NodeState, number> = { done: 4, open: 3, locked: 2 };
 const STATE_NAMES: Record<NodeState, string> = { done: "RESEARCHED", open: "AVAILABLE", locked: "LOCKED" };
 /** Brighter lines draw over dimmer ones where branches share a bar. */
@@ -662,7 +664,7 @@ function Heading({ text, swap }: { readonly text: string | (() => string); reado
 				TextTransparency={() => 1 - swap()}
 				TextXAlignment={Enum.TextXAlignment.Left}
 			>
-				<uitextsizeconstraint MaxTextSize={13} />
+				<uitextsizeconstraint MaxTextSize={13 * TEXT_SCALE} />
 			</textlabel>
 			<frame
 				AnchorPoint={new Vector2(0, 0.5)}
@@ -689,7 +691,7 @@ function NameLabel({ text, fade }: { readonly text: () => string; readonly fade:
 			TextTransparency={fade}
 			TextXAlignment={Enum.TextXAlignment.Left}
 		>
-			<uitextsizeconstraint MaxTextSize={26} />
+			<uitextsizeconstraint MaxTextSize={26 * TEXT_SCALE} />
 		</textlabel>
 	);
 }
@@ -708,7 +710,7 @@ function Description({ text, fade }: { readonly text: string | (() => string); r
 			TextXAlignment={Enum.TextXAlignment.Left}
 			TextYAlignment={Enum.TextYAlignment.Top}
 		>
-			<uitextsizeconstraint MaxTextSize={18} />
+			<uitextsizeconstraint MaxTextSize={18 * TEXT_SCALE} />
 		</textlabel>
 	);
 }
@@ -841,6 +843,7 @@ function ResearchPanel({ picked, levels, stateOf, reasonOf, pool, onResearch, sh
 						<frame BackgroundTransparency={1} Size={UDim2.fromScale(1, 0.88)}>
 							<uilistlayout Padding={new UDim(0.012, 0)} />
 							<StatusChip
+								textScale={TEXT_SCALE}
 								label={() => STATE_NAMES[state()]}
 								lock={lock}
 								mission={() => clamp01(rawDone())}
@@ -853,12 +856,14 @@ function ResearchPanel({ picked, levels, stateOf, reasonOf, pool, onResearch, sh
 							<Description text={() => RESEARCH[id()].description} fade={fade} />
 							<Heading text={heading} swap={swap} />
 							<Row
+								textScale={TEXT_SCALE}
 								delay={stagger(1)}
 								label="LEVEL"
 								reveal={reveal(1)}
 								value={() => `${level()} / ${maxLevel(id())}`}
 							/>
 							<Row
+								textScale={TEXT_SCALE}
 								color={() => BLUE}
 								delay={stagger(2)}
 								label="EFFECT"
@@ -866,6 +871,7 @@ function ResearchPanel({ picked, levels, stateOf, reasonOf, pool, onResearch, sh
 								value={effectText}
 							/>
 							<Row
+								textScale={TEXT_SCALE}
 								color={() => (isTeamNode(id()) ? AMBER : COLORS.text)}
 								delay={stagger(3)}
 								label="FOR"
@@ -896,7 +902,7 @@ function ResearchPanel({ picked, levels, stateOf, reasonOf, pool, onResearch, sh
 													TextTransparency={fade}
 													TextXAlignment={Enum.TextXAlignment.Left}
 												>
-													<uitextsizeconstraint MaxTextSize={13} />
+													<uitextsizeconstraint MaxTextSize={13 * TEXT_SCALE} />
 												</textlabel>
 												<textlabel
 													AnchorPoint={new Vector2(1, 0)}
@@ -912,7 +918,7 @@ function ResearchPanel({ picked, levels, stateOf, reasonOf, pool, onResearch, sh
 													TextTransparency={fade}
 													TextXAlignment={Enum.TextXAlignment.Right}
 												>
-													<uitextsizeconstraint MaxTextSize={15} />
+													<uitextsizeconstraint MaxTextSize={15 * TEXT_SCALE} />
 												</textlabel>
 											</frame>
 										);
@@ -932,7 +938,7 @@ function ResearchPanel({ picked, levels, stateOf, reasonOf, pool, onResearch, sh
 								TextTransparency={fade}
 								TextXAlignment={Enum.TextXAlignment.Left}
 							>
-								<uitextsizeconstraint MaxTextSize={13} />
+								<uitextsizeconstraint MaxTextSize={13 * TEXT_SCALE} />
 							</textlabel>
 						</frame>
 
@@ -965,6 +971,7 @@ function ResearchPanel({ picked, levels, stateOf, reasonOf, pool, onResearch, sh
 						<frame BackgroundTransparency={1} Size={UDim2.fromScale(1, 0.88)}>
 							<uilistlayout Padding={new UDim(0.012, 0)} />
 							<StatusChip
+								textScale={TEXT_SCALE}
 								label={() => "CORE ONLINE"}
 								lock={() => 0}
 								mission={() => 1}
@@ -980,12 +987,14 @@ function ResearchPanel({ picked, levels, stateOf, reasonOf, pool, onResearch, sh
 							/>
 							<Heading text="STATUS" swap={swap} />
 							<Row
+								textScale={TEXT_SCALE}
 								delay={stagger(1)}
 								label="HEALTH"
 								reveal={reveal(1)}
 								value={() => formatStat("coreHealth", statValue(levels(), "coreHealth"))}
 							/>
 							<Row
+								textScale={TEXT_SCALE}
 								delay={stagger(2)}
 								label="STORAGE"
 								reveal={reveal(2)}
@@ -994,6 +1003,7 @@ function ResearchPanel({ picked, levels, stateOf, reasonOf, pool, onResearch, sh
 							<Heading text="TEAM UPGRADES" swap={swap} />
 							{TEAM_NODES.map((node, index) => (
 								<Row
+									textScale={TEXT_SCALE}
 									color={() => ((levels()[node] ?? 0) > 0 ? AMBER : COLORS.muted)}
 									delay={stagger(3 + index)}
 									label={RESEARCH[node].name.upper()}
@@ -1014,7 +1024,7 @@ function ResearchPanel({ picked, levels, stateOf, reasonOf, pool, onResearch, sh
 							TextTransparency={fade}
 							TextXAlignment={Enum.TextXAlignment.Left}
 						>
-							<uitextsizeconstraint MaxTextSize={12} />
+							<uitextsizeconstraint MaxTextSize={12 * TEXT_SCALE} />
 						</textlabel>
 					</frame>
 				</frame>

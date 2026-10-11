@@ -11,6 +11,8 @@ import { COLORS, hasEffect, type UiKind } from "core/Interface/client/theme";
  */
 
 const clamp01 = (value: number) => math.clamp(value, 0, 1);
+/** A colour spring can overshoot past 0-1, which a ColorSequence rejects. */
+const clampColor = (color: Color3) => new Color3(clamp01(color.R), clamp01(color.G), clamp01(color.B));
 
 interface EnergyGradientProps {
 	readonly kind: UiKind;
@@ -29,19 +31,19 @@ interface EnergyGradientProps {
  * outline at `base` and nothing moves.
  */
 export function EnergyGradient({ kind, base, energy = COLORS.accent, charge = () => 0 }: EnergyGradientProps) {
-	if (!hasEffect(kind, "energy")) return <uigradient Color={() => new ColorSequence(base())} />;
+	if (!hasEffect(kind, "energy")) return <uigradient Color={() => new ColorSequence(clampColor(base()))} />;
 
 	const angle = useSpin(() => 50 + 250 * clamp01(charge()));
 
 	return (
 		<uigradient
 			Color={() => {
-				const rest = base();
+				const rest = clampColor(base());
 				const width = 0.05 + 0.1 * clamp01(charge());
 				return new ColorSequence([
 					new ColorSequenceKeypoint(0, rest),
 					new ColorSequenceKeypoint(0.5 - width, rest),
-					new ColorSequenceKeypoint(0.5, typeIs(energy, "Color3") ? energy : energy()),
+					new ColorSequenceKeypoint(0.5, clampColor(typeIs(energy, "Color3") ? energy : energy())),
 					new ColorSequenceKeypoint(0.5 + width, rest),
 					new ColorSequenceKeypoint(1, rest),
 				]);

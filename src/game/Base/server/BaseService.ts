@@ -5,7 +5,7 @@ import type { Logger } from "@rbxts/log";
 import { CollectionService, Players, StarterPack, Workspace } from "@rbxts/services";
 import { t } from "@rbxts/t";
 
-import { buildingModel, setHealth } from "game/Base/server/models";
+import { buildingModel, buildToolHandle, setHealth } from "game/Base/server/models";
 import { BaseMessage, baseMessaging, type Phase } from "game/Base/shared/base-network";
 import {
 	BUILD_RANGE,
@@ -158,12 +158,12 @@ export class BaseService implements OnStart {
 		baseMessaging.server.on(BaseMessage.Place, (player, data) => this.place(player, data));
 		baseMessaging.server.on(BaseMessage.Remove, (player, data) => this.remove(player, data));
 
-		// No handle: it only tells the client to show the build bar.
+		// Only tells the client to show the build bar.
 		const tool = new Instance("Tool");
 		tool.Name = BUILD_TOOL;
-		tool.RequiresHandle = false;
 		tool.CanBeDropped = false;
 		tool.ToolTip = "Build and remove";
+		buildToolHandle(tool);
 		tool.Parent = StarterPack;
 
 		// What a player carries is lost when they die.

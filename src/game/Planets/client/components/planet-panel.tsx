@@ -58,6 +58,8 @@ interface StatusChipProps {
 	readonly reveal: () => number;
 	/** 0-1: how far its brackets stand off the corners. */
 	readonly open: () => number;
+	/** Multiplies the label's largest size, for a panel that needs bigger text. */
+	readonly textScale?: number;
 }
 
 /**
@@ -66,7 +68,15 @@ interface StatusChipProps {
  * a padlock and LOCKED in grey. Its colours and width spring between them, the
  * dot and the padlock cross-fade, and the label decodes on every change.
  */
-export function StatusChip({ label, lock, mission, reveal, open, palette = CHIP_PALETTE }: StatusChipProps) {
+export function StatusChip({
+	label,
+	lock,
+	mission,
+	reveal,
+	open,
+	palette = CHIP_PALETTE,
+	textScale = 1,
+}: StatusChipProps) {
 	const text = useScramble("chip", label, 0.05, 0.35);
 	const blink = useSpin(() => 240);
 	const live = () => palette.live.Lerp(palette.mission, mission());
@@ -126,7 +136,7 @@ export function StatusChip({ label, lock, mission, reveal, open, palette = CHIP_
 						TextTransparency={() => 1 - reveal()}
 						TextXAlignment={Enum.TextXAlignment.Left}
 					>
-						<uitextsizeconstraint MaxTextSize={13} />
+						<uitextsizeconstraint MaxTextSize={13 * textScale} />
 						<uipadding PaddingBottom={new UDim(0.2, 0)} PaddingTop={new UDim(0.2, 0)} />
 					</textlabel>
 				</frame>
@@ -226,6 +236,8 @@ interface RowProps {
 	readonly reveal: () => number;
 	/** Seconds the value stays blank when it first mounts, to follow the rows above it. */
 	readonly delay: number;
+	/** Multiplies the text's largest size, for a panel that needs bigger text. */
+	readonly textScale?: number;
 }
 
 /**
@@ -233,7 +245,7 @@ interface RowProps {
  * it changes. The value's colour springs when it changes. A row with a level
  * has its bar in the middle.
  */
-export function Row({ label, value, color = () => COLORS.text, level, reveal, delay }: RowProps) {
+export function Row({ label, value, color = () => COLORS.text, level, reveal, delay, textScale = 1 }: RowProps) {
 	const [tint, tintSpring] = useSpring(color(), SPRINGS.responsive);
 	const text = useScramble("text", value, delay);
 	effect(() => tintSpring.setGoal(color()));
@@ -255,7 +267,7 @@ export function Row({ label, value, color = () => COLORS.text, level, reveal, de
 					TextTransparency={() => 1 - reveal()}
 					TextXAlignment={Enum.TextXAlignment.Left}
 				>
-					<uitextsizeconstraint MaxTextSize={13} />
+					<uitextsizeconstraint MaxTextSize={13 * textScale} />
 				</textlabel>
 				{level ? <LevelBar level={level} reveal={reveal} /> : undefined}
 				<textlabel
@@ -270,7 +282,7 @@ export function Row({ label, value, color = () => COLORS.text, level, reveal, de
 					TextTransparency={() => 1 - reveal()}
 					TextXAlignment={Enum.TextXAlignment.Right}
 				>
-					<uitextsizeconstraint MaxTextSize={16} />
+					<uitextsizeconstraint MaxTextSize={16 * textScale} />
 				</textlabel>
 			</frame>
 		</frame>

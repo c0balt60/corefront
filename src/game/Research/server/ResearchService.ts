@@ -7,7 +7,7 @@ import { t } from "@rbxts/t";
 import { BaseService } from "game/Base/server/BaseService";
 import { RESOURCE_ORDER } from "game/Base/shared/resources";
 import { PlanetsService } from "game/Planets/server/PlanetsService";
-import { discoveredAtom, levelsOf, personal, statOf, teamAtom } from "game/Research/server/research-store";
+import { discoveredAtom, levelsOf, personal, teamAtom } from "game/Research/server/research-store";
 import {
 	isTeamNode,
 	levelCost,
@@ -23,9 +23,9 @@ const isResearchData = t.interface({ id: t.string });
 /**
  * Research: each player levels up their own tree, paying from the team's Core
  * pool, and nodes on team stats (the Core's) level up for everyone. Also
- * notes which resources the Core has held, which some nodes wait on, and keeps
- * each character's walk speed up to date. The stats themselves are read
- * through `research-store` where they apply.
+ * notes which resources the Core has held, which some nodes wait on. The stats
+ * themselves are read through `research-store` where they apply, except walk
+ * speed, which the client applies (see `SprintController`).
  */
 @Service()
 export class ResearchService implements OnStart {
@@ -47,13 +47,6 @@ export class ResearchService implements OnStart {
 			if (!found.isEmpty()) discoveredAtom([...discovered, ...found]);
 		});
 		subscribe(discoveredAtom, () => Players.GetPlayers().forEach((player) => this.send(player)));
-
-		const watch = (player: Player) =>
-			player.CharacterAdded.Connect((character) => {
-				(character.WaitForChild("Humanoid") as Humanoid).WalkSpeed = statOf(player.UserId, "walkSpeed");
-			});
-		Players.GetPlayers().forEach(watch);
-		Players.PlayerAdded.Connect(watch);
 	}
 
 	private research(player: Player, data: unknown) {
@@ -85,8 +78,6 @@ export class ResearchService implements OnStart {
 		this.send(player);
 		const stat = RESEARCH[id].effect?.stat;
 		if (stat === "carryCapacity") this.baseService.sendInventory(player);
-		const humanoid = player.Character?.FindFirstChildOfClass("Humanoid");
-		if (stat === "walkSpeed" && humanoid) humanoid.WalkSpeed = statOf(player.UserId, "walkSpeed");
 	}
 
 	private send(player: Player) {
