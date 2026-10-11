@@ -78,6 +78,17 @@ const GLYPHS: Record<GlyphId, ReadonlyArray<Rect>> = {
 		[3, 6, 6, 1, "cut"],
 		[3, 10, 6, 1, "cut"],
 	],
+	remove: [
+		[1, 1, 2, 2],
+		[3, 3, 2, 2],
+		[5, 5, 2, 2],
+		[7, 7, 2, 2],
+		[9, 9, 2, 2],
+		[9, 1, 2, 2],
+		[7, 3, 2, 2],
+		[3, 7, 2, 2],
+		[1, 9, 2, 2],
+	],
 	drill: [
 		[2, 0, 8, 3],
 		[3, 3, 6, 3],
@@ -141,6 +152,14 @@ const GLYPHS: Record<GlyphId, ReadonlyArray<Rect>> = {
 		[7, 0, 2, 12],
 		[5, 5, 2, 2],
 	],
+	// One chevron; the Titanium Conveyor, faster, has two.
+	conveyor: [
+		[0, 0, 12, 1],
+		[0, 11, 12, 1],
+		[4, 3, 2, 2],
+		[6, 5, 2, 2],
+		[4, 7, 2, 2],
+	],
 	titaniumConveyor: [
 		[0, 0, 12, 1],
 		[0, 11, 12, 1],
@@ -150,6 +169,20 @@ const GLYPHS: Record<GlyphId, ReadonlyArray<Rect>> = {
 		[6, 3, 2, 2],
 		[8, 5, 2, 2],
 		[6, 7, 2, 2],
+	],
+	// Infinity: it never runs out.
+	source: [
+		[1, 3, 3, 1],
+		[8, 3, 3, 1],
+		[0, 4, 1, 4],
+		[11, 4, 1, 4],
+		[4, 4, 1, 1],
+		[7, 4, 1, 1],
+		[5, 5, 2, 2],
+		[4, 7, 1, 1],
+		[7, 7, 1, 1],
+		[1, 8, 3, 1],
+		[8, 8, 3, 1],
 	],
 	wall: [
 		[0, 1, 5, 3],

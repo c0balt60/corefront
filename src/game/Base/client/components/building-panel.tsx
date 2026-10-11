@@ -65,6 +65,8 @@ function OreButton({ resource, text = () => "", picked = () => false, layoutOrde
 			TextColor3={COLORS.text}
 			TextSize={13}
 			TextStrokeTransparency={0.3}
+			// Over its neighbours, so the gap doesn't hide its thick outline.
+			ZIndex={() => (picked() ? 2 : 1)}
 			Activated={onClick}
 		>
 			<uistroke
@@ -144,6 +146,10 @@ export function BuildingPanel({
 				value: `${read("Stored")} / ${storage}`,
 				resource: output,
 			});
+		}
+		if (kind === "source") {
+			const output = filter();
+			list.push({ label: "OUTPUT", value: output !== undefined ? RESOURCES[output].name.upper() : "NONE" });
 		}
 		if (def.turret) list.push({ label: "AMMO", value: `${read("Ammo")} / ${def.turret.magazine}` });
 		if (def.repair !== undefined) list.push({ label: "REPAIRS", value: `${def.repair} / ${MACHINE_SECONDS}s` });

@@ -1,43 +1,71 @@
-import { Workspace } from "@rbxts/services";
-import Vide, { cleanup, effect, For, source } from "@rbxts/vide";
+import { GuiService, Workspace } from "@rbxts/services";
+import Vide, { cleanup, effect, For, Index, source } from "@rbxts/vide";
 import { useSpring } from "@rbxts/vide-ripple";
 
 import { Brackets } from "core/Interface/client/components/hud";
 import { Shadow } from "core/Interface/client/components/shadow";
 import { useAppear, useScramble } from "core/Interface/client/motion";
-import { COLORS, FONT_DISPLAY, SPRINGS } from "core/Interface/client/theme";
-import { amountOf, type BuildMode } from "game/Base/client/base-state";
-import { Label, Swatch } from "game/Base/client/components/base-hud";
-import { type BuildableKind, BUILDABLE, BUILDINGS, REFUND } from "game/Base/shared/buildings";
+import { COLORS, FONT, FONT_DISPLAY, SPRINGS } from "core/Interface/client/theme";
+import { amountOf, type BuildMode, canAfford } from "game/Base/client/base-state";
+import { HudBox, Label, Swatch } from "game/Base/client/components/base-hud";
+import {
+	BUILD_CATEGORIES,
+	type BuildableKind,
+	type BuildCategory,
+	BUILDINGS,
+	REFUND,
+} from "game/Base/shared/buildings";
 import { RESOURCES, type ResourceStack } from "game/Base/shared/resources";
+import { Glyph } from "game/Research/client/components/glyphs";
+import type { GlyphId } from "game/Research/shared/research";
 
-const CARD = new Vector2(112, 84);
-const GAP = 8;
+/** Pixels between the HUD and the screen's edges. */
+const EDGE = 16;
 /** Clear of the hotbar, which takes the bottom 80 pixels of the middle. */
-const BOTTOM = 92;
-/** Pixels kept clear either side when the bar has to shrink to fit the screen. */
-const MARGIN = 16;
+const HINT_BOTTOM = 92;
+const TILE = 48;
+const RAIL_TILE = 40;
+const GAP = 4;
+const COLUMNS = 4;
+const GRID_WIDTH = COLUMNS * (TILE + GAP) - GAP;
+/** Between the grid and the rail, with a divider down its middle. */
+const SPLIT = 13;
+/** `HudBox`'s padding, across and down. */
+const PAD = new Vector2(24, 18);
+const WIDTH = GRID_WIDTH + SPLIT + RAIL_TILE + PAD.X;
+/** Between the info header and the panel under it. */
+const HEADER_GAP = 6;
+/** About the tallest the header gets: a name, three costs and three lines of description. */
+const HEADER_ROOM = 136;
+/** The wave or sandbox panel hangs from this far down the right edge, at most `WAVE_HEIGHT` tall. */
+const WAVE_TOP = 0.3;
+const WAVE_HEIGHT = 168;
 
 const clamp01 = (value: number) => math.clamp(value, 0, 1);
 
-interface BuildCardProps {
-	readonly name: string;
+/** The category last opened, kept while the Build tool is away. */
+const picked = source(BUILD_CATEGORIES[0]);
+
+interface TileProps {
+	readonly glyph: GlyphId;
+	/** Width and height, in pixels. */
+	readonly size: number;
+	readonly color: Color3;
+	readonly selected: () => boolean;
+	/** Greys the glyph, while the Core can't pay for it. */
+	readonly dim?: () => boolean;
 	/** The key that picks it, if any. */
 	readonly hotkey?: string;
-	readonly cost: ReadonlyArray<ResourceStack>;
-	readonly pool: () => ReadonlyArray<ResourceStack>;
-	readonly selected: () => boolean;
-	readonly color: Color3;
 	readonly layoutOrder: number;
 	readonly onClick: () => void;
+	readonly onHover: (entered: boolean) => void;
 }
 
 /**
- * One square card: its hotkey (if it has one), its name, and its cost, each line red while the
- * core can't pay it. Hovering lifts it; picking it grows it, lights its outline
- * and hotkey and locks brackets onto its corners.
+ * One square tile: a glyph, and its hotkey (if it has one) in the corner. Hovering lifts it; picking
+ * it grows it, lights its outline and locks brackets onto its corners.
  */
-function BuildCard({ name, hotkey, cost, pool, selected, color, layoutOrder, onClick }: BuildCardProps) {
+function Tile({ glyph, size, color, selected, dim, hotkey, layoutOrder, onClick, onHover }: TileProps) {
 	const hovered = source(false);
 	const [lift, liftSpring] = useSpring(0, SPRINGS.responsive);
 	const [scale, scaleSpring] = useSpring(1, SPRINGS.bouncy);
@@ -46,9 +74,13 @@ function BuildCard({ name, hotkey, cost, pool, selected, color, layoutOrder, onC
 		scaleSpring.setGoal(selected() ? 1.06 : hovered() ? 1.03 : 1);
 	});
 	const glow = () => clamp01(lift());
+	// Opaque, so the glyph's cut-outs match it.
+	const background = () => COLORS.card.Lerp(COLORS.cardHover, glow());
+	// A whole number of pixels per glyph cell keeps it crisp.
+	const icon = math.floor((size - 12) / 12) * 12;
 
 	return (
-		<frame BackgroundTransparency={1} LayoutOrder={layoutOrder} Size={UDim2.fromOffset(CARD.X, CARD.Y)}>
+		<frame BackgroundTransparency={1} LayoutOrder={layoutOrder} Size={UDim2.fromOffset(size, size)}>
 			<frame
 				AnchorPoint={new Vector2(0.5, 0.5)}
 				BackgroundTransparency={1}
@@ -56,17 +88,22 @@ function BuildCard({ name, hotkey, cost, pool, selected, color, layoutOrder, onC
 				Size={UDim2.fromScale(1, 1)}
 			>
 				<uiscale Scale={scale} />
-				<Shadow lift={lift} glow={color} scale={0.6} />
+				<Shadow lift={lift} glow={color} scale={0.4} />
 				<textbutton
 					AutoButtonColor={false}
-					BackgroundColor3={() => COLORS.card.Lerp(COLORS.cardHover, glow())}
-					BackgroundTransparency={0.35}
+					BackgroundColor3={background}
 					BorderSizePixel={0}
 					Size={UDim2.fromScale(1, 1)}
 					Text=""
 					ZIndex={1}
-					MouseEnter={() => hovered(true)}
-					MouseLeave={() => hovered(false)}
+					MouseEnter={() => {
+						hovered(true);
+						onHover(true);
+					}}
+					MouseLeave={() => {
+						hovered(false);
+						onHover(false);
+					}}
 					Activated={onClick}
 				>
 					<uistroke
@@ -75,71 +112,61 @@ function BuildCard({ name, hotkey, cost, pool, selected, color, layoutOrder, onC
 						LineJoinMode={Enum.LineJoinMode.Miter}
 						Thickness={1.5}
 					/>
-					<uipadding
-						PaddingBottom={new UDim(0, 8)}
-						PaddingLeft={new UDim(0, 8)}
-						PaddingRight={new UDim(0, 8)}
-						PaddingTop={new UDim(0, 8)}
-					/>
+					<frame
+						AnchorPoint={new Vector2(0.5, 0.5)}
+						BackgroundTransparency={1}
+						Position={UDim2.fromScale(0.5, 0.5)}
+						Size={UDim2.fromOffset(icon, icon)}
+						ZIndex={1}
+					>
+						<Glyph
+							glyph={glyph}
+							color={() => (dim?.() ? COLORS.subtext : COLORS.text)}
+							background={background}
+						/>
+					</frame>
 					{hotkey !== undefined ? (
 						<textlabel
+							AnchorPoint={new Vector2(1, 1)}
 							BackgroundColor3={() => COLORS.stroke.Lerp(color, glow())}
 							BorderSizePixel={0}
 							FontFace={FONT_DISPLAY}
-							Size={UDim2.fromOffset(18, 18)}
+							Position={UDim2.fromScale(1, 1)}
+							Size={UDim2.fromOffset(12, 12)}
 							Text={hotkey}
 							TextColor3={COLORS.text}
-							TextSize={12}
+							TextSize={10}
+							ZIndex={2}
 						/>
 					) : undefined}
-					<Label
-						alignX={Enum.TextXAlignment.Right}
-						anchorPoint={new Vector2(1, 0)}
-						color={COLORS.text}
-						font={FONT_DISPLAY}
-						position={UDim2.fromScale(1, 0)}
-						size={new UDim2(1, -24, 0, 18)}
-						text={name.upper()}
-						textSize={14}
-					/>
-					<frame
-						AnchorPoint={new Vector2(0, 1)}
-						BackgroundTransparency={1}
-						Position={UDim2.fromScale(0, 1)}
-						Size={new UDim2(1, 0, 0, 32)}
-					>
-						<uilistlayout
-							Padding={new UDim(0, 2)}
-							SortOrder={Enum.SortOrder.LayoutOrder}
-							VerticalAlignment={Enum.VerticalAlignment.Bottom}
-						/>
-						{cost.size() > 0 ? (
-							cost.map((stack, index) => (
-								<frame BackgroundTransparency={1} LayoutOrder={index} Size={new UDim2(1, 0, 0, 14)}>
-									<Swatch resource={() => stack.resource} />
-									<Label
-										color={() =>
-											amountOf(pool(), stack.resource) >= stack.amount
-												? COLORS.text
-												: COLORS.danger
-										}
-										font={FONT_DISPLAY}
-										position={UDim2.fromOffset(16, 0)}
-										size={new UDim2(1, -16, 1, 0)}
-										text={`${stack.amount} ${RESOURCES[stack.resource].name.upper()}`}
-										textSize={12}
-									/>
-								</frame>
-							))
-						) : (
-							<Label size={new UDim2(1, 0, 0, 14)} text={`REFUNDS ${REFUND * 100}%`} textSize={11} />
-						)}
-					</frame>
 				</textbutton>
-				<Brackets kind="hud" color={color} open={lift} visibility={lift} length={8} thickness={1.5} />
+				<Brackets kind="hud" color={color} open={lift} visibility={lift} length={6} thickness={1.5} />
 			</frame>
 		</frame>
 	);
+}
+
+/** What the header describes: a building, the remove tool, or a category. */
+type Subject = BuildMode | BuildCategory;
+
+interface Info {
+	readonly name: string;
+	readonly tag?: string;
+	readonly cost: ReadonlyArray<ResourceStack>;
+	readonly description?: string;
+}
+
+function infoOf(subject: Subject): Info {
+	if (!typeIs(subject, "string")) return { name: subject.name, cost: [] };
+	if (subject === "remove") {
+		return {
+			name: "Remove",
+			cost: [],
+			description: `Takes down buildings, trees and rocks. Buildings refund ${REFUND * 100}% of their cost.`,
+		};
+	}
+	const def = BUILDINGS[subject];
+	return { name: def.name, tag: `${def.size}×${def.size}`, cost: def.cost, description: def.description };
 }
 
 interface BuildBarProps {
@@ -148,80 +175,236 @@ interface BuildBarProps {
 	readonly pool: () => ReadonlyArray<ResourceStack>;
 	readonly mode: () => BuildMode | undefined;
 	readonly onSelect: (mode: BuildMode) => void;
-	/** Turns false to drop it away. Return `$tuple(node, EXIT_TIME)` from the Show that renders it. */
+	/** Turns false to put it away. Return `$tuple(node, EXIT_TIME)` from the Show that renders it. */
 	readonly show: () => boolean;
 }
 
 /**
- * The buildings and the remove tool as cards, bottom centre above the hotbar,
- * with the controls for the current mode over them, shrunk to fit narrow screens.
- * Shown while the Build tool is out. Rises in from the bottom.
+ * The build menu, bottom right: a rail of categories with the remove tool under them, the open
+ * category's buildings as a grid of glyphs beside it, and over both a header naming whatever is
+ * hovered (or else picked), with its cost, red where the Core can't pay, and description. Picking a
+ * building any other way, like copying one with Q, opens its category. The controls for the current
+ * mode sit above the hotbar. Shown while the Build tool is out, shrunk to stay under the wave panel.
+ * Slides in from the right.
  */
 export function BuildBar({ kinds, pool, mode, onSelect, show }: BuildBarProps) {
-	const rise = useAppear(show, 0.1);
+	const appear = useAppear(show, 0.1);
 	const hint = useScramble(
 		"hud",
 		() => {
 			const current = mode();
-			if (current === undefined) return "CLICK A CARD  BUILD   ·   F  REMOVE   ·   R  TURN   ·   Q  COPY";
+			if (current === undefined) return "PICK A BUILDING   ·   F  REMOVE   ·   R  TURN   ·   Q  COPY";
 			if (current === "remove") return "CLICK  REMOVE BUILDINGS, TREES, ROCKS   ·   F  CANCEL";
-			return "CLICK  PLACE   ·   DRAG  LINE   ·   R  ROTATE   ·   CLICK CARD  CANCEL";
+			return "CLICK  PLACE   ·   DRAG  LINE   ·   R  ROTATE   ·   CLICK TILE  CANCEL";
 		},
 		0.2,
 		0.3,
 	);
-	// The shown cards, the remove tool's included.
-	const width = () => (kinds().size() + 1) * (CARD.X + GAP) - GAP;
+
+	const categories = () =>
+		BUILD_CATEGORIES.filter((category) => category.kinds.some((kind) => kinds().includes(kind)));
+	const open = () => (categories().includes(picked()) ? picked() : categories()[0]);
+	const tiles = () => open().kinds.filter((kind) => kinds().includes(kind));
+	effect(() => {
+		const current = mode();
+		if (current === undefined || current === "remove") return;
+		const owner = BUILD_CATEGORIES.find((category) => category.kinds.includes(current));
+		if (owner) picked(owner);
+	});
+
+	const hovered = source<Subject>();
+	const hover = (subject: Subject) => (entered: boolean) => {
+		if (entered) hovered(subject);
+		else if (hovered() === subject) hovered(undefined);
+	};
+	const info = () => {
+		const subject = hovered() ?? mode();
+		return subject !== undefined ? infoOf(subject) : undefined;
+	};
+
+	// The rail, the remove tool's tile included, is nearly always the tallest.
+	const rail = () => (categories().size() + 1) * (RAIL_TILE + GAP) - GAP;
+	const grid = () => math.ceil(tiles().size() / COLUMNS) * (TILE + GAP) - GAP;
+	const height = () => math.max(rail(), grid()) + PAD.Y;
+
 	const camera = Workspace.CurrentCamera!;
-	const screen = source(camera.ViewportSize.X);
-	cleanup(camera.GetPropertyChangedSignal("ViewportSize").Connect(() => screen(camera.ViewportSize.X)));
+	const screen = source(camera.ViewportSize.Y);
+	cleanup(camera.GetPropertyChangedSignal("ViewportSize").Connect(() => screen(camera.ViewportSize.Y)));
+	const scale = () => {
+		const [inset] = GuiService.GetGuiInset();
+		// ponytail: assumes the wave panel's spot and tallest size; read its frame if it ever moves.
+		const room = (screen() - inset.Y) * (1 - WAVE_TOP) - WAVE_HEIGHT - 2 * EDGE;
+		// Past half size it would be too small to use: overlapping is better.
+		return math.clamp(room / (height() + HEADER_GAP + HEADER_ROOM), 0.5, 1);
+	};
+
+	// The header's content grows to fit its text, and the box round it follows.
+	const content = source(0);
+	const measure = (frame: Frame) => {
+		const update = () => content(frame.AbsoluteSize.Y / scale());
+		update();
+		frame.GetPropertyChangedSignal("AbsoluteSize").Connect(update);
+	};
 
 	return (
-		<frame
-			Name="BuildBar"
-			AnchorPoint={new Vector2(0.5, 1)}
-			BackgroundTransparency={1}
-			Position={() => new UDim2(0.5, 0, 1, -BOTTOM + 240 * (1 - rise()))}
-			Size={() => UDim2.fromOffset(width(), CARD.Y + 26)}
-		>
-			<uiscale Scale={() => math.min(1, (screen() - 2 * MARGIN) / width())} />
-			<Label alignX={Enum.TextXAlignment.Center} size={new UDim2(1, 0, 0, 16)} text={hint} />
+		<>
 			<frame
-				AnchorPoint={new Vector2(0, 1)}
+				Name="BuildHint"
+				AnchorPoint={new Vector2(0.5, 1)}
 				BackgroundTransparency={1}
-				Position={UDim2.fromScale(0, 1)}
-				Size={new UDim2(1, 0, 0, CARD.Y)}
+				Position={() => new UDim2(0.5, 0, 1, -HINT_BOTTOM + 240 * (1 - appear()))}
+				Size={UDim2.fromOffset(640, 16)}
 			>
-				<uilistlayout
-					FillDirection={Enum.FillDirection.Horizontal}
-					HorizontalAlignment={Enum.HorizontalAlignment.Center}
-					Padding={new UDim(0, GAP)}
-					SortOrder={Enum.SortOrder.LayoutOrder}
-				/>
-				<For each={kinds}>
-					{(kind) => (
-						<BuildCard
-							color={COLORS.accent}
-							cost={BUILDINGS[kind].cost}
-							layoutOrder={BUILDABLE.indexOf(kind)}
-							name={BUILDINGS[kind].name}
-							onClick={() => onSelect(kind)}
-							pool={pool}
-							selected={() => mode() === kind}
-						/>
-					)}
-				</For>
-				<BuildCard
-					color={COLORS.danger}
-					cost={[]}
-					hotkey="F"
-					layoutOrder={BUILDABLE.size()}
-					name="Remove"
-					onClick={() => onSelect("remove")}
-					pool={pool}
-					selected={() => mode() === "remove"}
-				/>
+				<Label alignX={Enum.TextXAlignment.Center} size={UDim2.fromScale(1, 1)} text={hint} />
 			</frame>
-		</frame>
+			<frame
+				Name="BuildMenu"
+				AnchorPoint={new Vector2(1, 1)}
+				BackgroundTransparency={1}
+				Position={() => new UDim2(1, -EDGE + (WIDTH + 2 * EDGE) * (1 - appear()), 1, -EDGE)}
+				Size={() => UDim2.fromOffset(WIDTH, height())}
+			>
+				<uiscale Scale={scale} />
+				<frame
+					AnchorPoint={new Vector2(0, 1)}
+					BackgroundTransparency={1}
+					Position={UDim2.fromOffset(0, -HEADER_GAP)}
+					Size={() => UDim2.fromOffset(WIDTH, content() + PAD.Y)}
+					Visible={() => info() !== undefined}
+				>
+					<HudBox
+						name="Info"
+						anchorPoint={Vector2.zero}
+						position={() => UDim2.fromScale(0, 0)}
+						size={UDim2.fromScale(1, 1)}
+					>
+						<frame
+							action={measure}
+							AutomaticSize={Enum.AutomaticSize.Y}
+							BackgroundTransparency={1}
+							Size={new UDim2(1, 0, 0, 0)}
+						>
+							<uilistlayout Padding={new UDim(0, 2)} SortOrder={Enum.SortOrder.LayoutOrder} />
+							<frame BackgroundTransparency={1} LayoutOrder={0} Size={new UDim2(1, 0, 0, 18)}>
+								<Label
+									color={COLORS.text}
+									font={FONT_DISPLAY}
+									size={new UDim2(1, -40, 1, 0)}
+									text={() => info()?.name.upper() ?? ""}
+									textSize={14}
+								/>
+								<Label
+									alignX={Enum.TextXAlignment.Right}
+									anchorPoint={new Vector2(1, 0)}
+									position={UDim2.fromScale(1, 0)}
+									size={new UDim2(0, 40, 1, 0)}
+									text={() => info()?.tag ?? ""}
+								/>
+							</frame>
+							<Index each={() => info()?.cost ?? []}>
+								{(stack, index) => (
+									<frame BackgroundTransparency={1} LayoutOrder={index} Size={new UDim2(1, 0, 0, 14)}>
+										<Swatch resource={() => stack().resource} />
+										<Label
+											color={() =>
+												amountOf(pool(), stack().resource) >= stack().amount
+													? COLORS.text
+													: COLORS.danger
+											}
+											font={FONT_DISPLAY}
+											position={UDim2.fromOffset(16, 0)}
+											size={new UDim2(1, -16, 1, 0)}
+											text={() => `${stack().amount} ${RESOURCES[stack().resource].name.upper()}`}
+											textSize={12}
+										/>
+									</frame>
+								)}
+							</Index>
+							<textlabel
+								AutomaticSize={Enum.AutomaticSize.Y}
+								BackgroundTransparency={1}
+								FontFace={FONT}
+								LayoutOrder={100}
+								Size={new UDim2(1, 0, 0, 0)}
+								Text={() => info()?.description ?? ""}
+								TextColor3={COLORS.muted}
+								TextSize={14}
+								TextWrapped={true}
+								TextXAlignment={Enum.TextXAlignment.Left}
+								Visible={() => info()?.description !== undefined}
+							>
+								<uipadding PaddingTop={new UDim(0, 4)} />
+							</textlabel>
+						</frame>
+					</HudBox>
+				</frame>
+				<HudBox
+					name="Panel"
+					anchorPoint={Vector2.zero}
+					position={() => UDim2.fromScale(0, 0)}
+					size={UDim2.fromScale(1, 1)}
+				>
+					<frame BackgroundTransparency={1} Size={new UDim2(0, GRID_WIDTH, 1, 0)}>
+						<uigridlayout
+							CellPadding={UDim2.fromOffset(GAP, GAP)}
+							CellSize={UDim2.fromOffset(TILE, TILE)}
+							FillDirectionMaxCells={COLUMNS}
+							SortOrder={Enum.SortOrder.LayoutOrder}
+						/>
+						<For each={tiles}>
+							{(kind) => (
+								<Tile
+									color={COLORS.accent}
+									dim={() => !canAfford(pool(), BUILDINGS[kind].cost)}
+									glyph={kind}
+									layoutOrder={open().kinds.indexOf(kind)}
+									onClick={() => onSelect(kind)}
+									onHover={hover(kind)}
+									selected={() => mode() === kind}
+									size={TILE}
+								/>
+							)}
+						</For>
+					</frame>
+					<frame
+						BackgroundColor3={COLORS.stroke}
+						BorderSizePixel={0}
+						Position={UDim2.fromOffset(GRID_WIDTH + math.floor(SPLIT / 2), 0)}
+						Size={new UDim2(0, 1, 1, 0)}
+					/>
+					<frame
+						AnchorPoint={new Vector2(1, 0)}
+						BackgroundTransparency={1}
+						Position={UDim2.fromScale(1, 0)}
+						Size={new UDim2(0, RAIL_TILE, 1, 0)}
+					>
+						<uilistlayout Padding={new UDim(0, GAP)} SortOrder={Enum.SortOrder.LayoutOrder} />
+						<For each={categories}>
+							{(category) => (
+								<Tile
+									color={COLORS.accent}
+									glyph={category.glyph}
+									layoutOrder={BUILD_CATEGORIES.indexOf(category)}
+									onClick={() => picked(category)}
+									onHover={hover(category)}
+									selected={() => open() === category}
+									size={RAIL_TILE}
+								/>
+							)}
+						</For>
+						<Tile
+							color={COLORS.danger}
+							glyph="remove"
+							hotkey="F"
+							layoutOrder={BUILD_CATEGORIES.size()}
+							onClick={() => onSelect("remove")}
+							onHover={hover("remove")}
+							selected={() => mode() === "remove"}
+							size={RAIL_TILE}
+						/>
+					</frame>
+				</HudBox>
+			</frame>
+		</>
 	);
 }

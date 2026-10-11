@@ -1,4 +1,5 @@
 import type { ResourceId, ResourceStack } from "game/Base/shared/resources";
+import type { GlyphId } from "game/Research/shared/research";
 
 /*
  * The server keeps the planet's gameplay instances in `Workspace.Base`:
@@ -330,28 +331,34 @@ export const AMMO: Partial<Record<ResourceId, number>> = {
 	thorium: 2.2,
 };
 
-/** The build bar's cards, in order. Only those a player has researched (or starts with) show, and the Source in a sandbox. */
-export const BUILDABLE: ReadonlyArray<BuildableKind> = [
-	"drill",
-	"advancedDrill",
-	"laserDrill",
-	"conveyor",
-	"titaniumConveyor",
-	"router",
-	"sorter",
-	"junction",
-	"graphitePress",
-	"siliconSmelter",
-	"wall",
-	"titaniumWall",
-	"turret",
-	"autoTurret",
-	"cannon",
-	"swarmer",
-	"ripple",
-	"mender",
-	"source",
+export interface BuildCategory {
+	readonly name: string;
+	/** Its icon on the build menu's rail (see `glyphs.tsx`). */
+	readonly glyph: GlyphId;
+	readonly kinds: ReadonlyArray<BuildableKind>;
+}
+
+/**
+ * The build menu's categories and their buildings, in order. Only buildings a player has researched
+ * (or starts with) show, and the Source in a sandbox; a category with none of them hides.
+ */
+export const BUILD_CATEGORIES: ReadonlyArray<BuildCategory> = [
+	{ name: "Production", glyph: "drill", kinds: ["drill", "advancedDrill", "laserDrill"] },
+	{
+		name: "Distribution",
+		glyph: "router",
+		kinds: ["conveyor", "titaniumConveyor", "router", "sorter", "junction", "source"],
+	},
+	{ name: "Crafting", glyph: "graphitePress", kinds: ["graphitePress", "siliconSmelter"] },
+	{ name: "Turrets", glyph: "turret", kinds: ["turret", "autoTurret", "cannon", "swarmer", "ripple"] },
+	{ name: "Defense", glyph: "wall", kinds: ["wall", "titaniumWall", "mender"] },
 ];
+
+/** Every building a player can place, in build menu order. */
+export const BUILDABLE: ReadonlyArray<BuildableKind> = BUILD_CATEGORIES.reduce<Array<BuildableKind>>(
+	(all, { kinds }) => [...all, ...kinds],
+	[],
+);
 
 /** What every player can build before researching anything. */
 export const STARTING_BUILDINGS: ReadonlyArray<BuildableKind> = ["drill", "conveyor"];

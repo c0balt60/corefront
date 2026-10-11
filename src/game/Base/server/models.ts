@@ -374,11 +374,13 @@ export function buildingModel(
 		// Lit in the colour of the ore it lets through (see `setFilter`).
 		block(model, new Vector3(3, 0.8, 3), at(2.9), UNSORTED, Enum.Material.Neon).Name = "Light";
 	} else if (kind === "source") {
-		// Small, like a belt: a low plinth under a crystal on its point, lit like a sorter's (see `setFilter`).
+		// Small, like a belt: a low plinth under a crystal on its point, in its ore's colour (see `setFilter`).
+		// Not neon: neon washes pale ores like lead out to white.
 		body = block(model, new Vector3(4.5, 1.5, 4.5), at(0.75), DARK, Enum.Material.Metal);
 		block(model, new Vector3(4.7, 0.3, 4.7), at(1.2), GLOW, Enum.Material.Neon);
 		const tilt = CFrame.Angles(math.rad(45), 0, math.rad(45));
-		block(model, new Vector3(1.8, 1.8, 1.8), at(2.9).mul(tilt), UNSORTED, Enum.Material.Neon).Name = "Light";
+		block(model, new Vector3(1.8, 1.8, 1.8), at(2.9).mul(tilt), UNSORTED, Enum.Material.SmoothPlastic).Name =
+			"Light";
 	} else if (kind === "junction") {
 		body = block(model, new Vector3(6, 1.5, 6), at(0.75), METAL, Enum.Material.DiamondPlate);
 		block(model, new Vector3(6.2, 0.4, 1.4), at(1.6), GLOW, Enum.Material.Neon);

@@ -66,7 +66,7 @@ export const EFFECTS = {
 	background: ["scan", "grid"],
 	/** The brackets locked onto the selected planet. */
 	reticle: ["brackets"],
-	/** The in-mission HUD: core status, wave, cargo, toasts and the build bar's cards. */
+	/** The in-mission HUD: core status, wave, cargo, toasts and the build menu's tiles. */
 	hud: ["brackets", "decode"],
 	/** The research tree: energy round available nodes and pulses along the traces, and its glitching title. */
 	research: ["energy", "brackets", "decode", "glitch"],

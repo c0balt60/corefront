@@ -10,7 +10,7 @@ import { type ResourceId, RESOURCES, type ResourceStack } from "game/Base/shared
  * The tree draws itself from `requires`; new art goes in `glyphs.tsx` or `image`.
  */
 
-/** The pixel-art icons a node can use, drawn by the client (see `glyphs.tsx`). */
+/** The pixel-art icons a node or the build menu can use, drawn by the client (see `glyphs.tsx`). */
 export type GlyphId =
 	| "core"
 	| "lock"
@@ -20,6 +20,7 @@ export type GlyphId =
 	| "coils"
 	| "shield"
 	| "silo"
+	| "remove"
 	| "drill"
 	| "advancedDrill"
 	| "laserDrill"
@@ -29,7 +30,9 @@ export type GlyphId =
 	| "router"
 	| "sorter"
 	| "junction"
+	| "conveyor"
 	| "titaniumConveyor"
+	| "source"
 	| "wall"
 	| "titaniumWall"
 	| "plating"
