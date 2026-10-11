@@ -6,7 +6,13 @@ import { t } from "@rbxts/t";
 
 import { generateStarSystem, type Planet } from "core/Worlds/shared/star-system";
 import { ArrivalService } from "game/Arrival/server/ArrivalService";
-import { PlanetsMessage, planetsMessaging, type WorldState } from "game/Planets/shared/planets-network";
+import {
+	type LaunchPlan,
+	PlanetsMessage,
+	planetsMessaging,
+	type Travel,
+	type WorldState,
+} from "game/Planets/shared/planets-network";
 import type { PlanetMap } from "game/Terrain/server/planet-map";
 import { TerrainService } from "game/Terrain/server/TerrainService";
 
@@ -17,21 +23,25 @@ const SPAWN_RADIUS = 14;
 const SPAWN_HEIGHT = 5;
 
 /**
- * The world's campaign. One planet is active at a time: players may only
- * deploy there, and spawn and respawn at its landing. Winning it conquers it,
- * unlocks the next and recalls everyone to the star map; the next deploy picks
- * the new active planet. `CharacterAutoLoads` is off in this place (see
- * `places/game/.rogen.json`), so characters only ever come from here.
+ * The world's campaign. One planet is active at a time: the team is there, and
+ * players who haven't deployed yet may only deploy there. Characters spawn and
+ * respawn at its landing. Winning it conquers it and unlocks the next; the team
+ * stays until `TravelService` moves it. `CharacterAutoLoads` is off in this place
+ * (see `places/game/.rogen.json`), so characters only ever come from here.
  */
 @Service()
 export class PlanetsService implements OnStart {
-	/** The planet being played, or `undefined` while players choose the next. Only this service writes it. */
+	/** The planet the team is on. Only this service writes it. */
 	readonly activeAtom = atom<number>();
 	/** The active planet's map, once generated. Each new one is a fresh planet. */
 	readonly currentMap = computed(() => {
 		const map = this.terrainService.mapAtom();
 		return map && map.planet === this.activeAtom() ? map : undefined;
 	});
+	/** The team between planets. `TravelService` writes it. */
+	readonly travelAtom = atom<Travel>();
+	/** The launch waiting on ready-ups. `TravelService` writes it; `needed` is filled in here. */
+	readonly planAtom = atom<Omit<LaunchPlan, "needed">>();
 	private readonly unlocked = [0];
 	private readonly conquered = new Array<number>();
 	private readonly deployed = new Set<Player>();
@@ -64,48 +74,83 @@ export class PlanetsService implements OnStart {
 			}
 		});
 
-		Players.PlayerRemoving.Connect((player) => this.deployed.delete(player));
+		// Characters stand still, anchored, from lift-off until the core has landed.
+		subscribe(
+			() => this.travelAtom() !== undefined,
+			(travelling) => {
+				for (const player of this.deployed) if (player.Character) this.hold(player.Character, travelling);
+			},
+		);
+		subscribe(this.travelAtom, () => this.broadcast());
+		subscribe(this.planAtom, () => this.broadcast());
+
+		Players.PlayerRemoving.Connect((player) => {
+			this.deployed.delete(player);
+			this.broadcast();
+		});
 	}
 
 	/** A planet of this world's star system, once the world is known. */
 	getPlanet(index: number): Planet | undefined {
-		const world = this.arrivalService.getWorld();
-		return world && generateStarSystem(world.seed).planets[index];
+		return this.getPlanets()[index];
 	}
 
-	/** Marks the active planet conquered, unlocks the next one and sends everyone back to the star map. */
+	getPlanets(): ReadonlyArray<Planet> {
+		const world = this.arrivalService.getWorld();
+		return world ? generateStarSystem(world.seed).planets : [];
+	}
+
+	isConquered(planet: number): boolean {
+		return this.conquered.includes(planet);
+	}
+
+	getConquered(): ReadonlyArray<number> {
+		return this.conquered;
+	}
+
+	isUnlocked(planet: number): boolean {
+		return this.unlocked.includes(planet);
+	}
+
+	isDeployed(player: Player): boolean {
+		return this.deployed.has(player);
+	}
+
+	/** UserIds of everyone on the planet, who must all ready up for a launch. */
+	getDeployedIds(): Array<number> {
+		return [...this.deployed].map((player) => player.UserId);
+	}
+
+	/** Marks the active planet conquered and unlocks the next one. The team stays. */
 	conquer() {
 		const planet = this.activeAtom();
 		if (planet === undefined) return;
 		if (!this.conquered.includes(planet)) this.conquered.push(planet);
 		if (this.getPlanet(planet + 1) && !this.unlocked.includes(planet + 1)) this.unlocked.push(planet + 1);
-
-		// Forget them first, so a character dying as it is removed does not respawn.
-		const recalled = [...this.deployed];
-		this.deployed.clear();
-		for (const player of recalled) {
-			player.Character?.Destroy();
-			player.Character = undefined;
-		}
-		this.activeAtom(undefined);
 		this.broadcast();
-		if (!recalled.isEmpty()) planetsMessaging.client.emit(recalled, PlanetsMessage.Recall);
 		this.logger.Info("Planet {Planet} conquered", planet);
 	}
 
-	/** Gives every deployed player a fresh character at the landing. */
-	respawnAll() {
-		for (const player of this.deployed) task.spawn(() => this.spawn(player));
+	/** Makes `planet` the active one and (re)generates its terrain, even if it already was. Deployed players come along. */
+	activate(planet: number) {
+		this.activeAtom(planet);
+		// Deferred, so generation never runs inside a Charm callback or before every service has started.
+		task.defer(() => this.terrainService.generate(planet));
+		this.broadcast();
+		this.logger.Info("Planet {Planet} is now active", planet);
 	}
 
 	private getState(): WorldState | undefined {
 		const world = this.arrivalService.getWorld();
+		const plan = this.planAtom();
 		return (
 			world && {
 				...world,
 				unlocked: [...this.unlocked],
 				conquered: [...this.conquered],
 				active: this.activeAtom(),
+				travel: this.travelAtom(),
+				plan: plan && { ...plan, needed: this.getDeployedIds() },
 			}
 		);
 	}
@@ -115,23 +160,12 @@ export class PlanetsService implements OnStart {
 		if (state) planetsMessaging.client.emitAll(PlanetsMessage.State, state);
 	}
 
-	private activate(planet: number) {
-		this.activeAtom(planet);
-		// Deferred, so generation never runs inside a Charm callback or before every service has started.
-		task.defer(() => this.terrainService.generate(planet));
-		this.broadcast();
-		this.logger.Info("Planet {Planet} is now active", planet);
-	}
-
 	private deploy(player: Player, data: unknown) {
 		if (!this.arrivalService.isArrived(player) || this.deployed.has(player)) return;
-		if (!isDeployData(data) || !this.unlocked.includes(data.planet) || this.conquered.includes(data.planet)) return;
-
-		const active = this.activeAtom();
-		if (active === undefined) this.activate(data.planet);
-		else if (active !== data.planet) return;
+		if (!isDeployData(data) || data.planet !== this.activeAtom()) return;
 
 		this.deployed.add(player);
+		this.broadcast();
 		this.logger.Info("{Player} deployed to planet {Planet}", player.Name, data.planet);
 		task.spawn(() => this.spawn(player));
 	}
@@ -149,12 +183,18 @@ export class PlanetsService implements OnStart {
 		// LoadCharacter yields, and the map may have gone meanwhile. The new one re-pivots everyone.
 		const map = this.currentMap();
 		if (map) this.pivot(character, map);
+		if (this.travelAtom()) this.hold(character, true);
 
 		humanoid.Died.Connect(() => {
 			task.delay(Players.RespawnTime, () => {
 				if (player.Character === character && this.deployed.has(player)) this.spawn(player);
 			});
 		});
+	}
+
+	private hold(character: Model, held: boolean) {
+		const root = character.FindFirstChild("HumanoidRootPart");
+		if (root?.IsA("BasePart")) root.Anchored = held;
 	}
 
 	private pivot(character: Model, map: PlanetMap) {

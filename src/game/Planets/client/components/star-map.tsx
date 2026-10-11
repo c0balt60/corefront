@@ -24,6 +24,11 @@ const RETICLE_SCALE = 1.9;
 /** Bezier handles that bend a quarter-circle beam into a near-perfect arc, as a fraction of the radius. */
 const ARC_HANDLE = 0.5523;
 const ORBIT_COLOR = Color3.fromRGB(120, 120, 132);
+/** Points along a route beam, for the pulse running down it. A NumberSequence holds at most 20. */
+const ROUTE_POINTS = 16;
+/** Route lengths the pulse travels per second, and how far either side of it glows. */
+const ROUTE_SPEED = 0.5;
+const ROUTE_PULSE = 0.15;
 
 /** A planet `t` seconds after `EPOCH`: drifting slowly round its orbit while it spins. */
 function planetCFrame(planet: Planet, t: number) {
@@ -35,6 +40,21 @@ function planetCFrame(planet: Planet, t: number) {
 /** Where a planet is on the map right now. */
 export function planetPosition(planet: Planet) {
 	return planetCFrame(planet, os.clock() - EPOCH).Position;
+}
+
+/**
+ * A route beam's transparency: `opacity` all along, brighter round a pulse that
+ * runs from the start to the end every 1 / `ROUTE_SPEED` seconds.
+ */
+function routeTransparency(t: number, opacity: number, reveal: number) {
+	const head = (t * ROUTE_SPEED) % 1;
+	const keypoints = new Array<NumberSequenceKeypoint>();
+	for (let i = 0; i < ROUTE_POINTS; i++) {
+		const x = i / (ROUTE_POINTS - 1);
+		const pulse = math.max(0, 1 - math.abs(x - head) / ROUTE_PULSE);
+		keypoints.push(new NumberSequenceKeypoint(x, 1 - reveal * math.min(opacity + 0.5 * pulse, 1)));
+	}
+	return new NumberSequence(keypoints);
 }
 
 /** `size * scale`, never below a sliver, so a spring overshooting past zero cannot give a part a negative size. */
@@ -252,6 +272,10 @@ interface StarMapProps {
 	/** The planet under the cursor, if any. */
 	readonly hovered: () => number | undefined;
 	readonly onSelect: (planet: number) => void;
+	/** Planets the team can travel to from the active one, each drawn as a route. */
+	readonly routes?: () => ReadonlyArray<number>;
+	/** Whether the routes are retreats, which lose the base here: drawn red. */
+	readonly retreat?: () => boolean;
 	/**
 	 * Turns false to shrink and fade the map away. Return `$tuple(node, EXIT_TIME)`
 	 * from the Show that renders it, so it stays mounted while it does.
@@ -264,10 +288,20 @@ interface StarMapProps {
  * clickable label over each planet and a glowing ring along each orbit. The
  * planets pop in one after another and drift round the star, which pulses
  * inside a shimmering corona. The selected planet is outlined, its orbit lights
- * up and a reticle locks onto it, and the hovered one is outlined too. Renders
+ * up and a reticle locks onto it, and the hovered one is outlined too. A beam
+ * runs from the planet the team is on to each it can travel to, with a pulse
+ * flowing toward the destination; the selected route is brighter. Renders
  * nothing into the tree: everything it makes is destroyed with its scope.
  */
-export function StarMap({ world, selected, hovered, onSelect, show }: StarMapProps) {
+export function StarMap({
+	world,
+	selected,
+	hovered,
+	onSelect,
+	routes = () => [],
+	retreat = () => false,
+	show,
+}: StarMapProps) {
 	const { planets } = generateStarSystem(world().seed);
 
 	// Every drift, spin and pulse below is driven by this one source.
@@ -298,6 +332,10 @@ export function StarMap({ world, selected, hovered, onSelect, show }: StarMapPro
 				/>
 			) as Part,
 	);
+	// Route ends ride inside the planets, so the beams follow them round their orbits.
+	const ends = bodies.map((body) => (<attachment Name="RouteEnd" Parent={body} />) as Attachment);
+	const routeColor = (index: number) =>
+		retreat() ? COLORS.danger : selected() === index ? COLORS.accent : ORBIT_COLOR.Lerp(COLORS.text, 0.4);
 	const hoveredBody = () => {
 		const index = hovered();
 		return index !== undefined && index !== selected() ? bodies[index] : undefined;
@@ -360,6 +398,27 @@ export function StarMap({ world, selected, hovered, onSelect, show }: StarMapPro
 					))}
 				</part>
 				{bodies}
+				{planets.map((_, index) => (
+					<beam
+						Attachment0={() => ends[world().active ?? index]}
+						Attachment1={ends[index]}
+						Color={() => new ColorSequence(routeColor(index))}
+						Enabled={() => routes().includes(index)}
+						FaceCamera={true}
+						LightEmission={1}
+						Name="Route"
+						Segments={ROUTE_POINTS}
+						Transparency={() =>
+							routeTransparency(
+								now(),
+								selected() === index ? 0.55 : 0.2,
+								math.clamp(reveals[index](), 0, 1),
+							)
+						}
+						Width0={() => (selected() === index ? 0.6 : 0.3)}
+						Width1={() => (selected() === index ? 0.6 : 0.3)}
+					/>
+				))}
 				<highlight
 					Adornee={() => bodies[selected()]}
 					DepthMode={Enum.HighlightDepthMode.Occluded}

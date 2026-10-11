@@ -56,7 +56,7 @@ export const EFFECTS = {
 	field: ["energy", "brackets"],
 	/** Rows in the join list. */
 	row: ["energy", "brackets", "decode"],
-	/** Small tags: planet labels on the star map, the planet's status chip and the coin counter. */
+	/** Small tags: planet labels on the star map and the planet's status chip. */
 	chip: ["energy", "brackets", "scan", "decode"],
 	/** Headings, captions and values everywhere else. */
 	text: ["decode"],

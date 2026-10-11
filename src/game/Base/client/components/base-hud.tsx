@@ -17,8 +17,8 @@ const clamp01 = (value: number) => math.clamp(value, 0, 1);
 const TRAIL = { tension: 40, friction: 14 };
 /** Pixels between the HUD and the screen's edges. */
 const EDGE = 16;
-/** Just under core's coin counter, which takes the top 60 pixels of the middle. */
-const TOP = 72;
+/** Pixels between the top of the screen (below Roblox's topbar) and the Core's readout. */
+const TOP = EDGE;
 
 /** `seconds` as m:ss, never below 0:00. */
 function clock(seconds: number) {
@@ -35,6 +35,9 @@ interface LabelProps {
 	readonly anchorPoint?: Vector2;
 	readonly position?: UDim2;
 	readonly size: UDim2;
+	readonly layoutOrder?: number;
+	/** Wraps onto more lines instead of cutting off. */
+	readonly wrapped?: boolean;
 }
 
 /** One line of HUD text at a fixed pixel size. Muted label type unless told otherwise. */
@@ -47,18 +50,22 @@ export function Label({
 	anchorPoint,
 	position,
 	size,
+	layoutOrder,
+	wrapped = false,
 }: LabelProps) {
 	return (
 		<textlabel
 			AnchorPoint={anchorPoint}
 			BackgroundTransparency={1}
 			FontFace={font}
+			LayoutOrder={layoutOrder}
 			Position={position}
 			Size={size}
 			Text={text}
 			TextColor3={color}
 			TextSize={textSize}
 			TextTruncate={Enum.TextTruncate.AtEnd}
+			TextWrapped={wrapped}
 			TextXAlignment={alignX}
 		/>
 	);
@@ -76,7 +83,7 @@ interface HudBoxProps {
  * A dark, square-cornered readout with a thin mitred outline and a drop shadow.
  * Its corner brackets snap on as it mounts. Children go inside its padding.
  */
-function HudBox({ name, anchorPoint, position, size, children }: HudBoxProps) {
+export function HudBox({ name, anchorPoint, position, size, children }: HudBoxProps) {
 	const [snap, snapSpring] = useSpring(1.8, SPRINGS.bouncy);
 	snapSpring.setGoal(0);
 
@@ -134,7 +141,7 @@ interface MissionProps {
 }
 
 /**
- * The Core, top centre under the coin counter: its health as a bar that springs
+ * The Core, top centre: its health as a bar that springs
  * to each new value, green to red as it falls, with a pale trail that drains
  * after it on every hit. Under it, a swatch and count for each resource the core
  * holds. Drops in from the top.
@@ -242,8 +249,10 @@ export function WavePanel({ state, show, onCallWave }: WavePanelProps) {
 	const slide = useAppear(show, 0.1);
 	const now = useServerTime();
 	const status = () => {
-		const { phase, nextWaveAt, aliens, wave, waves } = state();
+		const { phase, nextWaveAt, aliens, wave, waves, liberated } = state();
 		if (phase === "generating") return "GENERATING TERRAIN...";
+		if (phase === "travelling") return "IN TRANSIT";
+		if (liberated) return "PLANET LIBERATED";
 		if (nextWaveAt > 0) return `NEXT WAVE IN ${clock(nextWaveAt - now())}`;
 		if (aliens > 0) return "ALIENS ATTACKING";
 		return wave >= waves ? "FINAL WAVE" : "STANDING BY";

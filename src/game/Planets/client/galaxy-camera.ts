@@ -1,11 +1,12 @@
 import { createSpring } from "@rbxts/ripple";
-import { Players, RunService, UserInputService } from "@rbxts/services";
+import { Players, RunService, UserInputService, Workspace } from "@rbxts/services";
 
 import { generateStarSystem, type Planet } from "core/Worlds/shared/star-system";
 import { ORIGIN, planetPosition } from "game/Planets/client/components/star-map";
 import { hoveredPlanetAtom, selectedPlanetAtom, worldStateAtom } from "game/Planets/client/planets-state";
 
-const CAMERA_STEP = "GalaxyCamera";
+/** The render step that drives the camera while the game owns it: the star map, its flights and the travel cutscene. */
+export const CAMERA_STEP = "SceneCamera";
 /** Slow, for flying the thousand studs between the ground and the map. */
 const FLIGHT_SPRING = { tension: 45, friction: 14 };
 /** Quicker, once the camera has reached the map, so dragging feels direct but never jerky. */
@@ -127,7 +128,9 @@ export function focusPlanet(index: number) {
 }
 
 /** The planet drawn under `point` (screen pixels, like `InputObject.Position`), forgiving by `PICK_PADDING`. */
-function pick(camera: Camera, point: Vector2) {
+function pick(point: Vector2) {
+	const camera = Workspace.CurrentCamera;
+	if (!camera) return undefined;
 	const halfFov = math.rad(camera.FieldOfView / 2);
 	let picked: number | undefined;
 	let nearest = math.huge;
@@ -155,7 +158,7 @@ const flat = (vector: Vector3) => new Vector2(vector.X, vector.Y);
  * Touch: one finger rotates, two pan and pinch, a tap picks. Keys: WASD or the
  * arrows pan, Q and E rotate, R resets. Returns a function that unbinds them.
  */
-function bindControls(camera: Camera) {
+function bindControls() {
 	const connections = new Array<RBXScriptConnection>();
 	// The mouse button held down, how far the mouse has moved since, and where it was last.
 	let button: Enum.UserInputType | undefined;
@@ -204,7 +207,7 @@ function bindControls(camera: Camera) {
 					if (button === Enum.UserInputType.MouseButton3) dragPan(delta);
 					else rotate(delta);
 				} else {
-					hoveredPlanetAtom(processed ? undefined : pick(camera, position));
+					hoveredPlanetAtom(processed ? undefined : pick(position));
 				}
 			} else if (kind === Enum.UserInputType.MouseWheel && !processed) {
 				zoom(ZOOM_STEP ** input.Position.Z);
@@ -236,14 +239,14 @@ function bindControls(camera: Camera) {
 
 			if (kind === button) {
 				if (kind === Enum.UserInputType.MouseButton1 && travelled <= CLICK_SLOP) {
-					const picked = pick(camera, flat(input.Position));
+					const picked = pick(flat(input.Position));
 					if (picked !== undefined) focusPlanet(picked);
 				}
 				button = undefined;
 			} else if (kind === Enum.UserInputType.Touch && touches.has(input)) {
 				touches.delete(input);
 				if (touches.size() === 0 && swiped <= CLICK_SLOP) {
-					const picked = pick(camera, flat(input.Position));
+					const picked = pick(flat(input.Position));
 					if (picked !== undefined) focusPlanet(picked);
 				}
 			}
@@ -266,24 +269,28 @@ function steerKeys(dt: number) {
 	if (right !== 0 || forward !== 0) pan(right * KEY_PAN * distance * dt, forward * KEY_PAN * distance * dt);
 	yaw += (held(Enum.KeyCode.Q) - held(Enum.KeyCode.E)) * KEY_ROTATE * dt;
 }
-
 /**
  * Takes the camera over and flies it from wherever it is to the star map, then
  * hands the player the controls. Returns a function that gives the controls
- * back and flies the camera down behind the character once it spawns.
+ * back and flies the camera down behind the character.
+ *
+ * It drives whichever camera is `Workspace.CurrentCamera` each frame, never one
+ * it held on to, so a camera Roblox swaps in is driven too, never left behind.
  */
-export function enterGalaxy(camera: Camera) {
+export function enterGalaxy() {
 	reset();
-	camera.CameraType = Enum.CameraType.Scriptable;
 	cameraSpring.configure(FLIGHT_SPRING);
-	cameraSpring.setPosition(camera.CFrame);
+	cameraSpring.setPosition(Workspace.CurrentCamera?.CFrame ?? new CFrame());
 	cameraSpring.halt();
 
-	const unbind = bindControls(camera);
+	const unbind = bindControls();
 	let arrived = false;
 
 	RunService.UnbindFromRenderStep(CAMERA_STEP);
 	RunService.BindToRenderStep(CAMERA_STEP, Enum.RenderPriority.Camera.Value + 1, (dt) => {
+		const camera = Workspace.CurrentCamera;
+		if (!camera) return;
+		camera.CameraType = Enum.CameraType.Scriptable;
 		steerKeys(dt);
 		const goal = orbitPose();
 		cameraSpring.setGoal(goal);
@@ -297,7 +304,7 @@ export function enterGalaxy(camera: Camera) {
 
 	return () => {
 		unbind();
-		leaveGalaxy(camera);
+		followCharacter();
 	};
 }
 
@@ -310,13 +317,23 @@ function followPose() {
 	return CFrame.lookAt(centre.sub(root.CFrame.LookVector.mul(FOLLOW_DISTANCE)), centre);
 }
 
-/** Flies the camera down behind the character, then hands it back to Roblox once there or after `FOLLOW_SECONDS`. */
-function leaveGalaxy(camera: Camera) {
+/**
+ * Flies the camera from wherever it is down behind the character, then hands it
+ * back to Roblox, pointed at the character's Humanoid, once there or after
+ * `FOLLOW_SECONDS`. Taking the camera over again (`enterGalaxy`, a cutscene)
+ * replaces this flight.
+ */
+export function followCharacter() {
 	const startedAt = os.clock();
 	cameraSpring.configure(FLIGHT_SPRING);
+	cameraSpring.setPosition(Workspace.CurrentCamera?.CFrame ?? new CFrame());
+	cameraSpring.halt();
 
 	RunService.UnbindFromRenderStep(CAMERA_STEP);
 	RunService.BindToRenderStep(CAMERA_STEP, Enum.RenderPriority.Camera.Value + 1, (dt) => {
+		const camera = Workspace.CurrentCamera;
+		if (!camera) return;
+		camera.CameraType = Enum.CameraType.Scriptable;
 		const goal = followPose();
 		if (goal) {
 			cameraSpring.setGoal(goal);
@@ -326,6 +343,9 @@ function leaveGalaxy(camera: Camera) {
 		const arrived = goal !== undefined && camera.CFrame.Position.sub(goal.Position).Magnitude < 0.5;
 		if (arrived || os.clock() - startedAt > FOLLOW_SECONDS) {
 			RunService.UnbindFromRenderStep(CAMERA_STEP);
+			// Custom only follows its subject, and a subject left from an old character would leave it hanging.
+			const humanoid = Players.LocalPlayer.Character?.FindFirstChildOfClass("Humanoid");
+			if (humanoid) camera.CameraSubject = humanoid;
 			camera.CameraType = Enum.CameraType.Custom;
 		}
 	});

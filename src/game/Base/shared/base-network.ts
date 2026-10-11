@@ -18,17 +18,20 @@ export const enum BaseMessage {
 }
 
 /**
- * - `idle`: no planet is active (players are choosing one).
+ * - `idle`: no planet is active yet.
  * - `generating`: the active planet's terrain is being written.
- * - `active`: the mission is on. Aliens are attacking when `aliens > 0`.
- * - `won` / `lost`: the result banner, until players are recalled or the planet resets.
+ * - `active`: the base is running. Aliens are attacking when `aliens > 0`; a liberated planet has none.
+ * - `won` / `lost`: the result banner. A win goes back to `active`, liberated; a loss retreats the team.
+ * - `travelling`: the core is launching, in transit or landing. Nothing can be built and the aliens wait.
  */
-export type Phase = "idle" | "generating" | "active" | "won" | "lost";
+export type Phase = "idle" | "generating" | "active" | "won" | "lost" | "travelling";
 
 export interface BaseState {
 	readonly phase: Phase;
 	/** Index into `generateStarSystem(seed).planets`, or -1 while idle. */
 	readonly planet: number;
+	/** Whether the active planet is liberated: no waves, just the base. */
+	readonly liberated: boolean;
 	/** Waves launched so far, and how many the planet has. */
 	readonly wave: number;
 	readonly waves: number;

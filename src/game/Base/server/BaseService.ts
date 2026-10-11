@@ -2,12 +2,12 @@ import { OnStart, Service } from "@flamework/core";
 import { atom, computed } from "@rbxts/charm";
 import { Cmdr } from "@rbxts/cmdr";
 import type { Logger } from "@rbxts/log";
-import { CollectionService, Players, Workspace } from "@rbxts/services";
+import { CollectionService, Players, StarterPack, Workspace } from "@rbxts/services";
 import { t } from "@rbxts/t";
 
 import { buildingModel, setHealth } from "game/Base/server/models";
 import { BaseMessage, baseMessaging, type Phase } from "game/Base/shared/base-network";
-import { BUILD_RANGE, BUILDINGS, type BuildingKind, REFUND } from "game/Base/shared/buildings";
+import { BUILD_RANGE, BUILD_TOOL, BUILDINGS, type BuildingKind, REFUND } from "game/Base/shared/buildings";
 import {
 	INVENTORY_CAPACITY,
 	KIND_ORES,
@@ -31,6 +31,8 @@ export interface Building {
 	readonly cell: number;
 	/** The body's centre: what range checks and shots use. */
 	readonly position: Vector3;
+	/** Quarter turns, 0-3. */
+	readonly rotation: number;
 	health: number;
 	/** Drills: what they mine. */
 	readonly resource?: ResourceId;
@@ -40,6 +42,14 @@ export interface Building {
 	readonly head?: BasePart;
 }
 
+/** A liberated planet's base while the team is away: everything but the Core, which left with them. */
+interface SavedBase {
+	readonly buildings: ReadonlyArray<Pick<Building, "kind" | "cell" | "rotation" | "health" | "stored">>;
+	/** What stayed in storage: whatever wasn't loaded as cargo or burnt as fuel. */
+	readonly pool: Stock;
+}
+
+/** The pool of a fresh start, with nothing saved and no cargo coming. */
 const START_POOL: Stock = { copper: 40, lead: 20 };
 const MINE_AMOUNT = 3;
 const MINE_SECONDS = 0.8;
@@ -49,6 +59,8 @@ const DRILL_CAPACITY = 30;
 const SPAWN_CLEARANCE = 3;
 /** Most height difference across a footprint, in studs. */
 const MAX_SLOPE = 6;
+/** How far a foundation's top stands above the highest ground under it, so it never shares a plane with the terrain. */
+const GROUND_CLEARANCE = 0.5;
 const FULL = "Your pack is full. Deposit at the Core.";
 
 const isPlaceData = t.interface({
@@ -97,10 +109,11 @@ export class BaseService implements OnStart {
 	/** The Core's pool: this planet's resources, zeros included. Only this service writes it. */
 	readonly poolAtom = atom<Stock>({});
 	readonly coreHealthAtom = atom(0);
-	/** How the mission on the active planet ended, until the next reset. */
+	/** How the mission on the active planet ended, while its banner shows. `WaveService` clears it. */
 	readonly resultAtom = atom<"won" | "lost">();
 	readonly phase = computed((): Phase => {
 		if (this.planetsService.activeAtom() === undefined) return "idle";
+		if (this.planetsService.travelAtom()) return "travelling";
 		if (!this.planetsService.currentMap()) return "generating";
 		return this.resultAtom() ?? "active";
 	});
@@ -121,6 +134,10 @@ export class BaseService implements OnStart {
 	private readonly minePrompts = new Map<number, ProximityPrompt>();
 	private spawnCells = new Array<readonly [number, number]>();
 	private readonly inventories = new Map<Player, Stock>();
+	/** Liberated planets' bases, while the team is elsewhere. */
+	private readonly saved = new Map<number, SavedBase>();
+	/** The cargo on its way, and where to. */
+	private arrival?: { readonly planet: number; readonly cargo: Stock };
 
 	constructor(
 		private readonly logger: Logger,
@@ -130,6 +147,14 @@ export class BaseService implements OnStart {
 	onStart() {
 		baseMessaging.server.on(BaseMessage.Place, (player, data) => this.place(player, data));
 		baseMessaging.server.on(BaseMessage.Remove, (player, data) => this.remove(player, data));
+
+		// No handle: it only tells the client to show the build bar.
+		const tool = new Instance("Tool");
+		tool.Name = BUILD_TOOL;
+		tool.RequiresHandle = false;
+		tool.CanBeDropped = false;
+		tool.ToolTip = "Build and remove";
+		tool.Parent = StarterPack;
 
 		// What a player carries is lost when they die.
 		const watch = (player: Player) =>
@@ -152,9 +177,10 @@ export class BaseService implements OnStart {
 	}
 
 	/**
-	 * Clears the base and, given a map, starts a fresh one on it: a new Core at
-	 * the landing, the starting pool and Mine prompts on every ore. Everyone's
-	 * inventory is emptied either way.
+	 * Clears the base and, given a map, starts one on it: a Core at the landing
+	 * and Mine prompts on every ore, plus the planet's saved base if it has one.
+	 * The pool is what was saved plus any cargo landing here; with neither, the
+	 * starting pool. Everyone's inventory is emptied either way.
 	 */
 	reset(map: PlanetMap | undefined) {
 		for (const building of this.buildings) building.model.Destroy();
@@ -176,8 +202,16 @@ export class BaseService implements OnStart {
 			return;
 		}
 
+		const saved = this.saved.get(map.planet);
+		this.saved.delete(map.planet);
+		const arrival = this.arrival?.planet === map.planet ? this.arrival : undefined;
+		this.arrival = undefined;
 		const pool: Stock = {};
-		for (const { resource } of KIND_ORES[map.kind]) pool[resource] = START_POOL[resource] ?? 0;
+		for (const { resource } of KIND_ORES[map.kind]) pool[resource] = 0;
+		const sources = saved || arrival ? [saved?.pool ?? {}, arrival?.cargo ?? {}] : [START_POOL];
+		for (const stock of sources) {
+			for (const [resource, amount] of pairs(stock)) pool[resource] = (pool[resource] ?? 0) + amount;
+		}
 		this.poolAtom(pool);
 
 		this.spawnCells = [];
@@ -199,6 +233,44 @@ export class BaseService implements OnStart {
 		const corner = cellAt(map.landing.X - CELL_STUDS / 2, map.landing.Z - CELL_STUDS / 2);
 		if (corner !== undefined) this.core = this.build(map, "core", corner, 0);
 		this.coreHealthAtom(BUILDINGS.core.health);
+
+		for (const old of saved?.buildings ?? []) {
+			const building = this.build(map, old.kind, old.cell, old.rotation);
+			building.health = old.health;
+			building.stored = old.stored;
+			setHealth(building.model, old.health, BUILDINGS[old.kind].health);
+			if (building.resource !== undefined) building.model.SetAttribute("Stored", old.stored);
+		}
+	}
+
+	/** Keeps the active planet's base, all but the Core, for when the team comes back to `planet`. */
+	save(planet: number) {
+		const buildings = new Array<SavedBase["buildings"][number]>();
+		for (const { kind, cell, rotation, health, stored } of this.buildings) {
+			if (kind !== "core") buildings.push({ kind, cell, rotation, health, stored });
+		}
+		this.saved.set(planet, { buildings, pool: { ...this.poolAtom() } });
+	}
+
+	/** Cargo to add to the pool when `planet`'s base next starts. */
+	expect(planet: number, cargo: ReadonlyArray<ResourceStack>) {
+		const stock: Stock = {};
+		for (const { resource, amount } of cargo) stock[resource] = (stock[resource] ?? 0) + amount;
+		this.arrival = { planet, cargo: stock };
+	}
+
+	/** Whether the pool holds every stack, counting repeats of a resource together. */
+	canSpend(stacks: ReadonlyArray<ResourceStack>): boolean {
+		const need: Stock = {};
+		for (const { resource, amount } of stacks) need[resource] = (need[resource] ?? 0) + amount;
+		const pool = this.poolAtom();
+		for (const [resource, amount] of pairs(need)) if ((pool[resource] ?? 0) < amount) return false;
+		return true;
+	}
+
+	/** Takes the stacks out of the pool. Check `canSpend` first. */
+	spend(stacks: ReadonlyArray<ResourceStack>) {
+		this.pay(stacks, -1);
 	}
 
 	/** Ends the mission on the active planet; `WaveService` shows the result, then moves on. False when none is running. */
@@ -299,10 +371,22 @@ export class BaseService implements OnStart {
 	private remove(player: Player, data: unknown) {
 		if (!isRemoveData(data)) return;
 		const refuse = (text: string) => this.notify(player, text);
-		if (this.phase() !== "active") return refuse("You can't remove buildings right now.");
+		const map = this.map;
+		if (!map || this.phase() !== "active") return refuse("You can't remove anything right now.");
 		const onMap = data.x >= 0 && data.z >= 0 && data.x < GRID_SIZE && data.z < GRID_SIZE;
-		const building = onMap ? this.cells.get(cellIndex(data.x, data.z)) : undefined;
-		if (!building) return refuse("There's nothing to remove there.");
+		if (!onMap) return refuse("There's nothing to remove there.");
+		const cell = cellIndex(data.x, data.z);
+		const building = this.cells.get(cell);
+		if (!building) {
+			// No building: clear the trees and rocks on the cell instead.
+			const center = cellCenter(cell);
+			if (!this.inReach(player, center)) return refuse("That's too far away to clear.");
+			const [low, high] = map.groundRange(cell, 1);
+			if (this.clearProps(map, new Vector3(center.X, high, center.Z), CELL_STUDS, low) === 0) {
+				refuse("There's nothing to remove there.");
+			}
+			return;
+		}
 		if (building.kind === "core") return refuse("The Core can't be removed.");
 		if (!this.inReach(player, building.position)) return refuse("That's too far away to remove.");
 
@@ -316,7 +400,7 @@ export class BaseService implements OnStart {
 		const [low, high] = map.groundRange(cell, def.size);
 		const center = cellCenter(cell, def.size);
 		const ore = kind === "drill" ? this.ores.get(cell) : undefined;
-		const top = new Vector3(center.X, high, center.Z);
+		const top = new Vector3(center.X, high + GROUND_CLEARANCE, center.Z);
 		const [model, head] = buildingModel(kind, top, low - 2, rotation, ore && RESOURCES[ore.resource].color);
 		const body = model.PrimaryPart!;
 		model.SetAttribute("Kind", kind);
@@ -331,6 +415,7 @@ export class BaseService implements OnStart {
 			model,
 			cell,
 			position: body.Position,
+			rotation,
 			health: def.health,
 			resource: ore?.resource,
 			stored: 0,
@@ -364,18 +449,26 @@ export class BaseService implements OnStart {
 		this.revision++;
 	}
 
-	/** Destroys the trees and rocks a new building stands on. Ore stays: it is the deposit itself. */
-	private clearProps(map: PlanetMap, top: Vector3, width: number, low: number) {
+	/**
+	 * Destroys the trees and rocks touching a `width`-wide square from `low` up past `top`: under a new
+	 * building, or cleared with the remove tool. Ore stays: it is the deposit itself. Returns how many went.
+	 */
+	private clearProps(map: PlanetMap, top: Vector3, width: number, low: number): number {
 		const params = new OverlapParams();
 		params.FilterType = Enum.RaycastFilterType.Include;
 		params.FilterDescendantsInstances = [map.props];
 		const height = top.Y - low + 42;
 		const box = new CFrame(top.X, low - 2 + height / 2, top.Z);
+		let cleared = 0;
 		for (const part of Workspace.GetPartBoundsInBox(box, new Vector3(width - 0.5, height, width - 0.5), params)) {
 			const model = part.FindFirstAncestorOfClass("Model");
 			const prop = model && model.IsDescendantOf(map.props) ? model : part;
-			if (prop.IsDescendantOf(map.props) && !CollectionService.HasTag(prop, "Ore")) prop.Destroy();
+			// A model already destroyed through another of its parts is no longer under the props.
+			if (!prop.IsDescendantOf(map.props) || CollectionService.HasTag(prop, "Ore")) continue;
+			prop.Destroy();
+			cleared++;
 		}
+		return cleared;
 	}
 
 	private mine(player: Player, resource: ResourceId) {

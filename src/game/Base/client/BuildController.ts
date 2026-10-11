@@ -1,29 +1,21 @@
 import { Controller, OnStart } from "@flamework/core";
 import { computed, effect, untracked } from "@rbxts/charm";
-import { CollectionService, Players, RunService, UserInputService, Workspace } from "@rbxts/services";
+import { CollectionService, RunService, UserInputService, Workspace } from "@rbxts/services";
 
 import { CharacterController } from "core/Character/client/CharacterController";
 import { COLORS } from "core/Interface/client/theme";
-import { baseStateAtom, type BuildMode, buildModeAtom, canAfford, toggleBuildMode } from "game/Base/client/base-state";
+import {
+	baseStateAtom,
+	type BuildMode,
+	buildModeAtom,
+	canAfford,
+	equippedAtom,
+	toggleBuildMode,
+} from "game/Base/client/base-state";
 import { BaseMessage, baseMessaging } from "game/Base/shared/base-network";
-import { BUILD_RANGE, BUILDABLE, BUILDINGS, type BuildingKind } from "game/Base/shared/buildings";
+import { BUILD_RANGE, BUILD_TOOL, BUILDINGS, type BuildingKind } from "game/Base/shared/buildings";
 import { deployedAtom } from "game/Planets/client/planets-state";
 import { CELL_STUDS, cellAt, cellCenter, cellCoords, GRID_SIZE } from "game/Terrain/shared/map";
-
-/** The number keys, so the build bar's nth card is key n. */
-const NUMBER_KEYS = [
-	Enum.KeyCode.One,
-	Enum.KeyCode.Two,
-	Enum.KeyCode.Three,
-	Enum.KeyCode.Four,
-	Enum.KeyCode.Five,
-	Enum.KeyCode.Six,
-	Enum.KeyCode.Seven,
-	Enum.KeyCode.Eight,
-	Enum.KeyCode.Nine,
-];
-const MODE_KEYS = new Map<Enum.KeyCode, BuildMode>([[Enum.KeyCode.X, "remove"]]);
-BUILDABLE.forEach((kind, index) => MODE_KEYS.set(NUMBER_KEYS[index], kind));
 
 const RAY_LENGTH = 1000;
 /** How far above and below a cell's centre to look for the ground under it. */
@@ -71,27 +63,27 @@ function ghostPart(parent: Instance, size: Vector3, shape: Enum.PartType = Enum.
 }
 
 /**
- * Building and removing, while the local player is on a planet with the mission
- * on. 1-3 (or a build bar card) pick a building and X the remove tool; picking
- * the same again, Q or Esc puts it down. A building shows as a ghost on the cell
- * under the mouse, green where the server should accept it and red where it
- * won't; R turns it and a click asks the server to build it. The remove tool
- * outlines the building under the mouse in red and a click asks to remove it.
- * While either is out, tools stay unequipped so clicks don't also fire the
- * Blaster; putting it down draws again whatever was drawn before.
+ * Building and removing, while the local player has the Build tool out on a
+ * planet with the base running. A build bar card picks a building, or F the
+ * remove tool; picking the same again puts it down, and so does putting the
+ * Build tool away. A building shows as a ghost on the cell under the mouse,
+ * green where the server should accept it and red where it won't; R turns it
+ * and a click asks the server to build it. The remove tool outlines the
+ * building under the mouse in red, or else the tree or rock, and a click asks
+ * to remove it.
  */
 @Controller()
 export class BuildController implements OnStart {
 	/** Quarter turns, kept between buildings. Cosmetic until the server's models face their rotation. */
 	private rotation = 0;
-	/** The tool building put away, to draw again when building is put down. */
-	private drawn: Tool | undefined;
 
 	constructor(private readonly characterController: CharacterController) {}
 
 	onStart() {
 		// ponytail: keyboard and mouse only; touch needs on-screen place, rotate and cancel buttons and a tap to aim.
-		const enabled = computed(() => deployedAtom() && baseStateAtom()?.phase === "active");
+		const enabled = computed(
+			() => deployedAtom() && baseStateAtom()?.phase === "active" && equippedAtom()?.Name === BUILD_TOOL,
+		);
 		effect(() => {
 			if (!enabled()) buildModeAtom(undefined);
 		});
@@ -101,15 +93,10 @@ export class BuildController implements OnStart {
 			return untracked(() => this.run(mode));
 		});
 
-		UserInputService.InputBegan.Connect((input) => {
-			// Not `processed`: Roblox's hotbar may claim the number keys too, and Esc both opens the menu and cancels.
-			if (!enabled() || UserInputService.GetFocusedTextBox()) return;
-			const key = input.KeyCode;
-			const mode = MODE_KEYS.get(key);
-
-			if (mode !== undefined) toggleBuildMode(mode);
-			else if (key === Enum.KeyCode.Q || key === Enum.KeyCode.Escape) buildModeAtom(undefined);
-			else if (key === Enum.KeyCode.R) this.rotation = (this.rotation + 1) % 4;
+		UserInputService.InputBegan.Connect((input, processed) => {
+			if (processed || !enabled() || UserInputService.GetFocusedTextBox()) return;
+			if (input.KeyCode === Enum.KeyCode.F) toggleBuildMode("remove");
+			else if (input.KeyCode === Enum.KeyCode.R) this.rotation = (this.rotation + 1) % 4;
 		});
 	}
 
@@ -145,17 +132,8 @@ export class BuildController implements OnStart {
 		// The cell a click acts on: the ghost's -X/-Z corner, or the outlined building's.
 		let target: [x: number, z: number] | undefined;
 
-		// Clicks belong to building now. Remember what was drawn, to draw it again once building is put down.
-		const rig = this.characterController.getRig();
-		this.drawn = rig?.FindFirstChildOfClass("Tool") ?? this.drawn;
-		rig?.Humanoid.UnequipTools();
-
 		const frame = RunService.RenderStepped.Connect(() => {
 			target = undefined;
-			// Roblox's hotbar draws the tool in its slot when 1-3 is pressed, maybe just after this mode began.
-			const current = this.characterController.getRig();
-			if (current?.FindFirstChildOfClass("Tool")) current.Humanoid.UnequipTools();
-
 			const camera = Workspace.CurrentCamera;
 			if (!camera) return;
 			const mouse = UserInputService.GetMouseLocation();
@@ -163,15 +141,31 @@ export class BuildController implements OnStart {
 
 			if (!def || !ghost) {
 				const buildings = Workspace.FindFirstChild("Base")?.FindFirstChild("Buildings");
-				solid.FilterDescendantsInstances = buildings ? [Workspace.Terrain, buildings] : [Workspace.Terrain];
+				const props = Workspace.FindFirstChild("PlanetProps");
+				const filter: Array<Instance> = [Workspace.Terrain];
+				if (buildings) filter.push(buildings);
+				if (props) filter.push(props);
+				solid.FilterDescendantsInstances = filter;
 				const hit = Workspace.Raycast(ray.Origin, ray.Direction.mul(RAY_LENGTH), solid);
 				// Just inside whatever was hit, so a building's side counts as its own cell, not its neighbour's.
-				const model = hit ? buildingAt(hit.Position.sub(hit.Normal.mul(0.5))) : undefined;
+				const inside = hit?.Position.sub(hit.Normal.mul(0.5));
+				const model = inside && buildingAt(inside);
 				const corner = model?.GetAttribute("Cell");
 
-				if (model && typeIs(corner, "number") && model.GetAttribute("Kind") !== "core") {
-					highlight.Adornee = model;
-					target = cellCoords(corner);
+				if (model) {
+					if (typeIs(corner, "number") && model.GetAttribute("Kind") !== "core") {
+						highlight.Adornee = model;
+						target = cellCoords(corner);
+					}
+				} else if (hit && inside && props && hit.Instance.IsDescendantOf(props)) {
+					// No building there: a tree or rock is cleared instead, the whole of it, like the server does.
+					const parent = hit.Instance.FindFirstAncestorOfClass("Model");
+					const prop = parent && parent.IsDescendantOf(props) ? parent : hit.Instance;
+					const cell = cellAt(inside.X, inside.Z);
+					if (cell !== undefined && !CollectionService.HasTag(prop, "Ore")) {
+						highlight.Adornee = prop;
+						target = cellCoords(cell);
+					}
 				}
 				highlight.Enabled = target !== undefined;
 				return;
@@ -236,15 +230,6 @@ export class BuildController implements OnStart {
 			frame.Disconnect();
 			click.Disconnect();
 			folder.Destroy();
-			// Switching to another building keeps the tool away. Putting building down draws it again, if it's
-			// still in this character's backpack: a new character has a new backpack.
-			if (buildModeAtom() !== undefined) return;
-			const tool = this.drawn;
-			const humanoid = this.characterController.getRig()?.Humanoid;
-			this.drawn = undefined;
-			if (tool && humanoid && tool.Parent === Players.LocalPlayer.FindFirstChild("Backpack")) {
-				humanoid.EquipTool(tool);
-			}
 		};
 	}
 }

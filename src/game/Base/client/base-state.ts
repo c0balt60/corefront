@@ -1,4 +1,5 @@
 import { atom } from "@rbxts/charm";
+import { Players } from "@rbxts/services";
 
 import type { BaseState } from "game/Base/shared/base-network";
 import type { BuildableKind } from "game/Base/shared/buildings";
@@ -29,6 +30,18 @@ export const NOTICE_SECONDS = 4;
 export const noticesAtom = atom<ReadonlyArray<Notice>>([]);
 
 export const buildModeAtom = atom<BuildMode>();
+
+/** The local character's tools in hotbar order, wherever they are (backpack or hand), and the one it has out. */
+export const toolsAtom = atom<ReadonlyArray<Tool>>([]);
+export const equippedAtom = atom<Tool>();
+
+/** Draws `tool`, or puts it away when it's already out. */
+export function toggleTool(tool: Tool) {
+	const humanoid = Players.LocalPlayer.Character?.FindFirstChildOfClass("Humanoid");
+	if (!humanoid) return;
+	if (equippedAtom() === tool) humanoid.UnequipTools();
+	else humanoid.EquipTool(tool);
+}
 
 /** Picks `mode`, or puts it down when it is already picked. */
 export function toggleBuildMode(mode: BuildMode) {

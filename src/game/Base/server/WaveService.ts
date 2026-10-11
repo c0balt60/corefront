@@ -11,6 +11,7 @@ import { BaseMessage, baseMessaging, type BaseState } from "game/Base/shared/bas
 import { BUILDINGS } from "game/Base/shared/buildings";
 import { RESOURCE_ORDER } from "game/Base/shared/resources";
 import { PlanetsService } from "game/Planets/server/PlanetsService";
+import { TravelService } from "game/Planets/server/TravelService";
 import type { PlanetMap } from "game/Terrain/server/planet-map";
 import { CELL_STUDS, cellAt, cellCenter, GRID_SIZE } from "game/Terrain/shared/map";
 
@@ -117,11 +118,13 @@ function livePlayers(): Array<[Vector3, Humanoid]> {
 /**
  * Runs the defend mission on the active planet: starts a fresh base for each
  * new map, launches the waves, moves and fights the aliens along a flowfield,
- * fires the turrets, and turns the result into a conquest or a reset. It also
+ * fires the turrets, and turns the result into a conquest or a retreat. A
+ * liberated planet has no waves: the base just runs. It also
  * owns `BaseState`, which it sends to everyone as it changes.
  */
 @Service()
 export class WaveService implements OnStart {
+	private readonly liberated = atom(false);
 	private readonly wave = atom(0);
 	private readonly waves = atom(0);
 	private readonly nextWaveAt = atom(0);
@@ -131,6 +134,7 @@ export class WaveService implements OnStart {
 		return {
 			phase: this.baseService.phase(),
 			planet: this.planetsService.activeAtom() ?? -1,
+			liberated: this.liberated(),
 			wave: this.wave(),
 			waves: this.waves(),
 			nextWaveAt: this.nextWaveAt(),
@@ -161,6 +165,7 @@ export class WaveService implements OnStart {
 		private readonly logger: Logger,
 		private readonly baseService: BaseService,
 		private readonly planetsService: PlanetsService,
+		private readonly travelService: TravelService,
 	) {}
 
 	onStart() {
@@ -221,7 +226,10 @@ export class WaveService implements OnStart {
 		this.alienCount(this.aliens.size());
 	}
 
-	/** A fresh mission on `map` (or none): aliens gone, base rebuilt, waves from the top after the grace period. */
+	/**
+	 * A fresh start on `map` (or none): aliens gone and the base rebuilt. An occupied planet's
+	 * waves start from the top after the grace period; a liberated one has none.
+	 */
 	private begin(map: PlanetMap | undefined) {
 		for (const [model] of this.aliens) model.Destroy();
 		this.aliens.clear();
@@ -229,15 +237,17 @@ export class WaveService implements OnStart {
 		this.pending = [];
 		this.baseService.reset(map);
 
-		const planet = map && this.planetsService.getPlanet(map.planet);
+		const liberated = map !== undefined && this.planetsService.isConquered(map.planet);
+		const planet = map && !liberated ? this.planetsService.getPlanet(map.planet) : undefined;
+		this.liberated(liberated);
 		this.healthScale = planet ? 1 + 0.3 * planet.difficulty + 0.2 * planet.aliens : 1;
 		if (map && this.costs?.map !== map) this.costs = { map, costs: terrainCosts(map) };
 		this.wave(0);
 		this.waves(planet ? 5 + 2 * planet.difficulty : 0);
-		this.nextWaveAt(map ? Workspace.GetServerTimeNow() + GRACE_SECONDS : 0);
+		this.nextWaveAt(planet ? Workspace.GetServerTimeNow() + GRACE_SECONDS : 0);
 	}
 
-	/** Shows the result for a while, then conquers the planet or starts it over. */
+	/** Shows the result for a while, then liberates the planet (the team stays on) or retreats the team. */
 	private finish(result: "won" | "lost") {
 		const map = this.planetsService.currentMap();
 		this.nextWaveAt(0);
@@ -245,9 +255,10 @@ export class WaveService implements OnStart {
 			if (this.baseService.resultAtom() !== result || this.planetsService.currentMap() !== map) return;
 			if (result === "won") {
 				this.planetsService.conquer();
+				this.liberated(true);
+				this.baseService.resultAtom(undefined);
 			} else {
-				this.begin(map);
-				this.planetsService.respawnAll();
+				this.travelService.retreat();
 			}
 		});
 	}
@@ -275,7 +286,9 @@ export class WaveService implements OnStart {
 			this.fireTurrets();
 		}
 
-		if (this.wave() >= this.waves() && this.pending.isEmpty() && this.aliens.isEmpty()) this.baseService.end("won");
+		if (!this.liberated() && this.wave() >= this.waves() && this.pending.isEmpty() && this.aliens.isEmpty()) {
+			this.baseService.end("won");
+		}
 	}
 
 	/** Spawns queued aliens one at a time, round the spawn points, while under the cap. */

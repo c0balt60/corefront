@@ -57,8 +57,11 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 	},
 };
 
-/** The build bar, in hotkey order (1, 2, 3). */
+/** The build bar's cards, in order. */
 export const BUILDABLE: ReadonlyArray<BuildableKind> = ["drill", "wall", "turret"];
+
+/** The Tool every character carries for building. The build bar shows while it's out. */
+export const BUILD_TOOL = "Build";
 
 /** Share of the cost given back when a building is removed. */
 export const REFUND = 0.5;

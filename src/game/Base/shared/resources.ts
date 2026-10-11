@@ -1,4 +1,4 @@
-import type { PlanetKind } from "core/Worlds/shared/star-system";
+import type { Planet, PlanetKind } from "core/Worlds/shared/star-system";
 
 export type ResourceId = "copper" | "lead" | "coal" | "titanium" | "scrap" | "thorium";
 
@@ -53,3 +53,24 @@ export const KIND_ORES: Record<
 
 /** Most items one player carries, across every resource. */
 export const INVENTORY_CAPACITY = 50;
+
+/** Fuel per destination index, per point of an ore's weight. */
+const FUEL_RATE = 1.5;
+
+/**
+ * The fuel a launch to planet `index` burns: every resource the planets before it
+ * have, more of the common ones, and more the further out the destination is.
+ * Planet 0 is free.
+ */
+export function travelCost(planets: ReadonlyArray<Planet>, index: number): Array<ResourceStack> {
+	const weights = new Map<ResourceId, number>();
+	for (let i = 0; i < index; i++) {
+		for (const { resource, weight } of KIND_ORES[planets[i].kind]) {
+			weights.set(resource, math.max(weights.get(resource) ?? 0, weight));
+		}
+	}
+	return RESOURCE_ORDER.filter((resource) => weights.has(resource)).map((resource) => ({
+		resource,
+		amount: math.ceil(weights.get(resource)! * FUEL_RATE * index),
+	}));
+}

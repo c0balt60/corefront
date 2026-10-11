@@ -12,14 +12,15 @@ import { RESOURCES, type ResourceStack } from "game/Base/shared/resources";
 
 const CARD = new Vector2(112, 84);
 const GAP = 8;
-/** Clear of Roblox's tool hotbar, which takes the bottom 70 or so pixels of the middle. */
-const BOTTOM = 84;
+/** Clear of the hotbar, which takes the bottom 80 pixels of the middle. */
+const BOTTOM = 92;
 
 const clamp01 = (value: number) => math.clamp(value, 0, 1);
 
 interface BuildCardProps {
 	readonly name: string;
-	readonly hotkey: string;
+	/** The key that picks it, if any. */
+	readonly hotkey?: string;
 	readonly cost: ReadonlyArray<ResourceStack>;
 	readonly pool: () => ReadonlyArray<ResourceStack>;
 	readonly selected: () => boolean;
@@ -29,7 +30,7 @@ interface BuildCardProps {
 }
 
 /**
- * One square card: its hotkey, its name, and its cost, each line red while the
+ * One square card: its hotkey (if it has one), its name, and its cost, each line red while the
  * core can't pay it. Hovering lifts it; picking it grows it, lights its outline
  * and hotkey and locks brackets onto its corners.
  */
@@ -77,15 +78,17 @@ function BuildCard({ name, hotkey, cost, pool, selected, color, layoutOrder, onC
 						PaddingRight={new UDim(0, 8)}
 						PaddingTop={new UDim(0, 8)}
 					/>
-					<textlabel
-						BackgroundColor3={() => COLORS.stroke.Lerp(color, glow())}
-						BorderSizePixel={0}
-						FontFace={FONT_DISPLAY}
-						Size={UDim2.fromOffset(18, 18)}
-						Text={hotkey}
-						TextColor3={COLORS.text}
-						TextSize={12}
-					/>
+					{hotkey !== undefined ? (
+						<textlabel
+							BackgroundColor3={() => COLORS.stroke.Lerp(color, glow())}
+							BorderSizePixel={0}
+							FontFace={FONT_DISPLAY}
+							Size={UDim2.fromOffset(18, 18)}
+							Text={hotkey}
+							TextColor3={COLORS.text}
+							TextSize={12}
+						/>
+					) : undefined}
 					<Label
 						alignX={Enum.TextXAlignment.Right}
 						anchorPoint={new Vector2(1, 0)}
@@ -145,9 +148,9 @@ interface BuildBarProps {
 }
 
 /**
- * The buildings and the remove tool as cards, bottom centre above Roblox's tool
- * hotbar, with the controls for the current mode over them. Rises in from the
- * bottom.
+ * The buildings and the remove tool as cards, bottom centre above the hotbar,
+ * with the controls for the current mode over them. Shown while the Build tool
+ * is out. Rises in from the bottom.
  */
 export function BuildBar({ pool, mode, onSelect, show }: BuildBarProps) {
 	const rise = useAppear(show, 0.1);
@@ -155,9 +158,9 @@ export function BuildBar({ pool, mode, onSelect, show }: BuildBarProps) {
 		"hud",
 		() => {
 			const current = mode();
-			if (current === undefined) return "1 - 3  BUILD   ·   X  REMOVE";
-			if (current === "remove") return "CLICK  REMOVE   ·   X / Q  CANCEL";
-			return "CLICK  PLACE   ·   R  ROTATE   ·   Q  CANCEL";
+			if (current === undefined) return "CLICK A CARD  BUILD   ·   F  REMOVE / CLEAR";
+			if (current === "remove") return "CLICK  REMOVE BUILDINGS, TREES, ROCKS   ·   F  CANCEL";
+			return "CLICK  PLACE   ·   R  ROTATE   ·   CLICK CARD  CANCEL";
 		},
 		0.2,
 		0.3,
@@ -188,7 +191,6 @@ export function BuildBar({ pool, mode, onSelect, show }: BuildBarProps) {
 					<BuildCard
 						color={COLORS.accent}
 						cost={BUILDINGS[kind].cost}
-						hotkey={tostring(index + 1)}
 						layoutOrder={index}
 						name={BUILDINGS[kind].name}
 						onClick={() => onSelect(kind)}
@@ -199,7 +201,7 @@ export function BuildBar({ pool, mode, onSelect, show }: BuildBarProps) {
 				<BuildCard
 					color={COLORS.danger}
 					cost={[]}
-					hotkey="X"
+					hotkey="F"
 					layoutOrder={BUILDABLE.size()}
 					name="Remove"
 					onClick={() => onSelect("remove")}

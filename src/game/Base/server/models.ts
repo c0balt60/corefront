@@ -116,13 +116,14 @@ export function buildingModel(
 	const model = new Instance("Model");
 	model.Name = BUILDINGS[kind].name;
 	const width = BUILDINGS[kind].size * CELL_STUDS - 0.4;
+	// Named, so the travel cutscene can fly the core off it.
 	block(
 		model,
 		new Vector3(width, top.Y - bottom, width),
 		new CFrame(top.X, (top.Y + bottom) / 2, top.Z),
 		FOUNDATION,
 		Enum.Material.Concrete,
-	);
+	).Name = "Foundation";
 
 	const base = new CFrame(top).mul(CFrame.Angles(0, (rotation * math.pi) / 2, 0));
 	const at = (y: number) => base.mul(new CFrame(0, y, 0));

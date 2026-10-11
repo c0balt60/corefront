@@ -272,8 +272,10 @@ interface PlanetPanelProps {
 	readonly unlocked: () => boolean;
 	/** The world's standing on the planet: liberated, or the one a mission is on. */
 	readonly standing?: () => "liberated" | "active" | undefined;
-	/** Why an unlocked planet can't be deployed to right now, shown on the button in place of DEPLOY. */
+	/** Why an unlocked planet can't be deployed to right now, shown on the button in place of its action. */
 	readonly blocked?: () => string | undefined;
+	/** What the button says when it can be clicked. */
+	readonly action?: () => string;
 	readonly onDeploy: () => void;
 	/**
 	 * Turns false to slide the panel out. Return `$tuple(node, EXIT_TIME)` from
@@ -296,6 +298,7 @@ export function PlanetPanel({
 	unlocked,
 	standing = () => undefined,
 	blocked = () => undefined,
+	action = () => "DEPLOY",
 	onDeploy,
 	show,
 }: PlanetPanelProps) {
@@ -467,7 +470,7 @@ export function PlanetPanel({
 							disabled={refused}
 							onClick={onDeploy}
 							size={UDim2.fromScale(1, 1)}
-							text={() => (unlocked() ? (blocked() ?? "DEPLOY") : "LOCKED")}
+							text={() => (unlocked() ? (blocked() ?? action()) : "LOCKED")}
 						/>
 						{/* A refused button ignores clicks, so this one on top catches them and answers with a shake. */}
 						<textbutton
