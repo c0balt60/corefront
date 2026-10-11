@@ -34,7 +34,7 @@ function standIn(core: Model): [copy: Model, restore: () => void] {
 		hidden.push(part);
 		part.LocalTransparencyModifier = 1;
 		const clone = part.Clone();
-		// Drops the prompts and welds; every piece is anchored and moved together.
+		// Drops the welds; every piece is anchored and moved together.
 		clone.ClearAllChildren();
 		clone.Anchored = true;
 		clone.CanCollide = false;

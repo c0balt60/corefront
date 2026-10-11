@@ -24,9 +24,12 @@ import {
 	BUILDABLE,
 	BUILDINGS,
 	type BuildingKind,
+	MACHINE_SECONDS,
 	MAX_LINE,
+	MINE_SECONDS,
 	REFUND,
 	replaces,
+	TRANSFER_RANGE,
 } from "game/Base/shared/buildings";
 import { KIND_ORES, RESOURCE_ORDER, RESOURCES, type ResourceId, type ResourceStack } from "game/Base/shared/resources";
 import { PlanetsService } from "game/Planets/server/PlanetsService";
@@ -100,10 +103,8 @@ interface SavedBase {
 
 /** The pool of a fresh start, with nothing saved and no cargo coming. Enough to research and place the first walls and turrets. */
 const START_POOL: Stock = { copper: 80, lead: 40 };
-const MINE_AMOUNT = 3;
-const MINE_SECONDS = 0.8;
-/** Seconds between drill and mender ticks. */
-const MACHINE_SECONDS = 2;
+/** Seconds of network jitter a held mine click is allowed, so ordinary lag doesn't drop ore. */
+const MINE_SLACK = 0.05;
 /** Buildings keep this many cells clear of an alien spawn, so waves can't be walled in at the source. */
 const SPAWN_CLEARANCE = 3;
 /** Most height difference across a footprint, in studs. */
@@ -118,7 +119,9 @@ const isPlaceData = t.interface({
 	cells: t.array(t.interface({ x: t.integer, z: t.integer, rotation: t.integer })),
 });
 const isCellData = t.interface({ x: t.integer, z: t.integer });
-const isConfigureData = t.interface({ x: t.integer, z: t.integer, resource: t.optional(t.keyOf(RESOURCES)) });
+/** A cell, and an ore or none: a sorter's filter, or what to take off a belt. */
+const isCellOreData = t.interface({ x: t.integer, z: t.integer, resource: t.optional(t.keyOf(RESOURCES)) });
+const isDropData = t.interface({ resource: t.keyOf(RESOURCES) });
 
 function makeFolder(name: string, parent: Instance): Folder {
 	const instance = new Instance("Folder");
@@ -135,22 +138,10 @@ function footprint(cell: number, size: number): Array<number> {
 	return cells;
 }
 
-function prompt(parent: Instance, name: string, object: string, hold: number, distance = 10): ProximityPrompt {
-	const instance = new Instance("ProximityPrompt");
-	instance.Name = name;
-	instance.ActionText = name;
-	instance.ObjectText = object;
-	instance.HoldDuration = hold;
-	instance.MaxActivationDistance = distance;
-	instance.RequiresLineOfSight = false;
-	instance.Parent = parent;
-	return instance;
-}
-
 /**
  * The team's base on the active planet: the Core and its shared pool, every
  * player's carried inventory, buildings and their placement rules, what each
- * building takes in, and the Mine, Collect, Load and Deposit prompts.
+ * building takes in, and mining, collecting, loading and dropping by hand.
  * `WaveService` drives it: it calls {@link BaseService.reset} for each new
  * planet and attacks what is built here. `LogisticsService` moves ore between
  * the buildings.
@@ -183,7 +174,8 @@ export class BaseService implements OnStart {
 
 	private map?: PlanetMap;
 	private readonly ores = new Map<number, OreDeposit>();
-	private readonly minePrompts = new Map<number, ProximityPrompt>();
+	/** When each player last mined, so a held click mines no faster than `MINE_SECONDS`. */
+	private readonly lastMined = new Map<Player, number>();
 	private spawnCells = new Array<readonly [number, number]>();
 	private readonly inventories = new Map<Player, Stock>();
 	/** Liberated planets' bases, while the team is elsewhere. */
@@ -201,6 +193,16 @@ export class BaseService implements OnStart {
 		baseMessaging.server.on(BaseMessage.Remove, (player, data) => this.remove(player, data));
 		baseMessaging.server.on(BaseMessage.Rotate, (player, data) => this.rotate(player, data));
 		beltMessaging.server.on(BeltMessage.Configure, (player, data) => this.configure(player, data));
+		baseMessaging.server.on(BaseMessage.Mine, (player, data) => this.mine(player, data));
+		baseMessaging.server.on(BaseMessage.Collect, (player, data) => {
+			const building = this.reachable(player, data);
+			if (building) this.collect(player, building, isCellOreData(data) ? data.resource : undefined);
+		});
+		baseMessaging.server.on(BaseMessage.Drop, (player, data) => this.drop(player, data));
+		baseMessaging.server.on(BaseMessage.Load, (player, data) => {
+			const building = this.reachable(player, data);
+			if (building) this.load(player, building);
+		});
 
 		// Only tells the client to show the build bar.
 		const tool = new Instance("Tool");
@@ -218,7 +220,10 @@ export class BaseService implements OnStart {
 			});
 		Players.GetPlayers().forEach(watch);
 		Players.PlayerAdded.Connect(watch);
-		Players.PlayerRemoving.Connect((player) => this.inventories.delete(player));
+		Players.PlayerRemoving.Connect((player) => {
+			this.inventories.delete(player);
+			this.lastMined.delete(player);
+		});
 
 		task.spawn(() => {
 			while (true) {
@@ -231,8 +236,8 @@ export class BaseService implements OnStart {
 	}
 
 	/**
-	 * Clears the base and, given a map, starts one on it: a Core at the landing
-	 * and Mine prompts on every ore, plus the planet's saved base if it has one.
+	 * Clears the base and, given a map, starts one on it: a Core at the landing,
+	 * plus the planet's saved base if it has one.
 	 * The pool is what was saved plus any cargo landing here; with neither, the
 	 * starting pool. Everyone's inventory is emptied either way.
 	 */
@@ -242,8 +247,6 @@ export class BaseService implements OnStart {
 		this.cells.clear();
 		this.core = undefined;
 		this.revision++;
-		for (const [, minePrompt] of this.minePrompts) minePrompt.Destroy();
-		this.minePrompts.clear();
 		this.ores.clear();
 		for (const player of Players.GetPlayers()) this.setInventory(player, {});
 		this.resultAtom(undefined);
@@ -275,14 +278,7 @@ export class BaseService implements OnStart {
 			if (cell !== undefined) this.spawnCells.push(cellCoords(cell));
 		}
 
-		for (const ore of map.ores) {
-			this.ores.set(ore.cell, ore);
-			const part = ore.model.PrimaryPart ?? ore.model.FindFirstChildWhichIsA("BasePart", true);
-			if (!part) continue;
-			const minePrompt = prompt(part, "Mine", RESOURCES[ore.resource].name, MINE_SECONDS);
-			minePrompt.Triggered.Connect((player) => this.mine(player, ore.resource));
-			this.minePrompts.set(ore.cell, minePrompt);
-		}
+		for (const ore of map.ores) this.ores.set(ore.cell, ore);
 
 		// The landing is a cell corner: the Core's 2×2 cells meet on it.
 		const corner = cellAt(map.landing.X - CELL_STUDS / 2, map.landing.Z - CELL_STUDS / 2);
@@ -394,6 +390,7 @@ export class BaseService implements OnStart {
 		} else if (def.craft) {
 			if (resource !== def.craft.input || building.input >= def.craft.storage) return false;
 			building.input++;
+			building.model.SetAttribute("Input", building.input);
 		} else {
 			return false;
 		}
@@ -594,7 +591,7 @@ export class BaseService implements OnStart {
 
 	/** Sets the ore a Sorter lets straight through, or none. */
 	private configure(player: Player, data: unknown) {
-		if (!isConfigureData(data) || this.phase() !== "active") return;
+		if (!isCellOreData(data) || this.phase() !== "active") return;
 		const sorter = this.buildingOn(data.x, data.z);
 		if (sorter?.kind !== "sorter") return;
 		if (!this.inReach(player, sorter.position)) return this.notify(player, "That's too far away to set.");
@@ -656,13 +653,14 @@ export class BaseService implements OnStart {
 			turn: 0,
 			look: "",
 		};
-		if (building.resource !== undefined) model.SetAttribute("Stored", 0);
-		this.buildings.add(building);
-		for (const covered of footprint(cell, def.size)) {
-			this.cells.set(covered, building);
-			const minePrompt = this.minePrompts.get(covered);
-			if (minePrompt) minePrompt.Enabled = false;
+		if (building.resource !== undefined) {
+			model.SetAttribute("Resource", building.resource);
+			model.SetAttribute("Stored", 0);
 		}
+		if (def.drill) model.SetAttribute("Yield", def.drill.yield + statOf(owner, "drillYield"));
+		if (def.craft) model.SetAttribute("Input", 0);
+		this.buildings.add(building);
+		for (const covered of footprint(cell, def.size)) this.cells.set(covered, building);
 		this.revision++;
 
 		const [low, high] = map.groundRange(cell, def.size);
@@ -677,8 +675,8 @@ export class BaseService implements OnStart {
 	}
 
 	/**
-	 * (Re)makes a building's parts inside its model, for its kind, facing and (belts) shape, with
-	 * its prompts. The Model itself stays, and so do its attributes and the client's hold on it.
+	 * (Re)makes a building's parts inside its model, for its kind, facing and (belts) shape.
+	 * The Model itself stays, and so do its attributes and the client's hold on it.
 	 */
 	private dress(map: PlanetMap, building: Building) {
 		const { kind, model } = building;
@@ -709,14 +707,6 @@ export class BaseService implements OnStart {
 		setHealth(model, building.health, building.maxHealth);
 		if (def.turret) setAmmo(model, building.ammo.size());
 		if (kind === "sorter") setFilter(model, building.filter);
-
-		if (kind === "core") {
-			prompt(body, "Deposit", "Core", 0, 16).Triggered.Connect((player) => this.deposit(player));
-		} else if (building.resource !== undefined) {
-			prompt(body, "Collect", def.name, 0).Triggered.Connect((player) => this.collect(player, building));
-		} else if (def.turret) {
-			prompt(body, "Load", def.name, 0).Triggered.Connect((player) => this.load(player, building));
-		}
 	}
 
 	/** Whether the building beside a belt on `side` puts ore onto it. Never what's in front of it. */
@@ -839,11 +829,7 @@ export class BaseService implements OnStart {
 	private demolish(building: Building) {
 		building.model.Destroy();
 		this.buildings.delete(building);
-		for (const covered of footprint(building.cell, BUILDINGS[building.kind].size)) {
-			this.cells.delete(covered);
-			const minePrompt = this.minePrompts.get(covered);
-			if (minePrompt) minePrompt.Enabled = true;
-		}
+		for (const covered of footprint(building.cell, BUILDINGS[building.kind].size)) this.cells.delete(covered);
 		if (building === this.core) this.core = undefined;
 		this.revision++;
 		if (this.map) this.refreshAround(this.map, building);
@@ -871,35 +857,97 @@ export class BaseService implements OnStart {
 		return cleared;
 	}
 
-	private mine(player: Player, resource: ResourceId) {
-		if (this.give(player, resource, MINE_AMOUNT) < MINE_AMOUNT) this.notify(player, FULL);
+	/** Mines one ore from the deposit on a cell, for a held click: in reach, not built over, and no faster than `MINE_SECONDS`. */
+	private mine(player: Player, data: unknown) {
+		if (!isCellData(data) || this.phase() !== "active") return;
+		if (data.x < 0 || data.z < 0 || data.x >= GRID_SIZE || data.z >= GRID_SIZE) return;
+		const cell = cellIndex(data.x, data.z);
+		const ore = this.ores.get(cell);
+		if (!ore || this.cells.has(cell) || !this.inReach(player, cellCenter(cell), TRANSFER_RANGE)) return;
+		const now = os.clock();
+		if (now - (this.lastMined.get(player) ?? -math.huge) < MINE_SECONDS - MINE_SLACK) return;
+		this.lastMined.set(player, now);
+		if (this.give(player, ore.resource, 1) === 0) this.notify(player, FULL);
 	}
 
-	/** Moves what a drill or smelter has made into a player's pack, as much as fits. */
-	private collect(player: Player, building: Building) {
-		if (!this.buildings.has(building) || building.resource === undefined) return;
+	/** The building covering a cell a player wants to move items in or out of, if they're close enough to. */
+	private reachable(player: Player, data: unknown): Building | undefined {
+		if (!isCellData(data) || this.phase() !== "active") return undefined;
+		const building = this.buildingOn(data.x, data.z);
+		if (building && !this.inReach(player, building.position, TRANSFER_RANGE)) {
+			this.notify(player, "That's too far away. Move closer.");
+			return undefined;
+		}
+		return building;
+	}
+
+	/** Moves what a drill or smelter has made, or the ore on a belt (just `only`, if given), into a player's pack, as much as fits. */
+	private collect(player: Player, building: Building, only?: ResourceId) {
+		if (!this.buildings.has(building)) return;
+		if (building.kind === "conveyor") return this.takeOff(player, building, only);
+		if (building.resource === undefined) return;
 		if (building.stored === 0) return this.notify(player, "Nothing to collect yet.");
 		building.stored -= this.give(player, building.resource, building.stored);
 		building.model.SetAttribute("Stored", building.stored);
 		if (building.stored > 0) this.notify(player, FULL);
 	}
 
-	/** Loads a turret with whatever ammo a player carries, until it's full. The rest stays carried. */
-	private load(player: Player, turret: Building) {
-		if (!this.buildings.has(turret)) return;
+	/** Moves the ore on a belt, or just the `only` ore, into a player's pack, front first, as much as fits. Clients redraw what's left. */
+	private takeOff(player: Player, belt: Building, only?: ResourceId) {
+		const counts = new Map<ResourceId, number>();
+		for (const { resource } of belt.items) {
+			if (only === undefined || resource === only) counts.set(resource, (counts.get(resource) ?? 0) + 1);
+		}
+		if (counts.isEmpty()) return this.notify(player, "There's nothing on it to take.");
+		let full = false;
+		for (const [resource, count] of counts) {
+			let given = this.give(player, resource, count);
+			full ||= given < count;
+			for (let i = belt.items.size() - 1; i >= 0 && given > 0; i--) {
+				if (belt.items[i].resource !== resource) continue;
+				belt.items.remove(i);
+				given--;
+			}
+		}
+		const items = belt.items.map(({ resource, progress }) => ({ cell: belt.cell, resource, progress }));
+		beltMessaging.client.emitAll(BeltMessage.Left, { cell: belt.cell, items });
+		if (full) this.notify(player, FULL);
+	}
+
+	/** Throws away all of one resource a player carries. */
+	private drop(player: Player, data: unknown) {
+		if (!isDropData(data)) return;
+		const items = { ...(this.inventories.get(player) ?? {}) };
+		if (items[data.resource] === undefined) return;
+		delete items[data.resource];
+		this.setInventory(player, items);
+	}
+
+	/**
+	 * Moves what a player carries into a building, as much as it takes: everything into the Core
+	 * (see `deposit`), ammo into a turret, its input into a smelter. The rest stays carried.
+	 */
+	private load(player: Player, building: Building) {
+		if (!this.buildings.has(building)) return;
+		if (building === this.core) return this.deposit(player);
+		const def = BUILDINGS[building.kind];
+		if (!def.turret && !def.craft) return;
 		const left: Stock = {};
 		let loaded = 0;
 		for (const [resource, amount] of pairs(this.inventories.get(player) ?? {})) {
 			let kept = amount;
-			while (kept > 0 && this.receive(turret, resource)) kept--;
+			while (kept > 0 && this.receive(building, resource)) kept--;
 			loaded += amount - kept;
 			if (kept > 0) left[resource] = kept;
 		}
-		if (loaded === 0) {
-			const full = turret.ammo.size() >= (BUILDINGS[turret.kind].turret?.magazine ?? 0);
-			return this.notify(player, full ? "It's fully loaded." : "Carry ore to load it. Coal won't fire.");
-		}
-		this.setInventory(player, left);
+		if (loaded > 0) return this.setInventory(player, left);
+		const full = def.craft
+			? building.input >= def.craft.storage
+			: building.ammo.size() >= (def.turret?.magazine ?? 0);
+		const need = def.craft
+			? `Carry ${RESOURCES[def.craft.input].name} to load it.`
+			: "Carry ore to load it. Coal won't fire.";
+		this.notify(player, full ? "It's fully loaded." : need);
 	}
 
 	/** Moves a player's inventory into the pool, as much as the Core has room for. The rest stays carried. */
@@ -928,13 +976,18 @@ export class BaseService implements OnStart {
 	private runMachines() {
 		for (const building of this.buildings) {
 			const def = BUILDINGS[building.kind];
-			if (def.drill && building.resource !== undefined && building.stored < def.drill.storage) {
+			if (def.drill && building.resource !== undefined) {
+				// Follows its owner's research as it comes in.
 				const mined = def.drill.yield + statOf(building.owner, "drillYield");
-				building.stored = math.min(building.stored + mined, def.drill.storage);
-				building.model.SetAttribute("Stored", building.stored);
+				building.model.SetAttribute("Yield", mined);
+				if (building.stored < def.drill.storage) {
+					building.stored = math.min(building.stored + mined, def.drill.storage);
+					building.model.SetAttribute("Stored", building.stored);
+				}
 			}
 			if (def.craft && building.input >= def.craft.amount && building.stored < def.craft.storage) {
 				building.input -= def.craft.amount;
+				building.model.SetAttribute("Input", building.input);
 				building.stored++;
 				building.model.SetAttribute("Stored", building.stored);
 			}
@@ -946,13 +999,13 @@ export class BaseService implements OnStart {
 		}
 	}
 
-	/** Whether a player is alive and close enough (across the ground) to build at `target`. */
-	private inReach(player: Player, target: Vector3): boolean {
+	/** Whether a player is alive and within `range` of `target`, across the ground: to build there, by default. */
+	private inReach(player: Player, target: Vector3, range = BUILD_RANGE): boolean {
 		const character = player.Character;
 		const humanoid = character?.FindFirstChildOfClass("Humanoid");
 		if (!character || !humanoid || humanoid.Health <= 0) return false;
 		const position = character.GetPivot().Position;
-		return new Vector2(position.X - target.X, position.Z - target.Z).Magnitude <= BUILD_RANGE;
+		return new Vector2(position.X - target.X, position.Z - target.Z).Magnitude <= range;
 	}
 
 	private nearSpawn(cell: number): boolean {

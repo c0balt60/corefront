@@ -1,7 +1,8 @@
 import { Controller, OnStart } from "@flamework/core";
+import { effect } from "@rbxts/charm";
 import { RunService, Workspace } from "@rbxts/services";
 
-import { sortersAtom } from "game/Base/client/base-state";
+import { selectedAtom, selectedOreAtom } from "game/Base/client/base-state";
 import { BeltMessage, beltMessaging, type HeldItem, type ItemMove } from "game/Base/shared/base-network";
 import { alongPath, BELT_SPACING, BELT_SPEED, modelPath } from "game/Base/shared/belts";
 import { type ResourceId, RESOURCES } from "game/Base/shared/resources";
@@ -18,6 +19,7 @@ const HELD_HEIGHT = 2;
 /** One ore, as drawn. */
 interface Ore {
 	readonly part: Part;
+	resource: ResourceId;
 	/** Along its belt, from 0 at the back to 1 at the front, run by the same rules as the server's. */
 	progress: number;
 	/** Where it's drawn: easing toward where `progress` puts it. */
@@ -28,7 +30,7 @@ interface Ore {
 /**
  * Draws the ore on the belts. The server sends every move (see `LogisticsService`); between them,
  * each client runs its belts by the same rules, so ore glides instead of ticking along. Also keeps
- * `sortersAtom` for the Sorter pickers.
+ * `selectedOreAtom` for the selected belt's panel.
  */
 @Controller()
 export class LogisticsController implements OnStart {
@@ -45,8 +47,20 @@ export class LogisticsController implements OnStart {
 	onStart() {
 		this.folder.Name = "BeltOre";
 		this.folder.Parent = Workspace;
-		beltMessaging.client.on(BeltMessage.Moves, ({ moves }) => moves.forEach((move) => this.move(move)));
-		beltMessaging.client.on(BeltMessage.Contents, ({ items }) => this.fill(items));
+		beltMessaging.client.on(BeltMessage.Moves, ({ moves }) => {
+			moves.forEach((move) => this.move(move));
+			this.publish();
+		});
+		beltMessaging.client.on(BeltMessage.Contents, ({ items }) => {
+			this.fill(items);
+			this.publish();
+		});
+		beltMessaging.client.on(BeltMessage.Left, ({ cell, items }) => {
+			this.drop(cell);
+			items.forEach((item) => this.put(item));
+			this.publish();
+		});
+		effect(() => this.publish());
 		RunService.RenderStepped.Connect((dt) => this.render(dt));
 
 		task.spawn(() => {
@@ -62,7 +76,6 @@ export class LogisticsController implements OnStart {
 		const cell = child.GetAttribute("Cell");
 		if (!child.IsA("Model") || !typeIs(cell, "number")) return;
 		this.models.set(cell, child);
-		if (child.GetAttribute("Kind") === "sorter") sortersAtom((sorters) => [...sorters, child]);
 	}
 
 	private removed(child: Instance) {
@@ -70,7 +83,6 @@ export class LogisticsController implements OnStart {
 		if (!typeIs(cell, "number") || this.models.get(cell) !== child) return;
 		this.models.delete(cell);
 		this.drop(cell);
-		if (child.GetAttribute("Kind") === "sorter") sortersAtom((sorters) => sorters.filter((s) => s !== child));
 	}
 
 	/** Moves an ore from one building to another: the front one off a belt, or a router's, or a new one from a drill. */
@@ -78,6 +90,7 @@ export class LogisticsController implements OnStart {
 		const at = (this.models.get(from) ?? this.models.get(to))?.GetPivot().Position;
 		const ore = this.take(from) ?? (at && this.make(resource, at));
 		if (!ore) return;
+		ore.resource = resource;
 		ore.part.Color = RESOURCES[resource].color;
 		this.land(to, ore, joined);
 	}
@@ -86,10 +99,22 @@ export class LogisticsController implements OnStart {
 	private fill(items: ReadonlyArray<HeldItem>) {
 		for (const [cell] of this.belts) this.drop(cell);
 		for (const [cell] of this.held) this.drop(cell);
-		for (const { cell, resource, progress } of items) {
-			const model = this.models.get(cell);
-			if (model) this.land(cell, this.make(resource, model.GetPivot().Position), progress);
-		}
+		items.forEach((item) => this.put(item));
+	}
+
+	/** Draws ore where the server says it sits: `progress` along a belt, or held by a router. */
+	private put({ cell, resource, progress }: HeldItem) {
+		const model = this.models.get(cell);
+		const path = model && modelPath(model);
+		const at = path ? alongPath(path, progress)[0] : model?.GetPivot().Position;
+		if (at) this.land(cell, this.make(resource, at), progress);
+	}
+
+	/** Tells `selectedOreAtom` what's drawn on the selected building. Run in an effect, it runs again whenever that changes. */
+	private publish() {
+		const cell = selectedAtom()?.GetAttribute("Cell");
+		const ores = typeIs(cell, "number") ? this.belts.get(cell) : undefined;
+		selectedOreAtom(ores?.map((ore) => ore.resource) ?? []);
 	}
 
 	/** Puts ore on the building on `cell`: `progress` along a belt, held by a router, or sinking into anything else. */
@@ -132,7 +157,7 @@ export class LogisticsController implements OnStart {
 		part.Color = RESOURCES[resource].color;
 		part.CFrame = new CFrame(at);
 		part.Parent = this.folder;
-		return { part, progress: 0, position: at, heading: new Vector3(0, 0, -1) };
+		return { part, resource, progress: 0, position: at, heading: new Vector3(0, 0, -1) };
 	}
 
 	/** Clears the ore drawn on the building on `cell`. */

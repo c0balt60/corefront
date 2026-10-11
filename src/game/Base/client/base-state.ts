@@ -32,8 +32,12 @@ export const noticesAtom = atom<ReadonlyArray<Notice>>([]);
 
 export const buildModeAtom = atom<BuildMode>();
 
-/** Every Sorter on the planet, for the ore pickers floating over them. */
-export const sortersAtom = atom<ReadonlyArray<Model>>([]);
+/** The building whose panel is open, picked by clicking it. */
+export const selectedAtom = atom<Model>();
+/** Whether the local player is within `TRANSFER_RANGE` of it, to move items in or out. */
+export const nearSelectedAtom = atom(false);
+/** The ore drawn on it, if it's a belt, back to front. */
+export const selectedOreAtom = atom<ReadonlyArray<ResourceId>>([]);
 
 /** The local character's tools in hotbar order, wherever they are (backpack or hand), and the one it has out. */
 export const toolsAtom = atom<ReadonlyArray<Tool>>([]);

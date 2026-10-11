@@ -4,8 +4,9 @@ import type { ResourceId, ResourceStack } from "game/Base/shared/resources";
  * The server keeps the planet's gameplay instances in `Workspace.Base`:
  * - `Base.Buildings`: one Model per building, with attributes `Kind` (BuildingKind),
  *   `Cell` (the -X/-Z corner cell, see map.ts), `Rotation`, `Health` and `MaxHealth`. Drills and
- *   smelters also have `Stored`, turrets `Ammo`, sorters `Filter`, and belts `Entry`, `PathIn`,
- *   `PathMid`, `PathOut` and `PathEnds` (see `BeltPath`).
+ *   smelters also have `Resource` (what they make) and `Stored`, drills `Yield` (per tick), smelters
+ *   `Input`, turrets `Ammo`, sorters `Filter`, and belts `Entry`, `PathIn`, `PathMid`, `PathOut`
+ *   and `PathEnds` (see `BeltPath`).
  * - `Base.Aliens`: one Model per alien, with `Health` and `MaxHealth`.
  * Ore deposits are Models tagged "Ore" (CollectionService), with attributes `Resource` and `Cell`.
  */
@@ -109,7 +110,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 	},
 	sorter: {
 		name: "Sorter",
-		description: "Lets one ore straight through and turns the rest aside. Pick the ore over it.",
+		description: "Lets one ore straight through and turns the rest aside. Click it to pick the ore.",
 		cost: [
 			{ resource: "copper", amount: 6 },
 			{ resource: "lead", amount: 4 },
@@ -157,7 +158,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 	},
 	turret: {
 		name: "Turret",
-		description: "Shoots aliens in range. Fires ore: feed it by belt, or Load it by hand.",
+		description: "Shoots aliens in range. Fires ore: feed it by belt, or double-click it to load.",
 		cost: [
 			{ resource: "copper", amount: 25 },
 			{ resource: "lead", amount: 15 },
@@ -228,8 +229,17 @@ export const BUILD_TOOL = "Build";
 /** Share of the cost given back when a building is removed. */
 export const REFUND = 0.5;
 
-/** Furthest a player can build or remove from their character, in studs. */
+/** Furthest a player can build or remove from their character, in studs. Building panels open within it too. */
 export const BUILD_RANGE = 160;
+
+/** Furthest a player can mine ore, or move items in or out of a building, from their character, in studs. */
+export const TRANSFER_RANGE = 24;
+
+/** Seconds between the ores a held click mines, one at a time. */
+export const MINE_SECONDS = 0.27;
+
+/** Seconds between drill, smelter and mender ticks. */
+export const MACHINE_SECONDS = 2;
 
 /** The most buildings one drag lays. */
 export const MAX_LINE = 64;

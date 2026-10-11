@@ -16,6 +16,10 @@ export const enum BaseMessage {
 	CallWave,
 	Fire,
 	Rotate,
+	Mine,
+	Collect,
+	Load,
+	Drop,
 }
 
 /**
@@ -66,6 +70,14 @@ export interface BaseMessageData {
 	[BaseMessage.Fire]: { readonly target: Vector3 };
 	/** Client -> server: turn whichever building covers cell (x, z) a quarter turn. */
 	[BaseMessage.Rotate]: { readonly x: number; readonly z: number };
+	/** Client -> server, every `MINE_SECONDS` while a click is held on it: mine one ore from the deposit on cell (x, z). */
+	[BaseMessage.Mine]: { readonly x: number; readonly z: number };
+	/** Client -> server: take what the drill or smelter covering cell (x, z) has made, or the ore on the belt there: just `resource`, if given. */
+	[BaseMessage.Collect]: { readonly x: number; readonly z: number; readonly resource?: ResourceId };
+	/** Client -> server: from my pack into the building covering cell (x, z): all of it into the Core, ammo into a turret, coal into a smelter. */
+	[BaseMessage.Load]: { readonly x: number; readonly z: number };
+	/** Client -> server: throw away all of `resource` that I carry. */
+	[BaseMessage.Drop]: { readonly resource: ResourceId };
 }
 
 /** One building to place: its -X/-Z corner on cell (x, z), turned `rotation` quarter turns (0-3, see `DIRECTIONS`). */
@@ -83,6 +95,7 @@ export const enum BeltMessage {
 	Contents,
 	Moves,
 	Configure,
+	Left,
 }
 
 /**
@@ -113,4 +126,6 @@ export interface BeltMessageData {
 	[BeltMessage.Moves]: { readonly moves: ReadonlyArray<ItemMove> };
 	/** Client -> server: the ore the Sorter on cell (x, z) lets straight through, or none. */
 	[BeltMessage.Configure]: { readonly x: number; readonly z: number; readonly resource?: ResourceId };
+	/** Server -> clients, when ore is taken off a belt by hand: all that's left on the building on `cell`. */
+	[BeltMessage.Left]: { readonly cell: number; readonly items: ReadonlyArray<HeldItem> };
 }

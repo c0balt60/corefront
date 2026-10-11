@@ -309,17 +309,42 @@ export function WavePanel({ state, show, onCallWave }: WavePanelProps) {
 	);
 }
 
+/** A cargo row's drop button's width and height, in pixels. */
+const DROP = 16;
+
+/** A small X at the right of a cargo row, red while hovered. */
+function DropButton({ onDrop }: { readonly onDrop: () => void }) {
+	const hovered = source(false);
+	return (
+		<textbutton
+			AnchorPoint={new Vector2(1, 0.5)}
+			BackgroundTransparency={1}
+			FontFace={FONT_DISPLAY}
+			Position={UDim2.fromScale(1, 0.5)}
+			Size={UDim2.fromOffset(DROP, DROP)}
+			Text="X"
+			TextColor3={() => (hovered() ? COLORS.danger : COLORS.subtext)}
+			TextSize={13}
+			Activated={onDrop}
+			MouseEnter={() => hovered(true)}
+			MouseLeave={() => hovered(false)}
+		/>
+	);
+}
+
 interface CargoPanelProps {
 	readonly inventory: () => Inventory;
 	readonly show: () => boolean;
+	/** Throws away all of a resource carried. */
+	readonly onDrop: (resource: ResourceId) => void;
 }
 
 /**
  * What the local player carries, bottom left: the total against the capacity
- * with a bar that turns accent when full, and a row for each resource carried.
- * Slides in from the left.
+ * with a bar that turns accent when full, and a row for each resource carried,
+ * with an X that throws it all away. Slides in from the left.
  */
-export function CargoPanel({ inventory, show }: CargoPanelProps) {
+export function CargoPanel({ inventory, show, onDrop }: CargoPanelProps) {
 	const slide = useAppear(show, 0.15);
 	const total = () => inventory().items.reduce((sum, stack) => sum + stack.amount, 0);
 	const full = () => clamp01(total() / math.max(inventory().capacity, 1));
@@ -373,11 +398,12 @@ export function CargoPanel({ inventory, show }: CargoPanelProps) {
 								anchorPoint={new Vector2(1, 0)}
 								color={COLORS.text}
 								font={FONT_DISPLAY}
-								position={UDim2.fromScale(1, 0)}
+								position={new UDim2(1, -DROP - 6, 0, 0)}
 								size={UDim2.fromScale(0.3, 1)}
 								text={() => tostring(stack().amount)}
 								textSize={14}
 							/>
+							<DropButton onDrop={() => onDrop(stack().resource)} />
 						</frame>
 					)}
 				</Index>

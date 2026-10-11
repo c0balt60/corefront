@@ -95,6 +95,33 @@ function buildingUnderMouse(): Model | undefined {
 	return hit && buildingAt(hit.Position.sub(hit.Normal.mul(0.5)));
 }
 
+/**
+ * What the mouse points at: a building, or else a tree, rock or ore (the whole of it, like the
+ * server clears it) and the cell under the point. Terrain in front hides both.
+ */
+export function pointedAt(taken = occupancy()): { building?: Model; prop?: Instance; cell?: number } {
+	const camera = Workspace.CurrentCamera;
+	if (!camera) return {};
+	const buildings = Workspace.FindFirstChild("Base")?.FindFirstChild("Buildings");
+	const props = Workspace.FindFirstChild("PlanetProps");
+	const filter: Array<Instance> = [Workspace.Terrain];
+	if (buildings) filter.push(buildings);
+	if (props) filter.push(props);
+	const params = new RaycastParams();
+	params.FilterType = Enum.RaycastFilterType.Include;
+	params.FilterDescendantsInstances = filter;
+	const mouse = UserInputService.GetMouseLocation();
+	const ray = camera.ViewportPointToRay(mouse.X, mouse.Y);
+	const hit = Workspace.Raycast(ray.Origin, ray.Direction.mul(RAY_LENGTH), params);
+	if (!hit) return {};
+	// Just inside whatever was hit, so a building's side counts as its own cell, not its neighbour's.
+	const inside = hit.Position.sub(hit.Normal.mul(0.5));
+	const building = buildingAt(inside, taken);
+	if (building || !props || !hit.Instance.IsDescendantOf(props)) return { building };
+	const parent = hit.Instance.FindFirstAncestorOfClass("Model");
+	return { prop: parent && parent.IsDescendantOf(props) ? parent : hit.Instance, cell: cellAt(inside.X, inside.Z) };
+}
+
 /** Whether `model`, on `side` of a belt, puts ore onto it (see `feedsBelt`). */
 function feeds(model: Model | undefined, side: number): boolean {
 	const kind = model?.GetAttribute("Kind");
@@ -322,8 +349,6 @@ export class BuildController implements OnStart {
 		const terrain = new RaycastParams();
 		terrain.FilterType = Enum.RaycastFilterType.Include;
 		terrain.FilterDescendantsInstances = [Workspace.Terrain];
-		const solid = new RaycastParams();
-		solid.FilterType = Enum.RaycastFilterType.Include;
 		// The ground itself, read like the server reads it: under any water.
 		const ground = new RaycastParams();
 		ground.FilterType = Enum.RaycastFilterType.Include;
@@ -357,32 +382,17 @@ export class BuildController implements OnStart {
 			const taken = occupancy();
 
 			if (!def || !kind) {
-				const buildings = Workspace.FindFirstChild("Base")?.FindFirstChild("Buildings");
-				const props = Workspace.FindFirstChild("PlanetProps");
-				const filter: Array<Instance> = [Workspace.Terrain];
-				if (buildings) filter.push(buildings);
-				if (props) filter.push(props);
-				solid.FilterDescendantsInstances = filter;
-				const hit = Workspace.Raycast(ray.Origin, ray.Direction.mul(RAY_LENGTH), solid);
-				// Just inside whatever was hit, so a building's side counts as its own cell, not its neighbour's.
-				const inside = hit?.Position.sub(hit.Normal.mul(0.5));
-				const model = inside && buildingAt(inside, taken);
+				const { building: model, prop, cell } = pointedAt(taken);
 				const corner = model?.GetAttribute("Cell");
-
 				if (model) {
 					if (typeIs(corner, "number") && model.GetAttribute("Kind") !== "core") {
 						highlight.Adornee = model;
 						target = cellCoords(corner);
 					}
-				} else if (hit && inside && props && hit.Instance.IsDescendantOf(props)) {
-					// No building there: a tree or rock is cleared instead, the whole of it, like the server does.
-					const parent = hit.Instance.FindFirstAncestorOfClass("Model");
-					const prop = parent && parent.IsDescendantOf(props) ? parent : hit.Instance;
-					const cell = cellAt(inside.X, inside.Z);
-					if (cell !== undefined && !CollectionService.HasTag(prop, "Ore")) {
-						highlight.Adornee = prop;
-						target = cellCoords(cell);
-					}
+				} else if (prop && cell !== undefined && !CollectionService.HasTag(prop, "Ore")) {
+					// No building there: a tree or rock is cleared instead.
+					highlight.Adornee = prop;
+					target = cellCoords(cell);
 				}
 				highlight.Enabled = target !== undefined;
 				return;
