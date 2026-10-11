@@ -10,6 +10,7 @@ export const enum PlanetsMessage {
 	Request = 100,
 	State,
 	Deploy,
+	Recall,
 }
 
 export interface WorldState {
@@ -18,6 +19,10 @@ export interface WorldState {
 	readonly isPrivate: boolean;
 	/** Indexes into `generateStarSystem(seed).planets` that players may deploy to. */
 	readonly unlocked: Array<number>;
+	/** Planets the world has liberated. */
+	readonly conquered: Array<number>;
+	/** The planet everyone plays while a mission is on; players may only deploy there. `undefined`: the next deploy picks it. */
+	readonly active?: number;
 }
 
 export interface PlanetsMessageData {
@@ -27,4 +32,6 @@ export interface PlanetsMessageData {
 	[PlanetsMessage.State]: WorldState;
 	/** Client -> server: spawn me on this planet. */
 	[PlanetsMessage.Deploy]: { readonly planet: number };
+	/** Server -> client: the mission ended and your character is gone. Back to the star map. */
+	[PlanetsMessage.Recall]: undefined;
 }

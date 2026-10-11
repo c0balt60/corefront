@@ -66,6 +66,12 @@ export const EFFECTS = {
 	background: ["scan", "grid"],
 	/** The brackets locked onto the selected planet. */
 	reticle: ["brackets"],
+	/** The in-mission HUD: core status, wave, cargo, toasts and the build bar's cards. */
+	hud: ["brackets", "decode"],
+	/** The big won or lost banner across the screen. */
+	banner: ["brackets", "scan", "decode"],
+	/** Developer panels, like the terrain debug panel: plain, so they stay out of the way. */
+	debug: ["brackets"],
 } satisfies Record<string, readonly Effect[]>;
 
 export type UiKind = keyof typeof EFFECTS;

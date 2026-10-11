@@ -10,7 +10,7 @@ import { PlanetsMessage, planetsMessaging } from "game/Planets/shared/planets-ne
  * Keeps the planet atoms in sync with the server and hands the camera to the
  * star map until the local player deploys: it flies up to the map, where the
  * player can orbit, pan and zoom, and flies back down to the character on
- * deploy. `GameApp` draws the map and the panel.
+ * deploy. A recall hands it back to the map. `GameApp` draws the map and the panel.
  */
 @Controller()
 export class PlanetsController implements OnStart {
@@ -18,6 +18,8 @@ export class PlanetsController implements OnStart {
 		const player = Players.LocalPlayer;
 
 		planetsMessaging.client.on(PlanetsMessage.State, (state) => worldStateAtom(state));
+		// Recalled: the character is gone, so the effect below flies the camera back up to the map.
+		planetsMessaging.client.on(PlanetsMessage.Recall, () => deployedAtom(false));
 		player.CharacterAdded.Connect(() => deployedAtom(true));
 		if (player.Character) deployedAtom(true);
 		planetsMessaging.server.emit(PlanetsMessage.Request);

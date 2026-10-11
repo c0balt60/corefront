@@ -38,9 +38,11 @@ const GLINT = new NumberSequence([
 const clamp01 = (value: number) => math.clamp(value, 0, 1);
 
 interface StatusChipProps {
-	readonly locked: () => boolean;
+	readonly label: () => string;
 	/** 0-1: how locked the chip looks, springing between its two states. */
 	readonly lock: () => number;
+	/** 0-1: how far the chip has turned accent and widened, for the planet a mission is on. */
+	readonly mission: () => number;
 	/** 0-1: how far the chip has faded in. */
 	readonly reveal: () => number;
 	/** 0-1: how far its brackets stand off the corners. */
@@ -48,20 +50,22 @@ interface StatusChipProps {
 }
 
 /**
- * A tag with brackets on its corners: a blinking green dot and UNLOCKED, or a
- * padlock and LOCKED in grey. Its colours spring between the two, the dot and
- * the padlock cross-fade, and the label decodes on every change.
+ * A tag with brackets on its corners: a blinking green dot and UNLOCKED (or
+ * LIBERATED), a blinking accent dot and MISSION IN PROGRESS on a wider chip, or
+ * a padlock and LOCKED in grey. Its colours and width spring between them, the
+ * dot and the padlock cross-fade, and the label decodes on every change.
  */
-function StatusChip({ locked, lock, reveal, open }: StatusChipProps) {
-	const label = useScramble("chip", () => (locked() ? "LOCKED" : "UNLOCKED"), 0.05, 0.35);
+function StatusChip({ label, lock, mission, reveal, open }: StatusChipProps) {
+	const text = useScramble("chip", label, 0.05, 0.35);
 	const blink = useSpin(() => 240);
-	const tone = () => COLORS.confirm.Lerp(COLORS.subtext, lock());
+	const live = () => COLORS.confirm.Lerp(COLORS.accent, mission());
+	const tone = () => live().Lerp(COLORS.subtext, lock());
 	const dot = () => 1 - reveal() * (1 - lock()) * (0.55 + 0.45 * math.sin(math.rad(blink())));
 	const padlock = () => 1 - reveal() * lock();
 
 	return (
 		<frame BackgroundTransparency={1} Size={UDim2.fromScale(1, 0.05)}>
-			<frame BackgroundTransparency={1} Size={UDim2.fromScale(0.4, 1)}>
+			<frame BackgroundTransparency={1} Size={() => UDim2.fromScale(0.4 + 0.32 * mission(), 1)}>
 				<frame
 					BackgroundColor3={tone}
 					BackgroundTransparency={() => 1 - 0.15 * reveal()}
@@ -76,11 +80,7 @@ function StatusChip({ locked, lock, reveal, open }: StatusChipProps) {
 						Size={UDim2.fromScale(0.1, 0.5)}
 					>
 						<uiaspectratioconstraint DominantAxis={Enum.DominantAxis.Height} />
-						<frame
-							BackgroundColor3={COLORS.confirm}
-							BackgroundTransparency={dot}
-							Size={UDim2.fromScale(1, 1)}
-						>
+						<frame BackgroundColor3={live} BackgroundTransparency={dot} Size={UDim2.fromScale(1, 1)}>
 							<uicorner CornerRadius={new UDim(0.5, 0)} />
 						</frame>
 						{/* The padlock: a ring for the shackle, with its lower half hidden behind the body. */}
@@ -109,8 +109,8 @@ function StatusChip({ locked, lock, reveal, open }: StatusChipProps) {
 						FontFace={FONT_LABEL}
 						Position={UDim2.fromScale(0.18, 0)}
 						Size={UDim2.fromScale(0.78, 1)}
-						Text={label}
-						TextColor3={() => COLORS.confirm.Lerp(COLORS.muted, lock())}
+						Text={text}
+						TextColor3={() => live().Lerp(COLORS.muted, lock())}
 						TextScaled={true}
 						TextTransparency={() => 1 - reveal()}
 						TextXAlignment={Enum.TextXAlignment.Left}
@@ -125,7 +125,15 @@ function StatusChip({ locked, lock, reveal, open }: StatusChipProps) {
 					length={6}
 					open={open}
 					thickness={1}
-					visibility={() => reveal() * (1 - lock())}
+					visibility={() => reveal() * (1 - lock()) * (1 - mission())}
+				/>
+				<Brackets
+					kind="chip"
+					color={COLORS.accent}
+					length={6}
+					open={open}
+					thickness={1}
+					visibility={() => reveal() * (1 - lock()) * mission()}
 				/>
 				<Brackets
 					kind="chip"
@@ -262,6 +270,10 @@ interface PlanetPanelProps {
 	readonly planet: () => Planet;
 	/** Whether the planet can be deployed to. */
 	readonly unlocked: () => boolean;
+	/** The world's standing on the planet: liberated, or the one a mission is on. */
+	readonly standing?: () => "liberated" | "active" | undefined;
+	/** Why an unlocked planet can't be deployed to right now, shown on the button in place of DEPLOY. */
+	readonly blocked?: () => string | undefined;
 	readonly onDeploy: () => void;
 	/**
 	 * Turns false to slide the panel out. Return `$tuple(node, EXIT_TIME)` from
@@ -275,10 +287,18 @@ interface PlanetPanelProps {
  * slides in from the left, its rows following one after another. Picking
  * another planet scans the panel again and replays its details: the name and
  * values decode, the underline redraws with a glint and the level bars refill.
- * A status chip says whether the planet is unlocked; a locked one gets the same
- * details under faint hazard stripes. Clicking a locked planet's button shakes it.
+ * A status chip says whether the planet is unlocked, liberated or under a
+ * mission; a locked one gets the same details under faint hazard stripes. A
+ * refused deploy says why on the button, and clicking it shakes it.
  */
-export function PlanetPanel({ planet, unlocked, onDeploy, show }: PlanetPanelProps) {
+export function PlanetPanel({
+	planet,
+	unlocked,
+	standing = () => undefined,
+	blocked = () => undefined,
+	onDeploy,
+	show,
+}: PlanetPanelProps) {
 	const slide = useAppear(show);
 	const hovered = source(false);
 	const [lift, liftSpring] = useSpring(0, SPRINGS.responsive);
@@ -287,9 +307,12 @@ export function PlanetPanel({ planet, unlocked, onDeploy, show }: PlanetPanelPro
 	const [swap, swapSpring] = useSpring(0, SPRINGS.smooth);
 	// 0-1: 1 while the planet is locked, which fades in the stripes and greys the chip and underline.
 	const [rawLock, lockSpring] = useSpring(unlocked() ? 0 : 1, SPRINGS.responsive);
+	// 0-1: 1 while a mission is on the planet, which turns the chip accent.
+	const [rawMission, missionSpring] = useSpring(standing() === "active" ? 1 : 0, SPRINGS.responsive);
 
 	effect(() => liftSpring.setGoal(hovered() ? 0.5 : 0));
 	effect(() => lockSpring.setGoal(unlocked() ? 0 : 1));
+	effect(() => missionSpring.setGoal(standing() === "active" ? 1 : 0));
 	effect(() => {
 		planet();
 		swapSpring.setPosition(0);
@@ -297,6 +320,12 @@ export function PlanetPanel({ planet, unlocked, onDeploy, show }: PlanetPanelPro
 		swapSpring.setGoal(1);
 	});
 
+	const refused = () => !unlocked() || blocked() !== undefined;
+	const chipLabel = () => {
+		if (!unlocked()) return "LOCKED";
+		const status = standing();
+		return status === "active" ? "MISSION IN PROGRESS" : status === "liberated" ? "LIBERATED" : "UNLOCKED";
+	};
 	const lock = () => clamp01(rawLock());
 	const fade = () => 1 - swap();
 	/** The chip's brackets jump off the corners with every new planet and settle back. */
@@ -352,7 +381,13 @@ export function PlanetPanel({ planet, unlocked, onDeploy, show }: PlanetPanelPro
 
 					<frame BackgroundTransparency={1} Size={UDim2.fromScale(1, 0.88)}>
 						<uilistlayout Padding={new UDim(0.012, 0)} />
-						<StatusChip locked={() => !unlocked()} lock={lock} open={flash} reveal={reveal(0)} />
+						<StatusChip
+							label={chipLabel}
+							lock={lock}
+							mission={() => clamp01(rawMission())}
+							open={flash}
+							reveal={reveal(0)}
+						/>
 						<textlabel
 							BackgroundTransparency={1}
 							FontFace={FONT_DISPLAY}
@@ -429,17 +464,17 @@ export function PlanetPanel({ planet, unlocked, onDeploy, show }: PlanetPanelPro
 					>
 						<Button
 							color={COLORS.confirm}
-							disabled={() => !unlocked()}
+							disabled={refused}
 							onClick={onDeploy}
 							size={UDim2.fromScale(1, 1)}
-							text={() => (unlocked() ? "DEPLOY" : "LOCKED")}
+							text={() => (unlocked() ? (blocked() ?? "DEPLOY") : "LOCKED")}
 						/>
-						{/* A locked button ignores clicks, so this one on top catches them and answers with a shake. */}
+						{/* A refused button ignores clicks, so this one on top catches them and answers with a shake. */}
 						<textbutton
 							BackgroundTransparency={1}
 							Size={UDim2.fromScale(1, 1)}
 							Text=""
-							Visible={() => !unlocked()}
+							Visible={refused}
 							ZIndex={10}
 							Activated={() => shakeSpring.impulse(SHAKE_KICK)}
 						/>
