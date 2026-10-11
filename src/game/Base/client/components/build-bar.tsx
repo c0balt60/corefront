@@ -1,4 +1,4 @@
-import Vide, { effect, source } from "@rbxts/vide";
+import Vide, { effect, For, source } from "@rbxts/vide";
 import { useSpring } from "@rbxts/vide-ripple";
 
 import { Brackets } from "core/Interface/client/components/hud";
@@ -7,7 +7,7 @@ import { useAppear, useScramble } from "core/Interface/client/motion";
 import { COLORS, FONT_DISPLAY, SPRINGS } from "core/Interface/client/theme";
 import { amountOf, type BuildMode } from "game/Base/client/base-state";
 import { Label, Swatch } from "game/Base/client/components/base-hud";
-import { BUILDABLE, BUILDINGS, REFUND } from "game/Base/shared/buildings";
+import { type BuildableKind, BUILDABLE, BUILDINGS, REFUND } from "game/Base/shared/buildings";
 import { RESOURCES, type ResourceStack } from "game/Base/shared/resources";
 
 const CARD = new Vector2(112, 84);
@@ -140,6 +140,8 @@ function BuildCard({ name, hotkey, cost, pool, selected, color, layoutOrder, onC
 }
 
 interface BuildBarProps {
+	/** The buildings the local player can place, in `BUILDABLE` order. */
+	readonly kinds: () => ReadonlyArray<BuildableKind>;
 	readonly pool: () => ReadonlyArray<ResourceStack>;
 	readonly mode: () => BuildMode | undefined;
 	readonly onSelect: (mode: BuildMode) => void;
@@ -152,7 +154,7 @@ interface BuildBarProps {
  * with the controls for the current mode over them. Shown while the Build tool
  * is out. Rises in from the bottom.
  */
-export function BuildBar({ pool, mode, onSelect, show }: BuildBarProps) {
+export function BuildBar({ kinds, pool, mode, onSelect, show }: BuildBarProps) {
 	const rise = useAppear(show, 0.1);
 	const hint = useScramble(
 		"hud",
@@ -172,7 +174,8 @@ export function BuildBar({ pool, mode, onSelect, show }: BuildBarProps) {
 			AnchorPoint={new Vector2(0.5, 1)}
 			BackgroundTransparency={1}
 			Position={() => new UDim2(0.5, 0, 1, -BOTTOM + 240 * (1 - rise()))}
-			Size={UDim2.fromOffset(4 * CARD.X + 3 * GAP, CARD.Y + 26)}
+			// Room for every card; the layout centres however many show.
+			Size={UDim2.fromOffset((BUILDABLE.size() + 1) * (CARD.X + GAP) - GAP, CARD.Y + 26)}
 		>
 			<Label alignX={Enum.TextXAlignment.Center} size={new UDim2(1, 0, 0, 16)} text={hint} />
 			<frame
@@ -187,17 +190,19 @@ export function BuildBar({ pool, mode, onSelect, show }: BuildBarProps) {
 					Padding={new UDim(0, GAP)}
 					SortOrder={Enum.SortOrder.LayoutOrder}
 				/>
-				{BUILDABLE.map((kind, index) => (
-					<BuildCard
-						color={COLORS.accent}
-						cost={BUILDINGS[kind].cost}
-						layoutOrder={index}
-						name={BUILDINGS[kind].name}
-						onClick={() => onSelect(kind)}
-						pool={pool}
-						selected={() => mode() === kind}
-					/>
-				))}
+				<For each={kinds}>
+					{(kind) => (
+						<BuildCard
+							color={COLORS.accent}
+							cost={BUILDINGS[kind].cost}
+							layoutOrder={BUILDABLE.indexOf(kind)}
+							name={BUILDINGS[kind].name}
+							onClick={() => onSelect(kind)}
+							pool={pool}
+							selected={() => mode() === kind}
+						/>
+					)}
+				</For>
 				<BuildCard
 					color={COLORS.danger}
 					cost={[]}

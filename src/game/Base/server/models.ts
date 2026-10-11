@@ -14,6 +14,8 @@ const METAL = Color3.fromRGB(122, 128, 142);
 const DARK = Color3.fromRGB(46, 48, 56);
 /** The team's accent, on every building. */
 const GLOW = Color3.fromRGB(255, 170, 60);
+const TITANIUM = Color3.fromRGB(140, 195, 225);
+const REPAIR = Color3.fromRGB(110, 230, 120);
 
 const ALIEN_BODIES: Record<AlienKind, readonly [size: Vector3, color: Color3, glow: Color3]> = {
 	crawler: [new Vector3(2.6, 1.2, 3.2), Color3.fromRGB(58, 34, 72), Color3.fromRGB(190, 255, 90)],
@@ -133,20 +135,33 @@ export function buildingModel(
 		body = block(model, new Vector3(12, 8, 12), at(4), METAL, Enum.Material.DiamondPlate);
 		block(model, new Vector3(13, 1, 13), at(1), GLOW, Enum.Material.Neon);
 		block(model, new Vector3(4, 3, 4), at(9.5), GLOW, Enum.Material.Neon);
-	} else if (kind === "drill") {
+	} else if (kind === "drill" || kind === "advancedDrill") {
 		body = block(model, new Vector3(6, 3, 6), at(1.5), METAL, Enum.Material.DiamondPlate);
 		block(model, new Vector3(2, 3, 2), at(4.5), oreColor ?? GLOW, Enum.Material.Neon);
-	} else if (kind === "wall") {
-		body = block(model, new Vector3(width, 6, width), at(3), DARK, Enum.Material.Metal);
+		if (kind === "advancedDrill") {
+			block(model, new Vector3(4, 1, 4), at(3.5), DARK, Enum.Material.Metal);
+			block(model, new Vector3(1, 2, 1), at(7), GLOW, Enum.Material.Neon);
+		}
+	} else if (kind === "wall" || kind === "titaniumWall") {
+		const titanium = kind === "titaniumWall";
+		body = block(model, new Vector3(width, 6, width), at(3), titanium ? TITANIUM : DARK, Enum.Material.Metal);
 		block(model, new Vector3(width + 0.1, 0.4, width + 0.1), at(4.5), GLOW, Enum.Material.Neon);
+		if (titanium) block(model, new Vector3(width + 0.1, 0.4, width + 0.1), at(1.5), GLOW, Enum.Material.Neon);
+	} else if (kind === "mender") {
+		body = block(model, new Vector3(5, 2, 5), at(1), DARK, Enum.Material.Metal);
+		const orb = block(model, new Vector3(3, 3, 3), at(3.5), REPAIR, Enum.Material.Neon);
+		orb.Shape = Enum.PartType.Ball;
 	} else {
-		body = block(model, new Vector3(6, 2, 6), at(1), DARK, Enum.Material.Metal);
-		head = block(model, new Vector3(3, 2, 3), at(3), METAL, Enum.Material.DiamondPlate);
+		// Turrets, the heavy one twice the size.
+		const scale = kind === "heavyTurret" ? 2 : 1;
+		body = block(model, new Vector3(6, 2, 6).mul(scale), at(scale), DARK, Enum.Material.Metal);
+		head = block(model, new Vector3(3, 2, 3).mul(scale), at(3 * scale), METAL, Enum.Material.DiamondPlate);
 		head.Name = "Head";
-		weld(
-			head,
-			block(model, new Vector3(0.8, 0.8, 4), head.CFrame.mul(new CFrame(0, 0, -3)), GLOW, Enum.Material.Neon),
-		);
+		const barrel = new Vector3(0.8, 0.8, 4).mul(scale);
+		for (const side of scale > 1 ? [-1, 1] : [0]) {
+			const offset = new CFrame(side * 1.2, 0, -3 * scale);
+			weld(head, block(model, barrel, head.CFrame.mul(offset), GLOW, Enum.Material.Neon));
+		}
 	}
 	model.PrimaryPart = body;
 	return [model, head];

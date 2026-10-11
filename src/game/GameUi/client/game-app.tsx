@@ -19,7 +19,7 @@ import { CargoPanel, CoreStatus, Notices, ResultBanner, WavePanel } from "game/B
 import { BuildBar } from "game/Base/client/components/build-bar";
 import { Hotbar } from "game/Base/client/components/hotbar";
 import { BaseMessage, baseMessaging } from "game/Base/shared/base-network";
-import { BUILD_TOOL } from "game/Base/shared/buildings";
+import { BUILD_TOOL, BUILDABLE } from "game/Base/shared/buildings";
 import { LoadoutPanel, PlanPanel, TravelOverlay } from "game/Planets/client/components/launch-panel";
 import { PlanetPanel } from "game/Planets/client/components/planet-panel";
 import { ControlsHint, StarMap } from "game/Planets/client/components/star-map";
@@ -34,6 +34,10 @@ import {
 	worldStateAtom,
 } from "game/Planets/client/planets-state";
 import { PlanetsMessage, planetsMessaging, retreatTarget } from "game/Planets/shared/planets-network";
+import { ResearchTree } from "game/Research/client/components/research-tree";
+import { discoveredAtom, levelsAtom, researchOpenAtom } from "game/Research/client/research-state";
+import { canBuild } from "game/Research/shared/research";
+import { ResearchMessage, researchMessaging } from "game/Research/shared/research-network";
 import { TerrainDebugPanel } from "game/Terrain/client/components/terrain-debug";
 import { terrainDebugAtom, terrainDebugOpenAtom } from "game/Terrain/client/terrain-debug-state";
 import { TerrainMessage, terrainMessaging } from "game/Terrain/shared/terrain-network";
@@ -59,6 +63,9 @@ export function GameApp() {
 	const equipped = useAtom(equippedAtom);
 	const debugOpen = useAtom(terrainDebugOpenAtom);
 	const debugState = useAtom(terrainDebugAtom);
+	const levels = useAtom(levelsAtom);
+	const discovered = useAtom(discoveredAtom);
+	const researchOpen = useAtom(researchOpenAtom);
 
 	// The team between planets, for the local player once they're down there.
 	const travel = () => (deployed() ? world()?.travel : undefined);
@@ -224,6 +231,7 @@ export function GameApp() {
 					{(_, show) =>
 						$tuple(
 							<BuildBar
+								kinds={() => BUILDABLE.filter((kind) => canBuild(levels(), kind))}
 								pool={() => base()?.pool ?? []}
 								mode={buildMode}
 								onSelect={toggleBuildMode}
@@ -236,6 +244,36 @@ export function GameApp() {
 				<Show when={result}>
 					{(phase, show) => $tuple(<ResultBanner result={phase} show={show} />, EXIT_TIME)}
 				</Show>
+			</screengui>
+
+			{/* Over the HUD, which it covers while open. */}
+			<screengui
+				Name="Research"
+				DisplayOrder={5}
+				Enabled={visible}
+				IgnoreGuiInset={true}
+				ResetOnSpawn={false}
+				ZIndexBehavior={Enum.ZIndexBehavior.Sibling}
+			>
+				<Show when={() => mission() !== undefined && researchOpen()}>
+					{(_, show) =>
+						$tuple(
+							<ResearchTree
+								levels={levels}
+								gates={() => ({ conquered: world()?.conquered.size() ?? 0, discovered: discovered() })}
+								pool={() => base()?.pool ?? []}
+								onResearch={(id) => researchMessaging.server.emit(ResearchMessage.Research, { id })}
+								onClose={() => researchOpenAtom(false)}
+								show={show}
+							/>,
+							EXIT_TIME,
+						)
+					}
+				</Show>
+			</screengui>
+
+			{/* Over the research tree, so its refusals show. */}
+			<screengui Name="Notices" DisplayOrder={6} Enabled={visible} ResetOnSpawn={false}>
 				<Notices notices={notices} />
 			</screengui>
 

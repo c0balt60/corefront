@@ -197,8 +197,7 @@ export class BuildController implements OnStart {
 				gx + size <= GRID_SIZE &&
 				gz + size <= GRID_SIZE &&
 				buildingOver(gx, gz, size) === undefined &&
-				(kind !== "drill" ||
-					CollectionService.GetTagged("Ore").some((ore) => ore.GetAttribute("Cell") === corner)) &&
+				(!def.drill || CollectionService.GetTagged("Ore").some((ore) => ore.GetAttribute("Cell") === corner)) &&
 				canAfford(baseStateAtom()?.pool ?? [], def.cost) &&
 				root !== undefined &&
 				// Across the ground, like the server's check.

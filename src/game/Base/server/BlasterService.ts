@@ -5,10 +5,9 @@ import { t } from "@rbxts/t";
 import { block, tracer, weld } from "game/Base/server/models";
 import { WaveService } from "game/Base/server/WaveService";
 import { BaseMessage, baseMessaging } from "game/Base/shared/base-network";
+import { statOf } from "game/Research/server/research-store";
 
-const COOLDOWN = 0.25;
 const MAX_RANGE = 300;
-const DAMAGE = 15;
 const TRACER = Color3.fromRGB(90, 220, 255);
 
 const isFireData = t.interface({ target: t.Vector3 });
@@ -53,7 +52,7 @@ export class BlasterService implements OnStart {
 		if (!character || !handle?.IsA("BasePart") || !humanoid || humanoid.Health <= 0) return;
 
 		const now = os.clock();
-		if (now - (this.lastShot.get(player) ?? -math.huge) < COOLDOWN) return;
+		if (now - (this.lastShot.get(player) ?? -math.huge) < statOf(player.UserId, "blasterCooldown")) return;
 		this.lastShot.set(player, now);
 
 		const origin = handle.Position;
@@ -68,6 +67,6 @@ export class BlasterService implements OnStart {
 
 		tracer(origin, result?.Position ?? origin.add(direction), TRACER);
 		const model = result?.Instance.FindFirstAncestorOfClass("Model");
-		if (model) this.waveService.damageAlien(model, DAMAGE);
+		if (model) this.waveService.damageAlien(model, statOf(player.UserId, "blasterDamage"));
 	}
 }

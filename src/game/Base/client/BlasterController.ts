@@ -2,9 +2,11 @@ import { Controller, OnStart } from "@flamework/core";
 import { Players, UserInputService, Workspace } from "@rbxts/services";
 
 import { BaseMessage, baseMessaging } from "game/Base/shared/base-network";
+import { levelsAtom } from "game/Research/client/research-state";
+import { statValue } from "game/Research/shared/research";
 
-/** Seconds between shots while the button is held: a hair over the server's 0.25 cooldown, so ordinary jitter doesn't drop shots. */
-const FIRE_INTERVAL = 0.27;
+/** Added to the server's cooldown between shots, so ordinary jitter doesn't drop shots. */
+const FIRE_SLACK = 0.02;
 /** How far the Blaster aims, in studs. Past anything, it aims at the end of this. */
 const AIM_RANGE = 300;
 
@@ -24,7 +26,7 @@ function aim(character: Model) {
 
 /**
  * Fires the server's Blaster: while the character has it out and the button is
- * held, tells the server where the mouse points every `FIRE_INTERVAL`. The
+ * held, tells the server where the mouse points once per researched cooldown. The
  * server raycasts from the Blaster itself and decides what it hits.
  */
 @Controller()
@@ -67,7 +69,7 @@ export class BlasterController implements OnStart {
 				while (held && tool.Parent === character) {
 					const target = aim(character);
 					if (target) baseMessaging.server.emit(BaseMessage.Fire, { target });
-					task.wait(FIRE_INTERVAL);
+					task.wait(statValue(levelsAtom(), "blasterCooldown") + FIRE_SLACK);
 				}
 				firing = false;
 			});

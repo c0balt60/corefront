@@ -42,6 +42,8 @@ export interface BaseState {
 	readonly coreMaxHealth: number;
 	/** The Core's storage: every resource this planet has, in `RESOURCE_ORDER`, zeros included. */
 	readonly pool: ReadonlyArray<ResourceStack>;
+	/** The most of each resource deposits can fill the pool to. */
+	readonly capacity: number;
 }
 
 export interface BaseMessageData {

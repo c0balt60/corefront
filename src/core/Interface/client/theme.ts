@@ -68,6 +68,8 @@ export const EFFECTS = {
 	reticle: ["brackets"],
 	/** The in-mission HUD: core status, wave, cargo, toasts and the build bar's cards. */
 	hud: ["brackets", "decode"],
+	/** The research tree: energy round available nodes and pulses along the traces, and its glitching title. */
+	research: ["energy", "brackets", "decode", "glitch"],
 	/** The big won or lost banner across the screen. */
 	banner: ["brackets", "scan", "decode"],
 	/** Developer panels, like the terrain debug panel: plain, so they stay out of the way. */

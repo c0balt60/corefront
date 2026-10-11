@@ -16,8 +16,8 @@ interface EnergyGradientProps {
 	readonly kind: UiKind;
 	/** The outline's resting colour. */
 	readonly base: () => Color3;
-	/** The colour of the energy. */
-	readonly energy?: Color3;
+	/** The colour of the energy. Make it `base` to hide it. */
+	readonly energy?: Color3 | (() => Color3);
 	/** 0-1: speeds the energy up and widens it. Drive it from a hover spring. */
 	readonly charge?: () => number;
 }
@@ -41,7 +41,7 @@ export function EnergyGradient({ kind, base, energy = COLORS.accent, charge = ()
 				return new ColorSequence([
 					new ColorSequenceKeypoint(0, rest),
 					new ColorSequenceKeypoint(0.5 - width, rest),
-					new ColorSequenceKeypoint(0.5, energy),
+					new ColorSequenceKeypoint(0.5, typeIs(energy, "Color3") ? energy : energy()),
 					new ColorSequenceKeypoint(0.5 + width, rest),
 					new ColorSequenceKeypoint(1, rest),
 				]);
@@ -57,7 +57,7 @@ interface BracketsProps {
 	readonly kind: UiKind;
 	/** 0-1: how far the brackets stand off the corners, how long and how bright. Drive it from hover or appear. */
 	readonly open: () => number;
-	readonly color?: Color3;
+	readonly color?: Color3 | (() => Color3);
 	/** Arm length and thickness, in pixels, when fully open. */
 	readonly length?: number;
 	readonly thickness?: number;

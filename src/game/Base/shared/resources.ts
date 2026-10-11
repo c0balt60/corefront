@@ -51,9 +51,6 @@ export const KIND_ORES: Record<
 	],
 };
 
-/** Most items one player carries, across every resource. */
-export const INVENTORY_CAPACITY = 50;
-
 /** Fuel per destination index, per point of an ore's weight. */
 const FUEL_RATE = 1.5;
 

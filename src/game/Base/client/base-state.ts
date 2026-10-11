@@ -3,7 +3,8 @@ import { Players } from "@rbxts/services";
 
 import type { BaseState } from "game/Base/shared/base-network";
 import type { BuildableKind } from "game/Base/shared/buildings";
-import { INVENTORY_CAPACITY, type ResourceId, type ResourceStack } from "game/Base/shared/resources";
+import type { ResourceId, ResourceStack } from "game/Base/shared/resources";
+import { STATS } from "game/Research/shared/research";
 
 export interface Inventory {
 	readonly items: ReadonlyArray<ResourceStack>;
@@ -21,7 +22,7 @@ export type BuildMode = BuildableKind | "remove";
 export const baseStateAtom = atom<BaseState>();
 
 /** What the local player carries. */
-export const inventoryAtom = atom<Inventory>({ items: [], capacity: INVENTORY_CAPACITY });
+export const inventoryAtom = atom<Inventory>({ items: [], capacity: STATS.carryCapacity.base });
 
 /** Seconds a toast stays up. It fades out over the last `EXIT_TIME` of them. */
 export const NOTICE_SECONDS = 4;

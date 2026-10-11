@@ -7,8 +7,10 @@ const BLACK = new Color3(0, 0, 0);
 interface ShadowProps {
 	/** 0 rests close to the surface. 1 is raised: wider, softer, further down, and tinted with `glow`. */
 	readonly lift: () => number;
-	/** The colour a raised shadow glows. Black for a plain drop shadow. */
+	/** The colour a raised shadow glows. `tint` (black) for a plain drop shadow. */
 	readonly glow?: Color3;
+	/** The shadow's colour at rest. Black unless given, as for a glow round something coloured. */
+	readonly tint?: () => Color3;
 	/** Multiplies the shadow's reach, so small things like buttons get smaller shadows. */
 	readonly scale?: number;
 	/** 0-1 opacity, for fading the shadow in and out with its frame. */
@@ -19,7 +21,7 @@ interface ShadowProps {
  * A soft 9-slice shadow filling its parent, plus how far it spreads. It sits at
  * ZIndex 0, so put it next to the frame it shadows, never inside it.
  */
-export function Shadow({ lift, glow = BLACK, scale = 1, visibility = () => 1 }: ShadowProps) {
+export function Shadow({ lift, glow, tint = () => BLACK, scale = 1, visibility = () => 1 }: ShadowProps) {
 	const spread = () => (14 + 18 * lift()) * scale;
 
 	return (
@@ -28,7 +30,7 @@ export function Shadow({ lift, glow = BLACK, scale = 1, visibility = () => 1 }: 
 			AnchorPoint={new Vector2(0.5, 0.5)}
 			BackgroundTransparency={1}
 			Image={IMAGES.shadow}
-			ImageColor3={() => BLACK.Lerp(glow, math.clamp(lift(), 0, 1) * 0.6)}
+			ImageColor3={() => tint().Lerp(glow ?? tint(), math.clamp(lift(), 0, 1) * 0.6)}
 			ImageTransparency={() => 1 - (0.55 + 0.2 * lift()) * visibility()}
 			Position={() => new UDim2(0.5, 0, 0.5, (3 + 7 * lift()) * scale)}
 			ScaleType={Enum.ScaleType.Slice}

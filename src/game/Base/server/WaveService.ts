@@ -12,6 +12,7 @@ import { BUILDINGS } from "game/Base/shared/buildings";
 import { RESOURCE_ORDER } from "game/Base/shared/resources";
 import { PlanetsService } from "game/Planets/server/PlanetsService";
 import { TravelService } from "game/Planets/server/TravelService";
+import { statOf, teamStat } from "game/Research/server/research-store";
 import type { PlanetMap } from "game/Terrain/server/planet-map";
 import { CELL_STUDS, cellAt, cellCenter, GRID_SIZE } from "game/Terrain/shared/map";
 
@@ -67,8 +68,6 @@ const SPAWN_SECONDS = 0.1;
 const SPAWN_SPREAD = 6;
 const RESULT_SECONDS = 8;
 const FIELD_SECONDS = 0.5;
-const TURRET_SECONDS = 0.5;
-const TURRET_DAMAGE = 12;
 const STATE_SECONDS = 0.2;
 const TURRET_TRACER = Color3.fromRGB(255, 200, 90);
 const SPIT_TRACER = Color3.fromRGB(80, 255, 160);
@@ -140,7 +139,8 @@ export class WaveService implements OnStart {
 			nextWaveAt: this.nextWaveAt(),
 			aliens: this.alienCount(),
 			coreHealth: this.baseService.coreHealthAtom(),
-			coreMaxHealth: BUILDINGS.core.health,
+			coreMaxHealth: this.baseService.coreMaxHealthAtom(),
+			capacity: teamStat("coreCapacity"),
 			pool: RESOURCE_ORDER.filter((resource) => pool[resource] !== undefined).map((resource) => ({
 				resource,
 				amount: pool[resource]!,
@@ -157,7 +157,6 @@ export class WaveService implements OnStart {
 	private fieldRevision = -1;
 	private fieldAt = 0;
 	private spawnTimer = 0;
-	private turretTimer = 0;
 	private lastCall = -math.huge;
 	private broadcastQueued = false;
 
@@ -280,11 +279,7 @@ export class WaveService implements OnStart {
 		this.spawnPending(map, dt);
 		this.refreshField();
 		this.moveAliens(map, dt);
-		this.turretTimer -= dt;
-		if (this.turretTimer <= 0) {
-			this.turretTimer = TURRET_SECONDS;
-			this.fireTurrets();
-		}
+		this.fireTurrets(dt);
 
 		if (!this.liberated() && this.wave() >= this.waves() && this.pending.isEmpty() && this.aliens.isEmpty()) {
 			this.baseService.end("won");
@@ -432,14 +427,19 @@ export class WaveService implements OnStart {
 		return aim;
 	}
 
-	/** Every turret shoots the nearest alien in range, and turns its head to face it. */
-	private fireTurrets() {
-		const range = BUILDINGS.turret.range!;
+	/**
+	 * Every turret that has cooled down shoots the nearest alien in range, and turns its head to face it.
+	 * Damage scales with its placer's research.
+	 */
+	private fireTurrets(dt: number) {
 		for (const turret of this.baseService.buildings) {
+			const def = BUILDINGS[turret.kind];
 			const head = turret.head;
-			if (!head) continue;
+			if (!def.turret || !head) continue;
+			turret.cooldown -= dt;
+			if (turret.cooldown > 0) continue;
 			const from = head.Position;
-			let best = range;
+			let best = def.range ?? 0;
 			let target: Alien | undefined;
 			for (const [, alien] of this.aliens) {
 				const distance = flatDistance(alien.root.Position, from);
@@ -452,7 +452,8 @@ export class WaveService implements OnStart {
 			const at = target.root.Position;
 			head.CFrame = CFrame.lookAt(from, new Vector3(at.X, from.Y, at.Z));
 			tracer(from, at, TURRET_TRACER);
-			this.damageAlien(target.model, TURRET_DAMAGE);
+			turret.cooldown = def.turret.seconds;
+			this.damageAlien(target.model, def.turret.damage * statOf(turret.owner, "turretDamage"));
 		}
 	}
 }

@@ -16,14 +16,14 @@ const DESCRIPTIONS: Record<PlanetKind, string> = {
 };
 
 /** Stiffer and wilder than any `SPRINGS` preset, so a refused click rattles instead of sways. */
-const SHAKE = { tension: 700, friction: 15 };
+export const SHAKE = { tension: 700, friction: 15 };
 /** The sideways speed, in pixels per second, a refused click kicks the button with. */
-const SHAKE_KICK = 400;
+export const SHAKE_KICK = 400;
 
 /** The hazard tint of a locked planet: amber, the middle of `LEVEL_COLORS`. */
-const HAZARD = LEVEL_COLORS[2];
+export const HAZARD = LEVEL_COLORS[2];
 /** A gradient's transparency that makes ten soft diagonal stripes, as many keypoints as a sequence allows. */
-const STRIPES = (() => {
+export const STRIPES = (() => {
 	const keypoints = new Array<NumberSequenceKeypoint>();
 	for (let i = 0; i < 20; i++) keypoints.push(new NumberSequenceKeypoint(i / 19, i % 2 === 0 ? 1 : 0.9));
 	return new NumberSequence(keypoints);
@@ -37,8 +37,19 @@ const GLINT = new NumberSequence([
 
 const clamp01 = (value: number) => math.clamp(value, 0, 1);
 
+/** A status chip's colours: unlocked, on a mission, and locked. */
+export interface ChipPalette {
+	readonly live: Color3;
+	readonly mission: Color3;
+	readonly locked: Color3;
+}
+
+const CHIP_PALETTE: ChipPalette = { live: COLORS.confirm, mission: COLORS.accent, locked: COLORS.subtext };
+
 interface StatusChipProps {
 	readonly label: () => string;
+	/** Green, accent and grey unless given. */
+	readonly palette?: ChipPalette;
 	/** 0-1: how locked the chip looks, springing between its two states. */
 	readonly lock: () => number;
 	/** 0-1: how far the chip has turned accent and widened, for the planet a mission is on. */
@@ -55,11 +66,11 @@ interface StatusChipProps {
  * a padlock and LOCKED in grey. Its colours and width spring between them, the
  * dot and the padlock cross-fade, and the label decodes on every change.
  */
-function StatusChip({ label, lock, mission, reveal, open }: StatusChipProps) {
+export function StatusChip({ label, lock, mission, reveal, open, palette = CHIP_PALETTE }: StatusChipProps) {
 	const text = useScramble("chip", label, 0.05, 0.35);
 	const blink = useSpin(() => 240);
-	const live = () => COLORS.confirm.Lerp(COLORS.accent, mission());
-	const tone = () => live().Lerp(COLORS.subtext, lock());
+	const live = () => palette.live.Lerp(palette.mission, mission());
+	const tone = () => live().Lerp(palette.locked, lock());
 	const dot = () => 1 - reveal() * (1 - lock()) * (0.55 + 0.45 * math.sin(math.rad(blink())));
 	const padlock = () => 1 - reveal() * lock();
 
@@ -91,11 +102,11 @@ function StatusChip({ label, lock, mission, reveal, open }: StatusChipProps) {
 							Size={UDim2.fromScale(0.6, 0.8)}
 						>
 							<uicorner CornerRadius={new UDim(0.5, 0)} />
-							<uistroke Color={COLORS.subtext} Thickness={1.5} Transparency={padlock} />
+							<uistroke Color={palette.locked} Thickness={1.5} Transparency={padlock} />
 						</frame>
 						<frame
 							AnchorPoint={new Vector2(0.5, 1)}
-							BackgroundColor3={COLORS.subtext}
+							BackgroundColor3={palette.locked}
 							BackgroundTransparency={padlock}
 							BorderSizePixel={0}
 							Position={UDim2.fromScale(0.5, 1)}
@@ -121,7 +132,7 @@ function StatusChip({ label, lock, mission, reveal, open }: StatusChipProps) {
 				</frame>
 				<Brackets
 					kind="chip"
-					color={COLORS.confirm}
+					color={palette.live}
 					length={6}
 					open={open}
 					thickness={1}
@@ -129,7 +140,7 @@ function StatusChip({ label, lock, mission, reveal, open }: StatusChipProps) {
 				/>
 				<Brackets
 					kind="chip"
-					color={COLORS.accent}
+					color={palette.mission}
 					length={6}
 					open={open}
 					thickness={1}
@@ -137,7 +148,7 @@ function StatusChip({ label, lock, mission, reveal, open }: StatusChipProps) {
 				/>
 				<Brackets
 					kind="chip"
-					color={COLORS.subtext}
+					color={palette.locked}
 					length={6}
 					open={open}
 					thickness={1}
@@ -155,7 +166,7 @@ interface UnderlineProps {
 }
 
 /** A thin line that grows to full width while a glint races along it, a little ahead of its end. */
-function Underline({ progress, color }: UnderlineProps) {
+export function Underline({ progress, color }: UnderlineProps) {
 	return (
 		<frame BackgroundTransparency={1} ClipsDescendants={true} Size={new UDim2(1, 0, 0, 2)}>
 			<frame BackgroundColor3={color} BorderSizePixel={0} Size={() => UDim2.fromScale(progress(), 1)} />
@@ -222,7 +233,7 @@ interface RowProps {
  * it changes. The value's colour springs when it changes. A row with a level
  * has its bar in the middle.
  */
-function Row({ label, value, color = () => COLORS.text, level, reveal, delay }: RowProps) {
+export function Row({ label, value, color = () => COLORS.text, level, reveal, delay }: RowProps) {
 	const [tint, tintSpring] = useSpring(color(), SPRINGS.responsive);
 	const text = useScramble("text", value, delay);
 	effect(() => tintSpring.setGoal(color()));

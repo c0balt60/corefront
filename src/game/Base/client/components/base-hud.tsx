@@ -225,7 +225,8 @@ export function CoreStatus({ state, show }: MissionProps) {
 								LayoutOrder={1}
 								Size={UDim2.fromOffset(0, 20)}
 								Text={() => tostring(stack().amount)}
-								TextColor3={COLORS.text}
+								// Red once full: deposits stop there.
+								TextColor3={() => (stack().amount >= state().capacity ? COLORS.danger : COLORS.text)}
 								TextSize={15}
 							/>
 						</frame>
