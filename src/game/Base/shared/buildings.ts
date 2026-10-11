@@ -5,7 +5,7 @@ import type { ResourceId, ResourceStack } from "game/Base/shared/resources";
  * - `Base.Buildings`: one Model per building, with attributes `Kind` (BuildingKind),
  *   `Cell` (the -X/-Z corner cell, see map.ts), `Rotation`, `Health` and `MaxHealth`. Drills and
  *   crafters also have `Resource` (what they make) and `Stored`, drills `Yield` (per tick), crafters
- *   `Input_<resource>` for each input, turrets `Ammo`, sorters `Filter`, and belts `Entry`, `PathIn`,
+ *   `Input_<resource>` for each input, turrets `Ammo`, sorters and sources `Filter`, and belts `Entry`, `PathIn`,
  *   `PathMid`, `PathOut` and `PathEnds` (see `BeltPath`).
  * - `Base.Aliens`: one Model per alien, with `Health` and `MaxHealth`.
  * Ore deposits are Models tagged "Ore" (CollectionService), with attributes `Resource` and `Cell`.
@@ -21,6 +21,7 @@ export type BuildingKind =
 	| "router"
 	| "sorter"
 	| "junction"
+	| "source"
 	| "graphitePress"
 	| "siliconSmelter"
 	| "wall"
@@ -175,6 +176,14 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		size: 1,
 		outputs: true,
 	},
+	source: {
+		name: "Source",
+		description: "Sandbox only. Endlessly hands out the ore you pick to whatever is beside it. Click it to pick.",
+		cost: [],
+		health: 200,
+		size: 1,
+		outputs: true,
+	},
 	graphitePress: {
 		name: "Graphite Press",
 		description: "Presses 2 coal into 1 graphite, the hardest-hitting common ammo.",
@@ -321,7 +330,7 @@ export const AMMO: Partial<Record<ResourceId, number>> = {
 	thorium: 2.2,
 };
 
-/** The build bar's cards, in order. Only those a player has researched (or starts with) show. */
+/** The build bar's cards, in order. Only those a player has researched (or starts with) show, and the Source in a sandbox. */
 export const BUILDABLE: ReadonlyArray<BuildableKind> = [
 	"drill",
 	"advancedDrill",
@@ -341,6 +350,7 @@ export const BUILDABLE: ReadonlyArray<BuildableKind> = [
 	"swarmer",
 	"ripple",
 	"mender",
+	"source",
 ];
 
 /** What every player can build before researching anything. */

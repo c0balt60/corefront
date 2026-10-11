@@ -39,7 +39,7 @@ function sideSlot(items: ReadonlyArray<Item>): number | undefined {
 }
 
 /**
- * Moves ore between buildings, Mindustry-style: drills and crafters hand what they make to their
+ * Moves ore between buildings, Mindustry-style: drills, crafters and sources hand what they make to their
  * neighbours, belts carry it the way they face, routers pass it round, sorters split it and
  * junctions let it cross, until something takes it in for good (see `BaseService.receive`): the
  * Core, a turret's ammo or a crafter's inputs. Clients hear every move and animate it.
@@ -74,7 +74,10 @@ export class LogisticsService implements OnStart {
 		for (const building of this.baseService.buildings) {
 			if (isBelt(building.kind)) this.carry(building);
 			else if (building.kind === "router") this.route(building);
-			else if (building.resource !== undefined && building.stored > 0) this.offload(building);
+			else if (building.kind === "source") {
+				if (building.filter !== undefined) this.offload(building, building.filter);
+			} else if (building.resource !== undefined && building.stored > 0)
+				this.offload(building, building.resource);
 		}
 	}
 
@@ -110,15 +113,18 @@ export class LogisticsService implements OnStart {
 		}
 	}
 
-	/** Hands one of what a drill or crafter made to the next neighbour round that takes it. */
-	private offload(source: Building) {
+	/** Hands one of what a drill or crafter made, or a Source's ore, to the next neighbour round that takes it. */
+	private offload(source: Building, resource: ResourceId) {
 		const around = this.baseService.around(source);
 		for (let i = 0; i < around.size(); i++) {
 			const index = (source.turn + i) % around.size();
 			const [onward, side] = around[index];
-			if (!this.offer(onward, source.resource!, source, side, source.cell)) continue;
-			source.stored--;
-			source.model.SetAttribute("Stored", source.stored);
+			if (!this.offer(onward, resource, source, side, source.cell)) continue;
+			// A Source never runs out.
+			if (source.kind !== "source") {
+				source.stored--;
+				source.model.SetAttribute("Stored", source.stored);
+			}
 			source.turn = index + 1;
 			return;
 		}

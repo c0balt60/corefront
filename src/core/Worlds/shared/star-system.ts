@@ -31,7 +31,8 @@ export interface StarSystem {
 }
 
 const STAR_PREFIXES = ["Kepler", "TRES", "KELT", "Gliese", "WASP", "TOI", "Ross", "Wolf", "LHS", "HD"];
-const OTHER_KINDS: ReadonlyArray<PlanetKind> = ["Barren", "Frozen", "Volcanic"];
+export const PLANET_KINDS: ReadonlyArray<PlanetKind> = ["Habitable", "Barren", "Frozen", "Volcanic"];
+const OTHER_KINDS = PLANET_KINDS.filter((kind) => kind !== "Habitable");
 const KIND_COLORS: Record<PlanetKind, Color3> = {
 	Habitable: Color3.fromRGB(90, 160, 220),
 	Barren: Color3.fromRGB(150, 120, 100),
@@ -44,8 +45,9 @@ const KIND_COLORS: Record<PlanetKind, Color3> = {
  * preview, the game server and every client agree without sending it around.
  * The first planet is where every world starts: always habitable, easy, and
  * a defend mission. Danger rises with distance from the star.
+ * A `sandbox` world has just that first planet, of the kind given.
  */
-export function generateStarSystem(seed: number): StarSystem {
+export function generateStarSystem(seed: number, sandbox?: PlanetKind): StarSystem {
 	const random = new Random(seed);
 	const level = (value: number) => math.clamp(math.round(value), 0, LEVEL_NAMES.size() - 1);
 
@@ -74,6 +76,7 @@ export function generateStarSystem(seed: number): StarSystem {
 		});
 	}
 
+	if (sandbox) return { star, planets: [{ ...planets[0], kind: sandbox, color: KIND_COLORS[sandbox] }] };
 	return { star, planets };
 }
 

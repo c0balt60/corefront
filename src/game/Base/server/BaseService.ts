@@ -87,7 +87,7 @@ export interface Building {
 	fired: number;
 	/** Crafters: how much of each input they hold. */
 	readonly input: Stock;
-	/** Sorters: the ore they let straight through. Everything else turns aside. */
+	/** Sorters: the ore they let straight through. Everything else turns aside. Sources: the ore they hand out. */
 	filter?: ResourceId;
 	/** Which neighbour it hands ore to next, so it takes turns. */
 	turn: number;
@@ -174,6 +174,11 @@ export class BaseService implements OnStart {
 	/** Bumps whenever a building appears or goes, so the flowfield knows to rebuild. */
 	revision = 0;
 	core?: Building;
+	/**
+	 * A sandbox server, for testing against aliens: the pool holds every resource and never runs
+	 * down, and the Core can't fall. `WaveService` sends no waves. Stays on for the server's life.
+	 */
+	readonly sandbox = atom(false);
 
 	private map?: PlanetMap;
 	private readonly ores = new Map<number, OreDeposit>();
@@ -274,6 +279,7 @@ export class BaseService implements OnStart {
 			for (const [resource, amount] of pairs(stock)) pool[resource] = (pool[resource] ?? 0) + amount;
 		}
 		this.poolAtom(pool);
+		if (this.sandbox()) this.fillPool();
 
 		this.spawnCells = [];
 		for (const spawn of map.alienSpawns) {
@@ -310,6 +316,20 @@ export class BaseService implements OnStart {
 		setHealth(core.model, core.health, core.maxHealth);
 		this.coreHealthAtom(core.health);
 		this.coreMaxHealthAtom(max);
+	}
+
+	/** Turns this server into a sandbox (see `sandbox`). Research everything first, so the pool fills to the top capacity. */
+	startSandbox() {
+		this.sandbox(true);
+		this.fillPool();
+	}
+
+	/** Every resource, up to the Core's capacity. */
+	private fillPool() {
+		const pool: Stock = {};
+		const capacity = teamStat("coreCapacity");
+		for (const resource of RESOURCE_ORDER) pool[resource] = capacity;
+		this.poolAtom(pool);
 	}
 
 	/** Keeps the active planet's base, all but the Core, for when the team comes back to `planet`. */
@@ -353,7 +373,8 @@ export class BaseService implements OnStart {
 	/** Hurts a building. At zero it is gone for good, and losing the Core loses the planet. */
 	damage(building: Building, amount: number) {
 		if (!this.buildings.has(building)) return;
-		building.health = math.max(building.health - amount, 0);
+		// A sandbox's Core holds at 1.
+		building.health = math.max(building.health - amount, this.sandbox() && building === this.core ? 1 : 0);
 		setHealth(building.model, building.health, building.maxHealth);
 		if (building === this.core) this.coreHealthAtom(building.health);
 		if (building.health > 0) return;
@@ -470,6 +491,8 @@ export class BaseService implements OnStart {
 	 * What's added stops at the Core's capacity; a pool already over it (landed cargo) keeps the excess.
 	 */
 	private pay(stacks: ReadonlyArray<ResourceStack>, scale: number) {
+		// A sandbox's pool never runs down.
+		if (this.sandbox() && scale < 0) return;
 		const pool = { ...this.poolAtom() };
 		const capacity = teamStat("coreCapacity");
 		for (const { resource, amount } of stacks) {
@@ -492,7 +515,9 @@ export class BaseService implements OnStart {
 		const map = this.map;
 		const def = BUILDINGS[data.kind];
 		if (!map || this.phase() !== "active") return refuse("You can't build right now.");
-		if (!canBuild(levelsOf(player.UserId), data.kind)) return refuse(`Research the ${def.name} first.`);
+		if (!canBuild(levelsOf(player.UserId), data.kind, this.sandbox())) {
+			return refuse(`Research the ${def.name} first.`);
+		}
 
 		// A belt line keeps the routers and such it runs through (see `replaces`); anything else, or one belt, swaps them out.
 		const line = isBelt(data.kind) && data.cells.size() > 1;
@@ -601,14 +626,14 @@ export class BaseService implements OnStart {
 		this.refreshAround(map, building);
 	}
 
-	/** Sets the ore a Sorter lets straight through, or none. */
+	/** Sets the ore a Sorter lets straight through, or a Source hands out, or none. */
 	private configure(player: Player, data: unknown) {
 		if (!isCellOreData(data) || this.phase() !== "active") return;
-		const sorter = this.buildingOn(data.x, data.z);
-		if (sorter?.kind !== "sorter") return;
-		if (!this.inReach(player, sorter.position)) return this.notify(player, "That's too far away to set.");
-		sorter.filter = data.resource;
-		setFilter(sorter.model, data.resource);
+		const building = this.buildingOn(data.x, data.z);
+		if (building?.kind !== "sorter" && building?.kind !== "source") return;
+		if (!this.inReach(player, building.position)) return this.notify(player, "That's too far away to set.");
+		building.filter = data.resource;
+		setFilter(building.model, data.resource);
 	}
 
 	private remove(player: Player, data: unknown) {
@@ -749,7 +774,7 @@ export class BaseService implements OnStart {
 		building.position = body.Position;
 		setHealth(model, building.health, building.maxHealth);
 		if (def.turret) setAmmo(model, building.ammo.size());
-		if (kind === "sorter") setFilter(model, building.filter);
+		if (kind === "sorter" || kind === "source") setFilter(model, building.filter);
 	}
 
 	/** Whether the building beside a belt on `side` puts ore onto it. Never what's in front of it. */

@@ -1,5 +1,6 @@
 import { MessageEmitter } from "@rbxts/tether";
 
+import type { PlanetKind } from "core/Worlds/shared/star-system";
 import type { WorldSummary } from "core/Worlds/shared/worlds";
 
 /**
@@ -17,8 +18,8 @@ export const enum ServersMessage {
 }
 
 export interface ServersMessageData {
-	/** Client -> server: reserve a world with these settings and teleport there. */
-	[ServersMessage.Create]: { readonly seed: number; readonly isPrivate: boolean };
+	/** Client -> server: reserve a world with these settings and teleport there. A `sandbox` is one planet of that kind. */
+	[ServersMessage.Create]: { readonly seed: number; readonly isPrivate: boolean; readonly sandbox?: PlanetKind };
 	/** Client -> server: join a world by its code, public or private. */
 	[ServersMessage.Join]: { readonly code: string };
 	/** Client -> server: send the public world list. */

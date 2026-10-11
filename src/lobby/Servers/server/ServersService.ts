@@ -7,6 +7,7 @@ import { teleport } from "core/Teleport/server/teleport";
 import { PLACE_IDS } from "core/Teleport/shared/places";
 import type { WorldTeleportData } from "core/Teleport/shared/teleport-data";
 import { getWorld, listPublicWorlds, putWorld, removeWorld } from "core/Worlds/server/registry";
+import { PLANET_KINDS, type PlanetKind } from "core/Worlds/shared/star-system";
 import {
 	CODE_ALPHABET,
 	CODE_LENGTH,
@@ -38,7 +39,7 @@ export class ServersService implements OnStart {
 
 	onStart() {
 		serversMessaging.server.on(ServersMessage.Create, (player, data) => {
-			this.run(player, () => this.create(player, data?.seed, data?.isPrivate));
+			this.run(player, () => this.create(player, data?.seed, data?.isPrivate, data?.sandbox));
 		});
 		serversMessaging.server.on(ServersMessage.Join, (player, data) => {
 			this.run(player, () => this.join(player, data?.code));
@@ -65,8 +66,9 @@ export class ServersService implements OnStart {
 		});
 	}
 
-	private create(player: Player, seed: unknown, isPrivate: unknown): string | undefined {
+	private create(player: Player, seed: unknown, isPrivate: unknown, sandbox: unknown): string | undefined {
 		if (!isValidSeed(seed) || !typeIs(isPrivate, "boolean")) return "Invalid world settings.";
+		if (sandbox !== undefined && !PLANET_KINDS.includes(sandbox as PlanetKind)) return "Invalid world settings.";
 		if (IS_STUDIO || PLACE_IDS.game === 0) {
 			return "Worlds can't be created in Studio. Publish both places and set their ids in environments.ts.";
 		}
@@ -89,17 +91,19 @@ export class ServersService implements OnStart {
 			privateServerId,
 			seed,
 			isPrivate,
+			sandbox: sandbox as PlanetKind | undefined,
 			hostName: player.DisplayName,
 			players: 0,
 		});
 		if (!registered) return "Could not register the world. Try again.";
 
 		this.logger.Info(
-			"{Player} created world {Code} (seed {Seed}, private {Private})",
+			"{Player} created world {Code} (seed {Seed}, private {Private}, sandbox {Sandbox})",
 			player.Name,
 			code,
 			seed,
 			isPrivate,
+			sandbox,
 		);
 		if (this.send(player, accessCode, code)) return undefined;
 		removeWorld(code);

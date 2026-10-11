@@ -1,5 +1,6 @@
 import { MessageEmitter } from "@rbxts/tether";
 
+import type { PlanetKind } from "core/Worlds/shared/star-system";
 import type { ResourceStack } from "game/Base/shared/resources";
 
 /**
@@ -60,6 +61,8 @@ export interface WorldState {
 	readonly code: string;
 	readonly seed: number;
 	readonly isPrivate: boolean;
+	/** A sandbox world's one planet's kind (see `generateStarSystem`). Undefined for a campaign. */
+	readonly sandbox?: PlanetKind;
 	/** Indexes into `generateStarSystem(seed).planets` that players may travel to. */
 	readonly unlocked: Array<number>;
 	/** Planets the world has liberated. */

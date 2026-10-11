@@ -64,10 +64,11 @@ let cachedPlanets: readonly Planet[] = [];
 
 /** The current world's planets, generated once per seed. */
 function planets() {
-	const seed = worldStateAtom()?.seed;
+	const world = worldStateAtom();
+	const seed = world?.seed;
 	if (seed !== cachedSeed) {
 		cachedSeed = seed;
-		cachedPlanets = seed !== undefined ? generateStarSystem(seed).planets : [];
+		cachedPlanets = world ? generateStarSystem(world.seed, world.sandbox).planets : [];
 	}
 	return cachedPlanets;
 }

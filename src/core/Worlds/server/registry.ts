@@ -64,7 +64,13 @@ export function listPublicWorlds(): Array<WorldSummary> {
 	for (const { value } of items) {
 		const entry = value as WorldEntry;
 		if (entry.isPrivate || entry.players >= MAX_PLAYERS) continue;
-		list.push({ code: entry.code, hostName: entry.hostName, seed: entry.seed, players: entry.players });
+		list.push({
+			code: entry.code,
+			hostName: entry.hostName,
+			seed: entry.seed,
+			players: entry.players,
+			sandbox: entry.sandbox,
+		});
 	}
 	list.sort((a, b) => a.players > b.players);
 	return list;

@@ -18,12 +18,26 @@ import {
 	toggleTool,
 	toolsAtom,
 } from "game/Base/client/base-state";
-import { CargoPanel, CoreStatus, Notices, ResultBanner, WavePanel } from "game/Base/client/components/base-hud";
+import {
+	CargoPanel,
+	CoreStatus,
+	Notices,
+	ResultBanner,
+	SandboxPanel,
+	WavePanel,
+} from "game/Base/client/components/base-hud";
 import { BuildBar } from "game/Base/client/components/build-bar";
 import { BuildingPanel } from "game/Base/client/components/building-panel";
 import { Hotbar } from "game/Base/client/components/hotbar";
 import { cellOf } from "game/Base/client/InteractController";
-import { BaseMessage, baseMessaging, BeltMessage, beltMessaging } from "game/Base/shared/base-network";
+import {
+	BaseMessage,
+	baseMessaging,
+	BeltMessage,
+	beltMessaging,
+	SandboxMessage,
+	sandboxMessaging,
+} from "game/Base/shared/base-network";
 import { BUILD_TOOL, BUILDABLE } from "game/Base/shared/buildings";
 import { LoadoutPanel, PlanPanel, TravelOverlay } from "game/Planets/client/components/launch-panel";
 import { PlanetPanel } from "game/Planets/client/components/planet-panel";
@@ -88,11 +102,11 @@ export function GameApp() {
 	const plan = () => (deployed() ? world()?.plan : undefined);
 	const star = derive(() => {
 		const state = world();
-		return state ? generateStarSystem(state.seed).star : "";
+		return state ? generateStarSystem(state.seed, state.sandbox).star : "";
 	});
 	const planets = derive(() => {
 		const state = world();
-		return state ? generateStarSystem(state.seed).planets : [];
+		return state ? generateStarSystem(state.seed, state.sandbox).planets : [];
 	});
 	const active = () => world()?.active;
 	// On a planet enemies hold, the only way off is a retreat.
@@ -223,11 +237,34 @@ export function GameApp() {
 						$tuple(
 							<>
 								<CoreStatus state={state} show={show} />
-								<WavePanel
-									state={state}
-									show={show}
-									onCallWave={() => baseMessaging.server.emit(BaseMessage.CallWave)}
-								/>
+								{/* A sandbox has no waves: its panel sends aliens instead. */}
+								<Show when={() => !state().sandbox}>
+									{(_, shown) =>
+										$tuple(
+											<WavePanel
+												state={state}
+												show={() => show() && shown()}
+												onCallWave={() => baseMessaging.server.emit(BaseMessage.CallWave)}
+											/>,
+											EXIT_TIME,
+										)
+									}
+								</Show>
+								<Show when={() => state().sandbox}>
+									{(_, shown) =>
+										$tuple(
+											<SandboxPanel
+												state={state}
+												show={() => show() && shown()}
+												onSpawn={(kind, count) =>
+													sandboxMessaging.server.emit(SandboxMessage.Spawn, { kind, count })
+												}
+												onClear={() => sandboxMessaging.server.emit(SandboxMessage.Clear)}
+											/>,
+											EXIT_TIME,
+										)
+									}
+								</Show>
 								<CargoPanel
 									inventory={inventory}
 									show={show}
@@ -243,7 +280,7 @@ export function GameApp() {
 					{(_, show) =>
 						$tuple(
 							<BuildBar
-								kinds={() => BUILDABLE.filter((kind) => canBuild(levels(), kind))}
+								kinds={() => BUILDABLE.filter((kind) => canBuild(levels(), kind, base()?.sandbox))}
 								pool={() => base()?.pool ?? []}
 								mode={buildMode}
 								onSelect={toggleBuildMode}

@@ -11,7 +11,8 @@ import { CELL_STUDS } from "game/Terrain/shared/map";
 const WIDTH = 260;
 const ROW = 18;
 const SWATCH = 24;
-const GAP = 4;
+/** Between swatches: all nine ores fit across the panel. */
+const GAP = 2;
 /** The title's height, and HudBox's padding top and bottom. */
 const CHROME = 20 + 18;
 const BUTTONS = 36;
@@ -34,7 +35,7 @@ interface BuildingPanelProps {
 	readonly near: () => boolean;
 	readonly onCollect: () => void;
 	readonly onLoad: () => void;
-	/** Sorters: the ore to let through now, or undefined for none. */
+	/** Sorters and sources: the ore to let through or hand out now, or undefined for none. */
 	readonly onPick: (resource: ResourceId | undefined) => void;
 	/** Belts: the ore on it, and taking all of one ore off it. */
 	readonly ore: () => ReadonlyArray<ResourceId>;
@@ -81,7 +82,7 @@ function OreButton({ resource, text = () => "", picked = () => false, layoutOrde
  * or over a belt, which lies flat: its name, health and what it holds or does, and buttons to move
  * items in or out, greyed out until the local player is close enough. A Sorter's has a swatch for
  * every ore, the one it lets through outlined: clicking one lets that ore through instead, and
- * clicking the outlined one lets nothing through. A belt's has a swatch for each ore on it, with
+ * clicking the outlined one lets nothing through. A Source's picks the ore it hands out the same way. A belt's has a swatch for each ore on it, with
  * its count: clicking one takes all of that ore. It has to live in PlayerGui, not on the
  * building, to take clicks.
  */
@@ -166,7 +167,8 @@ export function BuildingPanel({
 		]);
 	}
 	if (def.drill || def.craft || belt) actions.push(["COLLECT ALL", onCollect]);
-	const sorter = kind === "sorter";
+	// Sorters and sources pick an ore.
+	const sorter = kind === "sorter" || kind === "source";
 	// Below the rows: the swatches, then the buttons.
 	const extra = (sorter || belt ? SWATCH + 8 : 0) + (actions.isEmpty() ? 0 : BUTTONS);
 	// What's on a belt, as counts.

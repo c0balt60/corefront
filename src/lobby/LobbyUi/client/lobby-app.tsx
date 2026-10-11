@@ -36,11 +36,12 @@ export function LobbyApp() {
 								{(_, pageShown) =>
 									$tuple(
 										<CreatePage
-											onCreate={(seed, isPrivate) => {
+											onCreate={(seed, isPrivate, sandbox) => {
 												statusAtom({ kind: "busy", text: "Creating your world..." });
 												serversMessaging.server.emit(ServersMessage.Create, {
 													seed,
 													isPrivate,
+													sandbox,
 												});
 											}}
 											onReturn={() => menuPageAtom("deploy")}

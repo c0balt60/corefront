@@ -3,8 +3,14 @@ import type { CommandContext } from "@rbxts/cmdr";
 
 import { isAlienKind, WaveService } from "game/Base/server/WaveService";
 
-export = function (_context: CommandContext, kind: string, count: number) {
-	if (!isAlienKind(kind)) return `Unknown alien "${kind}". Try crawler, brute or spitter.`;
+/** How far in front of `near` the aliens spawn, in studs. */
+const NEAR_STUDS = 40;
 
-	return Dependency<WaveService>().queue(kind, count) ? `Spawning ${count} ${kind}.` : "No mission is running.";
+export = function (_context: CommandContext, kind: string, count: number, near?: Player) {
+	if (!isAlienKind(kind)) return `Unknown alien "${kind}". Try crawler, brute or spitter.`;
+	const pivot = near?.Character?.GetPivot();
+	if (near && !pivot) return `${near.Name} has no character.`;
+
+	const at = pivot?.Position.add(pivot.LookVector.mul(NEAR_STUDS));
+	return Dependency<WaveService>().queue(kind, count, at) ? `Spawning ${count} ${kind}.` : "No mission is running.";
 };

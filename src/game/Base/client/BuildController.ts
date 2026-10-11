@@ -305,7 +305,8 @@ export class BuildController implements OnStart {
 	private pick() {
 		const model = buildingUnderMouse();
 		const kind = model?.GetAttribute("Kind") as BuildableKind | undefined;
-		if (!model || kind === undefined || !BUILDABLE.includes(kind) || !canBuild(levelsAtom(), kind)) return;
+		const sandbox = baseStateAtom()?.sandbox;
+		if (!model || kind === undefined || !BUILDABLE.includes(kind) || !canBuild(levelsAtom(), kind, sandbox)) return;
 		const rotation = model.GetAttribute("Rotation");
 		if (typeIs(rotation, "number")) this.rotation = rotation;
 		buildModeAtom(kind);

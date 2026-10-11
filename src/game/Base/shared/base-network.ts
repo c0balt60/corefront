@@ -37,6 +37,8 @@ export interface BaseState {
 	readonly planet: number;
 	/** Whether the active planet is liberated: no waves, just the base. */
 	readonly liberated: boolean;
+	/** A sandbox: everything unlocked, a pool that never runs down, and aliens only when called (see `sandboxMessaging`). */
+	readonly sandbox: boolean;
 	/** Waves launched so far, and how many the planet has. */
 	readonly wave: number;
 	readonly waves: number;
@@ -130,6 +132,10 @@ export interface BeltMessageData {
 	[BeltMessage.Left]: { readonly cell: number; readonly items: ReadonlyArray<HeldItem> };
 }
 
+/** Every kind of alien, in the order the sandbox panel lists them. */
+export const ALIEN_KINDS = ["crawler", "brute", "spitter"] as const;
+export type AlienKind = (typeof ALIEN_KINDS)[number];
+
 /** Turret shots, for clients to draw: the server deals their damage. Its own emitter: 150+. */
 export const shotMessaging = MessageEmitter.create<ShotMessageData>();
 
@@ -156,4 +162,19 @@ export interface ShotMessageData {
 	[ShotMessage.Fired]: Shot;
 	/** Server -> clients: a turret's shot hit at once, from its barrel at `from` to `to`. `size` is the turret's, in cells. */
 	[ShotMessage.Hit]: { readonly from: Vector3; readonly to: Vector3; readonly size: number };
+}
+
+/** A sandbox's controls, refused anywhere else. Its own emitter: 160+. */
+export const sandboxMessaging = MessageEmitter.create<SandboxMessageData>();
+
+export const enum SandboxMessage {
+	Spawn = 160,
+	Clear,
+}
+
+export interface SandboxMessageData {
+	/** Client -> server: send `count` aliens of `kind` from the alien spawns. */
+	[SandboxMessage.Spawn]: { readonly kind: AlienKind; readonly count: number };
+	/** Client -> server: kill every alien, and those waiting to spawn. */
+	[SandboxMessage.Clear]: undefined;
 }

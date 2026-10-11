@@ -11,7 +11,9 @@ import { discoveredAtom, levelsOf, personal, teamAtom } from "game/Research/serv
 import {
 	isTeamNode,
 	levelCost,
+	type Levels,
 	lockReason,
+	maxLevel,
 	RESEARCH,
 	RESEARCH_ORDER,
 	type ResearchId,
@@ -47,6 +49,20 @@ export class ResearchService implements OnStart {
 			if (!found.isEmpty()) discoveredAtom([...discovered, ...found]);
 		});
 		subscribe(discoveredAtom, () => Players.GetPlayers().forEach((player) => this.send(player)));
+	}
+
+	/** Researches every node to its top level, for everyone now and later: a sandbox's tree. */
+	researchAll() {
+		const levels: Levels = {};
+		for (const id of RESEARCH_ORDER) levels[id] = maxLevel(id);
+		// The team's levels override each player's (see `levelsOf`), so this reaches everyone.
+		teamAtom(levels);
+		this.baseService.refreshCore();
+		for (const player of Players.GetPlayers()) {
+			this.send(player);
+			this.baseService.sendInventory(player);
+		}
+		this.logger.Info("Researched everything");
 	}
 
 	private research(player: Player, data: unknown) {

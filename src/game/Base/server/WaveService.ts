@@ -7,7 +7,14 @@ import { t } from "@rbxts/t";
 import { BaseService, type Building } from "game/Base/server/BaseService";
 import { buildFlowfield, terrainCosts } from "game/Base/server/flowfield";
 import { alienModel, setHealth, tracer } from "game/Base/server/models";
-import { BaseMessage, baseMessaging, type BaseState, ShotMessage, shotMessaging } from "game/Base/shared/base-network";
+import {
+	type AlienKind,
+	BaseMessage,
+	baseMessaging,
+	type BaseState,
+	ShotMessage,
+	shotMessaging,
+} from "game/Base/shared/base-network";
 import { BUILDINGS, type BuildingDef } from "game/Base/shared/buildings";
 import { RESOURCE_ORDER } from "game/Base/shared/resources";
 import { PlanetsService } from "game/Planets/server/PlanetsService";
@@ -16,7 +23,6 @@ import { statOf, teamStat } from "game/Research/server/research-store";
 import type { PlanetMap } from "game/Terrain/server/planet-map";
 import { CELL_STUDS, cellAt, cellCenter, GRID_SIZE } from "game/Terrain/shared/map";
 
-export type AlienKind = "crawler" | "brute" | "spitter";
 export const isAlienKind = t.literal("crawler", "brute", "spitter");
 
 interface AlienDef {
@@ -149,6 +155,7 @@ export class WaveService implements OnStart {
 			phase: this.baseService.phase(),
 			planet: this.planetsService.activeAtom() ?? -1,
 			liberated: this.liberated(),
+			sandbox: this.baseService.sandbox(),
 			wave: this.wave(),
 			waves: this.waves(),
 			nextWaveAt: this.nextWaveAt(),
@@ -165,7 +172,8 @@ export class WaveService implements OnStart {
 
 	private readonly aliens = new Map<Model, Alien>();
 	private projectiles = new Array<Projectile>();
-	private pending = new Array<AlienKind>();
+	/** Aliens waiting to spawn: round the spawn points, or `at` a spot of their own. */
+	private pending = new Array<{ readonly kind: AlienKind; readonly at?: Vector3 }>();
 	private healthScale = 1;
 	private spawnIndex = 0;
 	private costs?: { readonly map: PlanetMap; readonly costs: Array<number> };
@@ -208,7 +216,7 @@ export class WaveService implements OnStart {
 		if (this.baseService.phase() !== "active" || wave > this.waves()) return false;
 		this.wave(wave);
 		this.nextWaveAt(wave < this.waves() ? Workspace.GetServerTimeNow() + WAVE_SECONDS : 0);
-		for (const kind of composition(wave)) this.pending.push(kind);
+		for (const kind of composition(wave)) this.pending.push({ kind });
 		this.logger.Info("Wave {Wave} of {Waves} launched", wave, this.waves());
 		return true;
 	}
@@ -222,11 +230,28 @@ export class WaveService implements OnStart {
 		return true;
 	}
 
-	/** Queues aliens to spawn as if a wave sent them. False when no mission is running. */
-	queue(kind: AlienKind, count: number): boolean {
+	/** Queues aliens to spawn as if a wave sent them, or around `at` instead. False when no mission is running. */
+	queue(kind: AlienKind, count: number, at?: Vector3): boolean {
 		if (this.baseService.phase() !== "active") return false;
-		for (let i = 0; i < count; i++) this.pending.push(kind);
+		for (let i = 0; i < count; i++) this.pending.push({ kind, at });
 		return true;
+	}
+
+	/** Stops the waves, here and on every planet after (see `BaseService.sandbox`): aliens only come when called. */
+	startSandbox() {
+		this.liberated(true);
+		this.wave(0);
+		this.waves(0);
+		this.nextWaveAt(0);
+	}
+
+	/** Kills every alien at once, and those waiting to spawn. */
+	clearAliens() {
+		for (const [model] of this.aliens) model.Destroy();
+		this.aliens.clear();
+		this.alienCount(0);
+		this.projectiles = [];
+		this.pending = [];
 	}
 
 	/** Hurts an alien; at zero it dies. Does nothing to a model that is not a live alien. */
@@ -246,14 +271,11 @@ export class WaveService implements OnStart {
 	 * waves start from the top after the grace period; a liberated one has none.
 	 */
 	private begin(map: PlanetMap | undefined) {
-		for (const [model] of this.aliens) model.Destroy();
-		this.aliens.clear();
-		this.alienCount(0);
-		this.projectiles = [];
-		this.pending = [];
+		this.clearAliens();
 		this.baseService.reset(map);
 
-		const liberated = map !== undefined && this.planetsService.isConquered(map.planet);
+		const liberated =
+			map !== undefined && (this.baseService.sandbox() || this.planetsService.isConquered(map.planet));
 		const planet = map && !liberated ? this.planetsService.getPlanet(map.planet) : undefined;
 		this.liberated(liberated);
 		this.healthScale = planet ? 1 + 0.3 * planet.difficulty + 0.2 * planet.aliens : 1;
@@ -308,11 +330,12 @@ export class WaveService implements OnStart {
 	private spawnPending(map: PlanetMap, dt: number) {
 		this.spawnTimer -= dt;
 		if (this.spawnTimer > 0 || this.aliens.size() >= MAX_ALIENS || map.alienSpawns.isEmpty()) return;
-		const kind = this.pending.shift();
-		if (kind === undefined) return;
+		const queued = this.pending.shift();
+		if (queued === undefined) return;
+		const { kind } = queued;
 		this.spawnTimer = SPAWN_SECONDS;
 
-		const spawn = map.alienSpawns[this.spawnIndex++ % map.alienSpawns.size()];
+		const spawn = queued.at ?? map.alienSpawns[this.spawnIndex++ % map.alienSpawns.size()];
 		const x = spawn.X + random.NextNumber(-SPAWN_SPREAD, SPAWN_SPREAD);
 		const z = spawn.Z + random.NextNumber(-SPAWN_SPREAD, SPAWN_SPREAD);
 		const def = ALIENS[kind];

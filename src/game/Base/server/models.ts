@@ -1,6 +1,6 @@
 import { Debris, Workspace } from "@rbxts/services";
 
-import type { AlienKind } from "game/Base/server/WaveService";
+import type { AlienKind } from "game/Base/shared/base-network";
 import {
 	BELT_WIDTH,
 	type BeltPath,
@@ -28,7 +28,7 @@ const GLOW = Color3.fromRGB(255, 170, 60);
 const TITANIUM = Color3.fromRGB(140, 195, 225);
 const REPAIR = Color3.fromRGB(110, 230, 120);
 const FURNACE = Color3.fromRGB(255, 110, 40);
-/** A sorter's light with no ore picked. */
+/** A sorter's or source's light with no ore picked. */
 const UNSORTED = Color3.fromRGB(235, 235, 240);
 
 /** How thick a wall's post is, and how tall it stands above its footprint: thinner than a cell. */
@@ -168,7 +168,7 @@ export function setAmmo(model: Model, items: number) {
 	sign.Enabled = items === 0;
 }
 
-/** Writes a sorter's `Filter`, and lights it in that ore's colour (white for none). */
+/** Writes a sorter's or source's `Filter`, and lights it in that ore's colour (white for none). */
 export function setFilter(model: Model, resource: ResourceId | undefined) {
 	model.SetAttribute("Filter", resource);
 	const light = model.FindFirstChild("Light");
@@ -373,6 +373,12 @@ export function buildingModel(
 		body = block(model, new Vector3(5, 2.5, 5), at(1.25), DARK, Enum.Material.Metal);
 		// Lit in the colour of the ore it lets through (see `setFilter`).
 		block(model, new Vector3(3, 0.8, 3), at(2.9), UNSORTED, Enum.Material.Neon).Name = "Light";
+	} else if (kind === "source") {
+		// Small, like a belt: a low plinth under a crystal on its point, lit like a sorter's (see `setFilter`).
+		body = block(model, new Vector3(4.5, 1.5, 4.5), at(0.75), DARK, Enum.Material.Metal);
+		block(model, new Vector3(4.7, 0.3, 4.7), at(1.2), GLOW, Enum.Material.Neon);
+		const tilt = CFrame.Angles(math.rad(45), 0, math.rad(45));
+		block(model, new Vector3(1.8, 1.8, 1.8), at(2.9).mul(tilt), UNSORTED, Enum.Material.Neon).Name = "Light";
 	} else if (kind === "junction") {
 		body = block(model, new Vector3(6, 1.5, 6), at(0.75), METAL, Enum.Material.DiamondPlate);
 		block(model, new Vector3(6.2, 0.4, 1.4), at(1.6), GLOW, Enum.Material.Neon);

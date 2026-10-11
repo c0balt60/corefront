@@ -7,7 +7,13 @@ import { Modal, Panel } from "core/Interface/client/components/panel";
 import { Shadow } from "core/Interface/client/components/shadow";
 import { EXIT_TIME, useAppear, useScramble } from "core/Interface/client/motion";
 import { COLORS, FONT, FONT_DISPLAY, FONT_LABEL, LEVEL_COLORS, SPRINGS } from "core/Interface/client/theme";
-import { generateStarSystem, LEVEL_NAMES, summarizeStarSystem } from "core/Worlds/shared/star-system";
+import {
+	generateStarSystem,
+	LEVEL_NAMES,
+	PLANET_KINDS,
+	type PlanetKind,
+	summarizeStarSystem,
+} from "core/Worlds/shared/star-system";
 import { isValidSeed, randomSeed } from "core/Worlds/shared/worlds";
 import { PageHeading, ReturnButton, Reveal, TextField } from "lobby/Menu/client/components/page-parts";
 
@@ -15,24 +21,26 @@ import { PageHeading, ReturnButton, Reveal, TextField } from "lobby/Menu/client/
 const SEED_DIGITS = 10;
 
 interface CreatePageProps {
-	/** Called once the player has confirmed. */
-	readonly onCreate: (seed: number, isPrivate: boolean) => void;
+	/** Called once the player has confirmed. A `sandbox` is one planet of that kind, everything unlocked. */
+	readonly onCreate: (seed: number, isPrivate: boolean, sandbox: PlanetKind | undefined) => void;
 	readonly onReturn: () => void;
 	/** Turns false while the page is leaving, so its parts play their exit. */
 	readonly show?: () => boolean;
 }
 
 /**
- * Pick a seed and privacy for a new world, see the star system the seed makes, then confirm to create it.
+ * Pick a seed and privacy for a new world, or a sandbox and its planet kind, see the star system the seed makes, then confirm to create it.
  * Its parts rise in one after another, their labels decoding as they land. When RANDOM picks a seed it rolls to
  * the new number, a scan line sweeps the panel and the system info decodes to the new star.
  */
 export function CreatePage({ onCreate, onReturn, show }: CreatePageProps) {
 	const seed = source(randomSeed());
 	const isPrivate = source(false);
+	const sandbox = source(false);
+	const kind = source<PlanetKind>("Habitable");
 	const confirming = source(false);
 
-	const system = derive(() => generateStarSystem(seed()));
+	const system = derive(() => generateStarSystem(seed(), sandbox() ? kind() : undefined));
 	const summary = derive(() => summarizeStarSystem(system()));
 
 	// The seed on screen chases the real one, so a new seed rolls up or down to its value.
@@ -90,9 +98,36 @@ export function CreatePage({ onCreate, onReturn, show }: CreatePageProps) {
 						</Reveal>
 
 						<Reveal show={show} delay={0.2} scale={1}>
-							<Caption text="PRIVATE WORLD" position={UDim2.fromScale(0, 0.42)} delay={0.3} />
-							<Toggle on={isPrivate} onToggle={() => isPrivate(!isPrivate())} />
+							<Caption text="PRIVATE WORLD" position={UDim2.fromScale(0, 0.36)} delay={0.3} />
+							<Toggle
+								on={isPrivate}
+								onToggle={() => isPrivate(!isPrivate())}
+								position={UDim2.fromScale(0, 0.47)}
+							/>
 							<Hint text="Only players with your join code can join." shown={isPrivate} />
+						</Reveal>
+
+						<Reveal show={show} delay={0.26} scale={1}>
+							<Caption text="SANDBOX WORLD" position={UDim2.fromScale(0, 0.7)} delay={0.36} />
+							<Toggle
+								on={sandbox}
+								onToggle={() => sandbox(!sandbox())}
+								position={UDim2.fromScale(0, 0.81)}
+							/>
+							<Show when={sandbox}>
+								{() => (
+									// Cycles through the kinds of planet.
+									<Button
+										text={() => kind().upper()}
+										color={COLORS.stroke}
+										onClick={() =>
+											kind(PLANET_KINDS[(PLANET_KINDS.indexOf(kind()) + 1) % PLANET_KINDS.size()])
+										}
+										position={UDim2.fromScale(0.12, 0.81)}
+										size={UDim2.fromScale(0.22, 0.16)}
+									/>
+								)}
+							</Show>
 						</Reveal>
 
 						<Reveal show={show} delay={0.14} scale={1}>
@@ -127,15 +162,15 @@ export function CreatePage({ onCreate, onReturn, show }: CreatePageProps) {
 							<Stat
 								order={3}
 								name="Difficulty"
-								value={() => LEVEL_NAMES[summary().difficulty]}
-								color={() => LEVEL_COLORS[summary().difficulty]}
+								value={() => (sandbox() ? "Sandbox" : LEVEL_NAMES[summary().difficulty])}
+								color={() => (sandbox() ? COLORS.accent : LEVEL_COLORS[summary().difficulty])}
 								show={show}
 							/>
 							<Stat
 								order={4}
 								name="Alien density"
-								value={() => LEVEL_NAMES[summary().aliens]}
-								color={() => LEVEL_COLORS[summary().aliens]}
+								value={() => (sandbox() ? "On demand" : LEVEL_NAMES[summary().aliens])}
+								color={() => (sandbox() ? COLORS.accent : LEVEL_COLORS[summary().aliens])}
 								show={show}
 							/>
 						</frame>
@@ -177,7 +212,7 @@ export function CreatePage({ onCreate, onReturn, show }: CreatePageProps) {
 								color={COLORS.confirm}
 								onClick={() => {
 									confirming(false);
-									onCreate(seed(), isPrivate());
+									onCreate(seed(), isPrivate(), sandbox() ? kind() : undefined);
 								}}
 								position={UDim2.fromScale(0.54, 0.68)}
 								size={UDim2.fromScale(0.38, 0.2)}
@@ -224,7 +259,7 @@ function Hint({ text, shown }: { readonly text: string; readonly shown: () => bo
 		<textlabel
 			BackgroundTransparency={1}
 			FontFace={FONT}
-			Position={() => new UDim2(0.12, (appear() - 1) * 14, 0.53, 0)}
+			Position={() => new UDim2(0.12, (appear() - 1) * 14, 0.47, 0)}
 			Size={UDim2.fromScale(0.34, 0.16)}
 			Text={text}
 			TextColor3={COLORS.muted}
@@ -294,13 +329,14 @@ function Stat({ order, name, value, color = () => COLORS.text, show }: StatProps
 interface ToggleProps {
 	readonly on: () => boolean;
 	readonly onToggle: () => void;
+	readonly position: UDim2;
 }
 
 /**
  * A pill switch. The knob springs across with a bounce, riding on its own shadow, and the pill turns green. Energy
  * runs round the pill's outline, faster on hover and a little quicker while it is on.
  */
-function Toggle({ on, onToggle }: ToggleProps) {
+function Toggle({ on, onToggle, position }: ToggleProps) {
 	const hovered = source(false);
 	const [slide, slideSpring] = useSpring<number>(on() ? 1 : 0, SPRINGS.bouncy);
 	const [lift, liftSpring] = useSpring<number>(0, SPRINGS.responsive);
@@ -312,7 +348,7 @@ function Toggle({ on, onToggle }: ToggleProps) {
 		<textbutton
 			AutoButtonColor={false}
 			BackgroundColor3={() => COLORS.disabled.Lerp(COLORS.confirm, math.clamp(slide(), 0, 1))}
-			Position={UDim2.fromScale(0, 0.53)}
+			Position={position}
 			Size={UDim2.fromScale(0.1, 0.16)}
 			Text=""
 			MouseEnter={() => hovered(true)}

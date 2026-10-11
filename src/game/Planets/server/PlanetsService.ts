@@ -97,7 +97,7 @@ export class PlanetsService implements OnStart {
 
 	getPlanets(): ReadonlyArray<Planet> {
 		const world = this.arrivalService.getWorld();
-		return world ? generateStarSystem(world.seed).planets : [];
+		return world ? generateStarSystem(world.seed, world.sandbox).planets : [];
 	}
 
 	isConquered(planet: number): boolean {

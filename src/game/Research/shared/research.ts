@@ -507,8 +507,9 @@ export function statValue(levels: Levels, stat: StatId): number {
 	return value;
 }
 
-/** Whether `levels` let a player place `kind`. */
-export function canBuild(levels: Levels, kind: BuildableKind): boolean {
+/** Whether `levels` let a player place `kind`. The Source is only ever a `sandbox`'s. */
+export function canBuild(levels: Levels, kind: BuildableKind, sandbox = false): boolean {
+	if (kind === "source") return sandbox;
 	if (STARTING_BUILDINGS.includes(kind)) return true;
 	return RESEARCH_ORDER.some((id) => RESEARCH[id].unlocks === kind && (levels[id] ?? 0) > 0);
 }

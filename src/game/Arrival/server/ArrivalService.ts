@@ -9,6 +9,7 @@ import { teleport } from "core/Teleport/server/teleport";
 import { PLACE_IDS } from "core/Teleport/shared/places";
 import { isWorldTeleportData } from "core/Teleport/shared/teleport-data";
 import { getWorld, removeWorld, setWorldPlayers } from "core/Worlds/server/registry";
+import type { PlanetKind } from "core/Worlds/shared/star-system";
 import { isValidCode, randomSeed } from "core/Worlds/shared/worlds";
 
 /** The world this server runs, as the registry describes it. */
@@ -16,6 +17,8 @@ export interface World {
 	readonly code: string;
 	readonly seed: number;
 	readonly isPrivate: boolean;
+	/** A sandbox world's one planet's kind (see `generateStarSystem`). Undefined for a campaign. */
+	readonly sandbox?: PlanetKind;
 }
 
 /** Seconds between registry refreshes. The registry drops an entry that goes quiet for longer than that. */
@@ -113,9 +116,15 @@ export class ArrivalService implements OnStart {
 		const entry = getWorld(code);
 		if (!entry || entry.privateServerId !== game.PrivateServerId) return undefined;
 
-		const world: World = { code, seed: entry.seed, isPrivate: entry.isPrivate };
+		const world: World = { code, seed: entry.seed, isPrivate: entry.isPrivate, sandbox: entry.sandbox };
 		this.worldAtom(world);
-		this.logger.Info("Hosting world {Code} (seed {Seed}, private {Private})", code, world.seed, world.isPrivate);
+		this.logger.Info(
+			"Hosting world {Code} (seed {Seed}, private {Private}, sandbox {Sandbox})",
+			code,
+			world.seed,
+			world.isPrivate,
+			world.sandbox,
+		);
 		task.spawn(() => this.refreshRegistry());
 		return world;
 	}

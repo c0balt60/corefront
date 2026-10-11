@@ -8,7 +8,7 @@ import { EXIT_TIME, useAppear, useScramble } from "core/Interface/client/motion"
 import { CARD_TRANSPARENCY, COLORS, FONT, FONT_DISPLAY, FONT_LABEL, SPRINGS } from "core/Interface/client/theme";
 import { useServerTime } from "core/Interface/client/use-server-time";
 import { type Inventory, NOTICE_SECONDS, type Notice } from "game/Base/client/base-state";
-import type { BaseState } from "game/Base/shared/base-network";
+import { ALIEN_KINDS, type AlienKind, type BaseState } from "game/Base/shared/base-network";
 import { type ResourceId, RESOURCES } from "game/Base/shared/resources";
 
 const clamp01 = (value: number) => math.clamp(value, 0, 1);
@@ -305,6 +305,141 @@ export function WavePanel({ state, show, onCallWave }: WavePanelProps) {
 					/>
 				)}
 			</Show>
+		</HudBox>
+	);
+}
+
+/** How many aliens the sandbox panel can send at once. */
+const SPAWN_COUNTS = [1, 5, 10, 25];
+/** Pixels between a row of chips. */
+const CHIP_GAP = 4;
+
+interface ChipProps {
+	readonly text: string;
+	/** Lit while true. */
+	readonly picked: () => boolean;
+	/** How many share its row, so it takes its share of the width. */
+	readonly of: number;
+	readonly layoutOrder: number;
+	readonly onClick: () => void;
+}
+
+/** One of a row of choices, lit in the accent while it's the one picked. */
+function Chip({ text, picked, of, layoutOrder, onClick }: ChipProps) {
+	return (
+		<textbutton
+			AutoButtonColor={true}
+			BackgroundColor3={() => (picked() ? COLORS.accent : COLORS.disabled)}
+			BorderSizePixel={0}
+			FontFace={FONT_DISPLAY}
+			LayoutOrder={layoutOrder}
+			Size={new UDim2(1 / of, (-CHIP_GAP * (of - 1)) / of, 1, 0)}
+			Text={text}
+			TextColor3={() => (picked() ? COLORS.text : COLORS.subtext)}
+			TextSize={12}
+			Activated={onClick}
+		>
+			<uistroke
+				ApplyStrokeMode={Enum.ApplyStrokeMode.Border}
+				Color={() => (picked() ? COLORS.text : COLORS.stroke)}
+				LineJoinMode={Enum.LineJoinMode.Miter}
+				Thickness={1}
+			/>
+		</textbutton>
+	);
+}
+
+/** A row of chips, `y` pixels down. */
+function ChipRow({ y, children }: { readonly y: number; readonly children: Vide.Node }) {
+	return (
+		<frame BackgroundTransparency={1} Position={UDim2.fromOffset(0, y)} Size={new UDim2(1, 0, 0, 24)}>
+			<uilistlayout
+				FillDirection={Enum.FillDirection.Horizontal}
+				Padding={new UDim(0, CHIP_GAP)}
+				SortOrder={Enum.SortOrder.LayoutOrder}
+			/>
+			{children}
+		</frame>
+	);
+}
+
+interface SandboxPanelProps extends MissionProps {
+	/** Sends `count` aliens of `kind` from the alien spawns. */
+	readonly onSpawn: (kind: AlienKind, count: number) => void;
+	/** Kills every alien. */
+	readonly onClear: () => void;
+}
+
+/**
+ * A sandbox's stand-in for the wave panel, on the right: how many aliens are alive, a kind and a
+ * count to pick, and buttons to send them from the alien spawns or clear them all. Slides in from
+ * the right.
+ */
+export function SandboxPanel({ state, show, onSpawn, onClear }: SandboxPanelProps) {
+	const slide = useAppear(show, 0.1);
+	const kind = source<AlienKind>("crawler");
+	const count = source(SPAWN_COUNTS[1]);
+	const idle = () => state().phase !== "active";
+
+	return (
+		<HudBox
+			name="SandboxPanel"
+			anchorPoint={new Vector2(1, 0)}
+			position={() => new UDim2(1, -EDGE + 280 * (1 - slide()), 0.3, 0)}
+			size={UDim2.fromOffset(220, 168)}
+		>
+			<Label text={useScramble("hud", () => "SANDBOX", 0.25)} size={new UDim2(1, 0, 0, 14)} />
+			<Label position={UDim2.fromOffset(0, 20)} size={new UDim2(0.5, 0, 0, 16)} text="ALIENS" />
+			<Label
+				alignX={Enum.TextXAlignment.Right}
+				anchorPoint={new Vector2(1, 0)}
+				color={() => (state().aliens > 0 ? COLORS.danger : COLORS.text)}
+				font={FONT_DISPLAY}
+				position={new UDim2(1, 0, 0, 20)}
+				size={new UDim2(0.5, 0, 0, 16)}
+				text={() => tostring(state().aliens)}
+				textSize={16}
+			/>
+			<ChipRow y={44}>
+				{ALIEN_KINDS.map((option, index) => (
+					<Chip
+						text={option.upper()}
+						picked={() => kind() === option}
+						of={ALIEN_KINDS.size()}
+						layoutOrder={index}
+						onClick={() => kind(option)}
+					/>
+				))}
+			</ChipRow>
+			<ChipRow y={74}>
+				{SPAWN_COUNTS.map((option, index) => (
+					<Chip
+						text={`x${option}`}
+						picked={() => count() === option}
+						of={SPAWN_COUNTS.size()}
+						layoutOrder={index}
+						onClick={() => count(option)}
+					/>
+				))}
+			</ChipRow>
+			<Button
+				anchorPoint={new Vector2(0, 1)}
+				color={COLORS.danger}
+				disabled={idle}
+				onClick={() => onSpawn(kind(), count())}
+				position={UDim2.fromScale(0, 1)}
+				size={new UDim2(0.6, -CHIP_GAP / 2, 0, 28)}
+				text="SPAWN"
+			/>
+			<Button
+				anchorPoint={new Vector2(1, 1)}
+				color={COLORS.stroke}
+				disabled={idle}
+				onClick={onClear}
+				position={UDim2.fromScale(1, 1)}
+				size={new UDim2(0.4, -CHIP_GAP / 2, 0, 28)}
+				text="CLEAR"
+			/>
 		</HudBox>
 	);
 }

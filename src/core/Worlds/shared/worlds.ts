@@ -1,3 +1,5 @@
+import type { PlanetKind } from "core/Worlds/shared/star-system";
+
 /** Most players one world server takes. Set the game place's Max Players to the same in Creator Hub. */
 export const MAX_PLAYERS = 4;
 
@@ -14,6 +16,8 @@ export interface WorldSummary {
 	readonly hostName: string;
 	readonly seed: number;
 	readonly players: number;
+	/** A sandbox world's one planet's kind (see `generateStarSystem`). Undefined for a campaign. */
+	readonly sandbox?: PlanetKind;
 }
 
 export function isValidSeed(seed: unknown): seed is number {
