@@ -51,6 +51,8 @@ export interface BaseState {
 	readonly pool: ReadonlyArray<ResourceStack>;
 	/** The most of each resource deposits can fill the pool to. */
 	readonly capacity: number;
+	/** Where aliens land: the centre of each drop zone, on the ground (see `DROP_ZONE_RADIUS`). None without a map. */
+	readonly dropZones: ReadonlyArray<Vector3>;
 }
 
 export interface BaseMessageData {
@@ -132,21 +134,25 @@ export interface BeltMessageData {
 	[BeltMessage.Left]: { readonly cell: number; readonly items: ReadonlyArray<HeldItem> };
 }
 
-/** Every kind of alien, in the order the sandbox panel lists them. */
-export const ALIEN_KINDS = ["crawler", "brute", "spitter"] as const;
+/** The aliens that walk, and those that fly, in the order the sandbox panel lists them. */
+export const GROUND_ALIENS = ["crawler", "sapper", "brute", "spitter", "mortar", "shielder", "titan"] as const;
+export const AIR_ALIENS = ["drone", "bomber", "gunship", "carrier"] as const;
+/** Every kind of alien. */
+export const ALIEN_KINDS = [...GROUND_ALIENS, ...AIR_ALIENS] as const;
 export type AlienKind = (typeof ALIEN_KINDS)[number];
 
-/** Turret shots, for clients to draw: the server deals their damage. Its own emitter: 150+. */
+/** Turret and alien shots, for clients to draw: the server deals their damage. Its own emitter: 150+. */
 export const shotMessaging = MessageEmitter.create<ShotMessageData>();
 
 export const enum ShotMessage {
 	Fired = 150,
 	Hit,
+	Blast,
 }
 
-/** A rocket or shell, flying a curve from `from` that bends toward `control`, for `seconds`. */
+/** A rocket, shell or burst of flak, flying a curve from `from` that bends toward `control`, for `seconds`. */
 export interface Shot {
-	readonly kind: "rocket" | "shell";
+	readonly kind: "rocket" | "shell" | "flak";
 	readonly from: Vector3;
 	readonly control: Vector3;
 	/** Where it lands, unless it chases `target` while that lives. */
@@ -158,10 +164,15 @@ export interface Shot {
 }
 
 export interface ShotMessageData {
-	/** Server -> clients: a turret fired a rocket or shell. */
+	/** Server -> clients: a turret fired a rocket, shell or flak, or an alien a shell, bomb or rocket. */
 	[ShotMessage.Fired]: Shot;
-	/** Server -> clients: a turret's shot hit at once, from its barrel at `from` to `to`. `size` is the turret's, in cells. */
+	/**
+	 * Server -> clients: a turret's shot hit at once, from its barrel at `from` to `to`. `size` is how
+	 * heavy it looks: a slow gun's size in cells, or 1 for a fast one, whose every shot can't blast.
+	 */
 	[ShotMessage.Hit]: { readonly from: Vector3; readonly to: Vector3; readonly size: number };
+	/** Server -> clients: something blew up on the spot, hurting what was within `splash` studs. */
+	[ShotMessage.Blast]: { readonly at: Vector3; readonly splash: number };
 }
 
 /** A sandbox's controls, refused anywhere else. Its own emitter: 160+. */
@@ -173,7 +184,7 @@ export const enum SandboxMessage {
 }
 
 export interface SandboxMessageData {
-	/** Client -> server: send `count` aliens of `kind` from the alien spawns. */
+	/** Client -> server: send `count` aliens of `kind` from the drop zones. */
 	[SandboxMessage.Spawn]: { readonly kind: AlienKind; readonly count: number };
 	/** Client -> server: kill every alien, and those waiting to spawn. */
 	[SandboxMessage.Clear]: undefined;

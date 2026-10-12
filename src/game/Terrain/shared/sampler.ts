@@ -17,7 +17,7 @@ import { Prng } from "game/Terrain/shared/prng";
  * 4. Biomes: the kind's tables, by terrain band and climate, blended at edges.
  * 5. Water: rivers where a noise crosses zero and lakes where another peaks,
  *    carved below sea level and fading out as the land rises.
- * 6. Pads: the landing pad and the alien spawn pads are flattened last, so
+ * 6. Pads: the landing pad and the drop zone pads are flattened last, so
  *    nothing cuts into them.
  */
 
@@ -27,7 +27,7 @@ export const WORLD_TOP = 512;
 
 /** The outer band, in studs, where the edge cliffs rise. */
 export const EDGE_WIDTH = 96;
-/** Alien spawn pads are flat out to this radius. */
+/** Drop zone pads are flat out to this radius. */
 export const PAD_FLAT = 24;
 
 // Salts keep each layer's permutation independent for the same seed.
@@ -81,7 +81,7 @@ const LANDING_FALLOFF = 96;
 // Mountains, rivers and lakes fade in between these distances from the centre.
 const CALM_INNER = 150;
 const CALM_OUTER = 250;
-// Alien pads: this far from the centre, at least a quarter turn apart.
+// Drop zone pads: this far from the centre, at least a quarter turn apart.
 const PAD_DISTANCE = 400;
 const PAD_FALLOFF = 56;
 // Pads sit at least this far above sea level, so no water reaches them.
@@ -105,7 +105,7 @@ export interface Column {
 
 export interface Sampler {
 	readonly config: TerrainConfig;
-	/** Alien spawn pad centres. */
+	/** Drop zone pad centres. */
 	readonly pads: ReadonlyArray<{ readonly x: number; readonly z: number }>;
 	readonly sample: (x: number, z: number, column: Column) => Column;
 	/** Heightmap ground height. */
@@ -410,19 +410,21 @@ export function newSampler(config: TerrainConfig): Sampler {
 	// The landing pad sits at the map centre; the Core's 2x2 cells meet at (0, 0).
 	const landing = padHeight(0, 0);
 
-	// Three alien pads at seed-chosen angles. Each gap is a quarter turn plus a
-	// share of the remaining quarter, so every pair is at least 90 degrees apart.
+	// Up to three drop zone pads at seed-chosen angles. Each gap is a quarter turn plus
+	// a share of the remaining quarter, so every pair is at least 90 degrees apart.
 	const rng = new Prng(seed, SALT_PADS);
 	const quarter = math.pi / 2;
 	const extra1 = rng.nextNumber() * quarter;
 	const extra2 = rng.nextNumber() * (quarter - extra1);
 	const start = rng.nextNumber() * 2 * math.pi;
 	const angles = [start, start + quarter + extra1, start + 2 * quarter + extra1 + extra2];
-	const pads = angles.map((angle) => {
-		const x = math.cos(angle) * PAD_DISTANCE;
-		const z = math.sin(angle) * PAD_DISTANCE;
-		return { x, z, height: padHeight(x, z) };
-	});
+	const pads = angles
+		.filter((_, index) => index < config.dropZones)
+		.map((angle) => {
+			const x = math.cos(angle) * PAD_DISTANCE;
+			const z = math.sin(angle) * PAD_DISTANCE;
+			return { x, z, height: padHeight(x, z) };
+		});
 
 	// Blends the column to `target` with weight `w`, drying it out as it goes.
 	const flattenTo = (column: Column, target: number, w: number) => {

@@ -35,6 +35,7 @@ import {
 	BUILDABLE,
 	BUILDINGS,
 	type BuildingKind,
+	inDropZone,
 	isBelt,
 	MAX_LINE,
 	replaces,
@@ -417,6 +418,7 @@ export class BuildController implements OnStart {
 
 			const root = this.characterController.getRig()?.HumanoidRootPart.Position;
 			const pool = baseStateAtom()?.pool ?? [];
+			const zones = baseStateAtom()?.dropZones ?? [];
 			// What the line costs so far: each cell is paid for on top of those before it.
 			const spent = new Map<ResourceId, number>();
 			// A crossing the server can't lay stops the line there.
@@ -454,6 +456,7 @@ export class BuildController implements OnStart {
 					z + size <= GRID_SIZE &&
 					(crossing ? canBuild(levelsAtom(), "junction") : free) &&
 					(!def.drill || onOre) &&
+					!inDropZone(cell, size, zones) &&
 					affordable &&
 					root !== undefined &&
 					// Across the ground, like the server's check.

@@ -16,8 +16,9 @@ import { type ResourceId, RESOURCES } from "game/Base/shared/resources";
 import { CELL_STUDS } from "game/Terrain/shared/map";
 
 /*
- * Placeholder art: every building and alien is a handful of parts, built here
- * so the services only deal in gameplay. Swap these for real models later.
+ * Placeholder art: every building and alien (a war machine) is a handful of
+ * parts, built here so the services only deal in gameplay. Swap these for real
+ * models later.
  */
 
 const FOUNDATION = Color3.fromRGB(70, 72, 80);
@@ -40,6 +41,16 @@ const BARRELS: Partial<Record<BuildingKind, readonly [size: Vector3, centres: Re
 	{
 		turret: [new Vector3(0.8, 0.8, 4), [new Vector3(0, 0, -3)], 0],
 		autoTurret: [new Vector3(0.5, 0.5, 4.4), [new Vector3(-0.55, 0, -3.2), new Vector3(0.55, 0, -3.2)], 0],
+		// Twin flak barrels, raised for the sky.
+		scatter: [new Vector3(1.1, 1.1, 6), [new Vector3(-1.4, 0.5, -4.5), new Vector3(1.4, 0.5, -4.5)], 30],
+		// Six thin barrels in a ring: the gatling.
+		vulcan: [
+			new Vector3(0.4, 0.4, 6),
+			[0, 1, 2, 3, 4, 5].map(
+				(i) => new Vector3(math.cos((i * math.pi) / 3) * 0.7, math.sin((i * math.pi) / 3) * 0.7, -4.5),
+			),
+			0,
+		],
 		cannon: [new Vector3(1.8, 1.8, 9), [new Vector3(0, 0, -6.5)], 0],
 		// A pod of rocket tubes on its face.
 		swarmer: [
@@ -55,11 +66,205 @@ const BARRELS: Partial<Record<BuildingKind, readonly [size: Vector3, centres: Re
 		ripple: [new Vector3(1.4, 1.4, 9), [-3, -1, 1, 3].map((x) => new Vector3(x, 0, -6)), 25],
 	};
 
-const ALIEN_BODIES: Record<AlienKind, readonly [size: Vector3, color: Color3, glow: Color3]> = {
-	crawler: [new Vector3(2.6, 1.2, 3.2), Color3.fromRGB(58, 34, 72), Color3.fromRGB(190, 255, 90)],
-	brute: [new Vector3(5, 4, 6), Color3.fromRGB(72, 30, 30), Color3.fromRGB(255, 90, 40)],
-	spitter: [new Vector3(2.4, 3, 2.4), Color3.fromRGB(30, 60, 58), Color3.fromRGB(80, 255, 160)],
+/** Alien machines: gunmetal hulls and plates, lit red so they never read as the team's. */
+const HULL = Color3.fromRGB(58, 60, 68);
+const PLATE = Color3.fromRGB(104, 108, 120);
+const HOSTILE = Color3.fromRGB(255, 60, 50);
+/** A sapper's charge and a bomber's and carrier's bays. */
+const CHARGE = Color3.fromRGB(255, 215, 50);
+/** A shielder's emitter and its bubble. */
+const SHIELD = Color3.fromRGB(255, 110, 90);
+const NEON = Enum.Material.Neon;
+
+/** A part welded to an alien's hull: its size, where on the hull, its colour, and its material and shape if not plain metal. */
+type Piece = readonly [size: Vector3, at: CFrame, color: Color3, material?: Enum.Material, shape?: Enum.PartType];
+
+/** Each piece, and its mirror image on the hull's other side (-X). */
+function both(...pieces: Array<Piece>): Array<Piece> {
+	const mirrored = pieces.map(([size, at, color, material, shape]): Piece => {
+		const [x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22] = at.GetComponents();
+		const flipped = new CFrame(-x, y, z, r00, -r01, -r02, -r10, r11, r12, -r20, r21, r22);
+		return [size, flipped, color, material, shape];
+	});
+	return [...pieces, ...mirrored];
+}
+
+/** At (x, y, z), leaning `degrees` outward from the hull's +X side: a splayed leg. */
+function splay(x: number, y: number, z: number, degrees: number): CFrame {
+	return new CFrame(x, y, z).mul(CFrame.Angles(0, 0, math.rad(degrees)));
+}
+
+/** The mortar's tube, raised toward the front. */
+const TUBE = new CFrame(0, 1.6, 0.2).mul(CFrame.Angles(math.rad(50), 0, 0));
+
+/**
+ * Every alien's hull, which the server moves, and the pieces on it. The front is -Z. Walkers and
+ * tanks stand on the ground at their `hover` (see `ALIENS`); fliers fly that high.
+ */
+const ALIEN_BODIES: Record<AlienKind, readonly [hull: Vector3, pieces: ReadonlyArray<Piece>]> = {
+	// A scout scuttling on four splayed legs.
+	crawler: [
+		new Vector3(2.6, 1, 3),
+		[
+			[new Vector3(2, 0.4, 2.2), new CFrame(0, 0.7, 0.2), PLATE, Enum.Material.DiamondPlate],
+			[new Vector3(1.6, 0.3, 0.2), new CFrame(0, 0.2, -1.55), HOSTILE, NEON],
+			...both(
+				[new Vector3(0.4, 1.8, 0.4), splay(1.5, -0.6, -1, 25), DARK],
+				[new Vector3(0.4, 1.8, 0.4), splay(1.5, -0.6, 1, 25), DARK],
+			),
+		],
+	],
+	// A squat walking bomb, its charge glowing on its back.
+	sapper: [
+		new Vector3(2.2, 1.2, 2.4),
+		[
+			[new Vector3(1.6, 1.6, 1.6), new CFrame(0, 0.8, 0), CHARGE, NEON, Enum.PartType.Ball],
+			[new Vector3(1.2, 0.3, 0.2), new CFrame(0, 0.1, -1.25), HOSTILE, NEON],
+			...both(
+				[new Vector3(0.35, 1.4, 0.35), splay(1.2, -0.5, -0.9, 25), DARK],
+				[new Vector3(0.35, 1.4, 0.35), splay(1.2, -0.5, 0.9, 25), DARK],
+			),
+		],
+	],
+	// A tank on treads, twin guns on its turret.
+	brute: [
+		new Vector3(4.6, 2.4, 5.6),
+		[
+			[new Vector3(2.8, 1.4, 2.8), new CFrame(0, 1.9, 0.4), PLATE, Enum.Material.DiamondPlate],
+			[new Vector3(3.6, 0.4, 0.2), new CFrame(0, 0.5, -2.85), HOSTILE, NEON],
+			...both(
+				[new Vector3(1.2, 1.8, 6.2), new CFrame(2.9, -0.9, 0), DARK, Enum.Material.Fabric],
+				[new Vector3(0.6, 0.6, 3), new CFrame(0.6, 1.9, -2.2), DARK],
+			),
+		],
+	],
+	// A walker with a gun for an arm and a pack on its back.
+	spitter: [
+		new Vector3(2.4, 2, 2),
+		[
+			[new Vector3(1.2, 0.4, 0.2), new CFrame(0, 0.4, -1.05), HOSTILE, NEON],
+			[new Vector3(0.5, 0.5, 2.4), new CFrame(1.5, 0, -0.9), PLATE],
+			[new Vector3(0.6, 0.6, 0.2), new CFrame(1.5, 0, -2.15), HOSTILE, NEON],
+			[new Vector3(1.6, 1.2, 0.8), new CFrame(0, 0.2, 1.4), DARK],
+			...both([new Vector3(0.6, 2, 0.8), new CFrame(0.8, -1.8, 0), DARK]),
+		],
+	],
+	// Artillery on four legs, its mortar tube raised.
+	mortar: [
+		new Vector3(4, 1.8, 4.4),
+		[
+			[new Vector3(2.4, 0.4, 2.4), new CFrame(0, 1.05, 0.2), PLATE, Enum.Material.DiamondPlate],
+			[new Vector3(1.4, 1.4, 3.4), TUBE, DARK],
+			[new Vector3(1.5, 1.5, 0.2), TUBE.mul(new CFrame(0, 0, -1.75)), HOSTILE, NEON],
+			[new Vector3(2.4, 0.35, 0.2), new CFrame(0, 0.2, -2.25), HOSTILE, NEON],
+			...both(
+				[new Vector3(0.7, 2.6, 0.7), splay(2.2, -1.2, -1.6, 20), DARK],
+				[new Vector3(0.7, 2.6, 0.7), splay(2.2, -1.2, 1.6, 20), DARK],
+			),
+		],
+	],
+	// A quadcopter with one red eye.
+	drone: [
+		new Vector3(1.8, 0.7, 2.2),
+		[
+			[new Vector3(0.7, 0.7, 0.7), new CFrame(0, -0.15, -1.1), HOSTILE, NEON, Enum.PartType.Ball],
+			[new Vector3(4.2, 0.25, 0.3), new CFrame(0, 0.2, -0.9), DARK],
+			[new Vector3(4.2, 0.25, 0.3), new CFrame(0, 0.2, 0.9), DARK],
+			// A cylinder lies along X: stood on end, it's a flat rotor disc.
+			...both(
+				[new Vector3(0.15, 1.8, 1.8), splay(2.1, 0.35, -0.9, 90), PLATE, undefined, Enum.PartType.Cylinder],
+				[new Vector3(0.15, 1.8, 1.8), splay(2.1, 0.35, 0.9, 90), PLATE, undefined, Enum.PartType.Cylinder],
+			),
+		],
+	],
+	// A flying wing with an engine under each side and its bomb bay lit.
+	bomber: [
+		new Vector3(2.4, 1.4, 6),
+		[
+			[new Vector3(9, 0.3, 2.6), new CFrame(0, 0, 0.6), PLATE, Enum.Material.DiamondPlate],
+			[new Vector3(1.4, 0.4, 0.2), new CFrame(0, 0.3, -3.05), HOSTILE, NEON],
+			[new Vector3(1.4, 0.2, 2), new CFrame(0, -0.75, 0.4), CHARGE, NEON],
+			...both(
+				[new Vector3(0.9, 0.9, 1.6), new CFrame(2.6, -0.3, 1.2), DARK],
+				[new Vector3(0.7, 0.7, 0.2), new CFrame(2.6, -0.3, 2.05), HOSTILE, NEON],
+			),
+		],
+	],
+	// A walker with its shield emitter raised on a mast.
+	shielder: [
+		new Vector3(2.6, 1.4, 3),
+		[
+			[new Vector3(0.4, 1.6, 0.4), new CFrame(0, 1.5, 0.3), DARK],
+			[new Vector3(1.2, 1.2, 1.2), new CFrame(0, 2.5, 0.3), SHIELD, NEON, Enum.PartType.Ball],
+			[new Vector3(1.4, 0.3, 0.2), new CFrame(0, 0.2, -1.55), HOSTILE, NEON],
+			...both(
+				[new Vector3(0.4, 1.8, 0.4), splay(1.4, -0.5, -1, 25), DARK],
+				[new Vector3(0.4, 1.8, 0.4), splay(1.4, -0.5, 1, 25), DARK],
+			),
+		],
+	],
+	// A towering biped with a cannon for each arm and its reactor glowing on its back.
+	titan: [
+		new Vector3(7, 4.5, 5),
+		[
+			[new Vector3(2.6, 1.6, 2.4), new CFrame(0, 3, -0.6), PLATE, Enum.Material.DiamondPlate],
+			[new Vector3(2.2, 0.5, 0.2), new CFrame(0, 3, -1.85), HOSTILE, NEON],
+			[new Vector3(5, 1.5, 3.5), new CFrame(0, -3, 0), DARK],
+			[new Vector3(2.4, 2, 0.3), new CFrame(0, 0.5, 2.55), HOSTILE, NEON],
+			...both(
+				[new Vector3(2.2, 2, 3), new CFrame(4.4, 1.2, 0), PLATE, Enum.Material.DiamondPlate],
+				[new Vector3(1.4, 1.4, 5), new CFrame(4.4, -0.6, -2.2), DARK],
+				[new Vector3(1.5, 1.5, 0.2), new CFrame(4.4, -0.6, -4.75), HOSTILE, NEON],
+				[new Vector3(2.2, 5.5, 2.6), new CFrame(2, -6, 0), DARK],
+				[new Vector3(2.8, 0.8, 4), new CFrame(2, -8.4, -0.4), PLATE, Enum.Material.DiamondPlate],
+			),
+		],
+	],
+	// A heavy flier with stub wings, a rocket pod under each tip and a tail fin.
+	gunship: [
+		new Vector3(3, 1.8, 7),
+		[
+			[new Vector3(1.6, 0.5, 0.2), new CFrame(0, 0.4, -3.55), HOSTILE, NEON],
+			[new Vector3(0.3, 1.6, 1.6), new CFrame(0, 1.4, 3), PLATE],
+			...both(
+				[new Vector3(4, 0.4, 2.4), new CFrame(3.4, 0, 0.8), PLATE, Enum.Material.DiamondPlate],
+				[new Vector3(1.2, 1.2, 2.8), new CFrame(5, -0.6, -0.2), DARK],
+				[new Vector3(1, 1, 0.2), new CFrame(5, -0.6, -1.65), HOSTILE, NEON],
+				[new Vector3(1, 1, 1.4), new CFrame(1, 0, 3.8), DARK],
+				[new Vector3(0.8, 0.8, 0.2), new CFrame(1, 0, 4.55), HOSTILE, NEON],
+			),
+		],
+	],
+	// A bulky transport on four rotors, its cargo bay lit underneath.
+	carrier: [
+		new Vector3(4.4, 2.6, 8),
+		[
+			[new Vector3(3.6, 1.2, 5), new CFrame(0, -1.9, 0.2), DARK],
+			[new Vector3(3, 0.2, 4), new CFrame(0, -2.55, 0.2), CHARGE, NEON],
+			[new Vector3(2.4, 0.5, 0.2), new CFrame(0, 0.4, -4.05), HOSTILE, NEON],
+			...both(
+				[new Vector3(2.4, 0.4, 0.6), new CFrame(2.8, 1, -2.8), DARK],
+				[new Vector3(2.4, 0.4, 0.6), new CFrame(2.8, 1, 2.8), DARK],
+				[new Vector3(0.2, 5, 5), splay(3.6, 1.4, -2.8, 90), PLATE, undefined, Enum.PartType.Cylinder],
+				[new Vector3(0.2, 5, 5), splay(3.6, 1.4, 2.8, 90), PLATE, undefined, Enum.PartType.Cylinder],
+			),
+		],
+	],
 };
+
+/**
+ * A shielder's bubble, `radius` round its hull and welded on. Nothing touches or hits it: the
+ * server soaks up damage itself (see `WaveService`).
+ */
+export function shieldBubble(model: Model, root: BasePart, radius: number): Part {
+	const bubble = weld(root, block(model, Vector3.one.mul(radius * 2), root.CFrame, SHIELD, Enum.Material.ForceField));
+	bubble.Name = "Shield";
+	bubble.Shape = Enum.PartType.Ball;
+	bubble.CanQuery = false;
+	bubble.CanTouch = false;
+	bubble.CastShadow = false;
+	return bubble;
+}
 
 /** An anchored part: the brick everything here is made of. */
 export function block(
@@ -106,7 +311,7 @@ export function buildToolHandle(tool: Tool) {
 	weld(handle, block(tool, new Vector3(0.5, 0.5, 0.15), new CFrame(0, 0.1, -1.15), GLOW, Enum.Material.Neon));
 }
 
-/** Writes `Health` and `MaxHealth`, and shows a bar over the model while it is damaged: a small one, or a wide one over the Core. */
+/** Writes `Health` and `MaxHealth`, and shows a bar over the model while it is damaged: a small one, or a wide one over the Core or a Titan. */
 export function setHealth(model: Model, health: number, maxHealth: number) {
 	model.SetAttribute("Health", health);
 	model.SetAttribute("MaxHealth", maxHealth);
@@ -121,7 +326,8 @@ export function setHealth(model: Model, health: number, maxHealth: number) {
 		bar = new Instance("BillboardGui");
 		bar.Name = "HealthBar";
 		bar.Adornee = root;
-		bar.Size = model.GetAttribute("Kind") === "core" ? UDim2.fromOffset(140, 12) : UDim2.fromOffset(44, 6);
+		const wide = model.GetAttribute("Kind") === "core" || model.GetAttribute("Kind") === "titan";
+		bar.Size = wide ? UDim2.fromOffset(140, 12) : UDim2.fromOffset(44, 6);
 		bar.StudsOffsetWorldSpace = new Vector3(0, root.Size.Y / 2 + 3, 0);
 		bar.MaxDistance = 160;
 		const back = new Instance("Frame");
@@ -420,35 +626,19 @@ export function buildingModel(
 }
 
 /**
- * An alien: an anchored root the server moves with `BulkMoveTo`, and neon
- * accents welded to it. Nothing collides, so moving it never shoves players.
+ * An alien: an anchored hull the server moves with `BulkMoveTo`, and the pieces welded
+ * to it (see `ALIEN_BODIES`). Nothing collides, so moving it never shoves players.
  */
 export function alienModel(kind: AlienKind, cframe: CFrame): [model: Model, root: Part] {
 	const model = new Instance("Model");
 	model.Name = kind;
-	const [size, color, glow] = ALIEN_BODIES[kind];
-	const root = block(model, size, cframe, color, Enum.Material.Slate);
+	const [hull, pieces] = ALIEN_BODIES[kind];
+	const root = block(model, hull, cframe, HULL, Enum.Material.Metal);
 	root.CanCollide = false;
 	root.CanTouch = false;
-	const accent = (partSize: Vector3, x: number, y: number, z: number) =>
-		weld(root, block(model, partSize, cframe.mul(new CFrame(x, y, z)), glow, Enum.Material.Neon));
-
-	// Eyes on the front (-Z), which is where the root looks.
-	const front = -size.Z / 2;
-	if (kind === "crawler") {
-		accent(new Vector3(0.4, 0.3, 0.2), -0.6, 0.2, front);
-		accent(new Vector3(0.4, 0.3, 0.2), 0.6, 0.2, front);
-		accent(new Vector3(0.5, 0.2, 2.2), 0, 0.65, 0.2);
-	} else if (kind === "brute") {
-		accent(new Vector3(0.7, 0.5, 0.2), -1.2, 0.8, front);
-		accent(new Vector3(0.7, 0.5, 0.2), 1.2, 0.8, front);
-		accent(new Vector3(5.2, 0.6, 1.2), 0, -1.2, front + 0.5);
-		accent(new Vector3(0.6, 1.6, 0.6), -1.8, 2.6, front + 1.2);
-		accent(new Vector3(0.6, 1.6, 0.6), 1.8, 2.6, front + 1.2);
-	} else {
-		accent(new Vector3(0.4, 0.3, 0.2), -0.5, 0.9, front);
-		accent(new Vector3(0.4, 0.3, 0.2), 0.5, 0.9, front);
-		accent(new Vector3(2.2, 2.2, 2.2), 0, 2.2, 0.3).Shape = Enum.PartType.Ball;
+	for (const [size, at, color, material, shape] of pieces) {
+		const part = weld(root, block(model, size, cframe.mul(at), color, material ?? Enum.Material.Metal));
+		if (shape) part.Shape = shape;
 	}
 	model.PrimaryPart = root;
 	return [model, root];

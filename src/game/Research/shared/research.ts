@@ -39,10 +39,13 @@ export type GlyphId =
 	| "mender"
 	| "turret"
 	| "autoTurret"
+	| "scatter"
+	| "vulcan"
 	| "cannon"
 	| "swarmer"
 	| "ripple"
-	| "crosshair";
+	| "crosshair"
+	| "warning";
 
 export type StatId =
 	| "carryCapacity"
@@ -94,6 +97,8 @@ export type ResearchId =
 	| "turret"
 	| "hardenedRounds"
 	| "autoTurret"
+	| "scatter"
+	| "vulcan"
 	| "swarmer"
 	| "cannon"
 	| "ripple"
@@ -290,6 +295,30 @@ export const RESEARCH: Record<ResearchId, ResearchNode> = {
 		unlocks: "autoTurret",
 		discover: "graphite",
 	},
+	scatter: {
+		name: "Scatter",
+		description: "Build scatters: flak that shreds flying aliens, but can't hit the ground.",
+		glyph: "scatter",
+		requires: ["turret"],
+		cost: [
+			{ resource: "copper", amount: 60 },
+			{ resource: "lead", amount: 45 },
+		],
+		unlocks: "scatter",
+	},
+	vulcan: {
+		name: "Vulcan",
+		description: "Build vulcans: gatlings that spin up to shred one flying alien at a time.",
+		glyph: "vulcan",
+		requires: ["scatter"],
+		cost: [
+			{ resource: "copper", amount: 80 },
+			{ resource: "lead", amount: 50 },
+			{ resource: "graphite", amount: 40 },
+		],
+		unlocks: "vulcan",
+		discover: "graphite",
+	},
 	swarmer: {
 		name: "Swarmer",
 		description: "Build swarmers, whose rockets curve into aliens and blast those around them.",
@@ -464,6 +493,8 @@ export const RESEARCH_ORDER: ReadonlyArray<ResearchId> = [
 	"hardenedRounds",
 	"autoTurret",
 	"swarmer",
+	"scatter",
+	"vulcan",
 	"cannon",
 	"ripple",
 ];

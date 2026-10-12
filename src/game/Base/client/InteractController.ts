@@ -39,6 +39,64 @@ export function cellOf(model: Model) {
 }
 
 /**
+ * A glowing outline `radius` round `center`, following the ground, until the returned cleanup runs.
+ * With a `wall`, a glow also rises that many studs off it, fading as it goes up.
+ */
+export function groundRing(center: Vector3, radius: number, color: Color3, wall = 0): () => void {
+	const params = new RaycastParams();
+	params.FilterType = Enum.RaycastFilterType.Include;
+	params.FilterDescendantsInstances = [Workspace.Terrain];
+	const down = new Vector3(0, -2 * RING_SEARCH, 0);
+	const points = new Array<Attachment>();
+	for (let i = 0; i < RING_POINTS; i++) {
+		const angle = (i / RING_POINTS) * 2 * math.pi;
+		const x = center.X + radius * math.cos(angle);
+		const z = center.Z + radius * math.sin(angle);
+		const ground = Workspace.Raycast(new Vector3(x, center.Y + RING_SEARCH, z), down, params);
+		// On Terrain, which sits at the origin, so its position is where it is in the world.
+		const point = new Instance("Attachment");
+		point.Position = new Vector3(x, (ground?.Position.Y ?? center.Y) + 0.3, z);
+		point.Parent = Workspace.Terrain;
+		points.push(point);
+	}
+	points.forEach((point, i) => {
+		const beam = new Instance("Beam");
+		beam.Attachment0 = point;
+		beam.Attachment1 = points[(i + 1) % RING_POINTS];
+		beam.Color = new ColorSequence(color);
+		beam.FaceCamera = true;
+		beam.LightEmission = 1;
+		beam.Segments = 1;
+		beam.Transparency = new NumberSequence(0.35);
+		beam.Width0 = 0.5;
+		beam.Width1 = 0.5;
+		beam.Parent = point;
+	});
+	if (wall > 0) {
+		// A strip up from each point, a little wider than the gap to the next so they meet in a curtain.
+		const width = ((2 * math.pi * radius) / RING_POINTS) * 1.15;
+		for (const point of [...points]) {
+			const top = new Instance("Attachment");
+			top.Position = point.Position.add(new Vector3(0, wall, 0));
+			top.Parent = Workspace.Terrain;
+			points.push(top);
+			const beam = new Instance("Beam");
+			beam.Attachment0 = point;
+			beam.Attachment1 = top;
+			beam.Color = new ColorSequence(color);
+			beam.FaceCamera = true;
+			beam.LightEmission = 1;
+			beam.Segments = 1;
+			beam.Transparency = new NumberSequence(0.55, 1);
+			beam.Width0 = width;
+			beam.Width1 = width;
+			beam.Parent = point;
+		}
+	}
+	return () => points.forEach((point) => point.Destroy());
+}
+
+/**
  * Clicking ore and buildings, with no tool out or the Build tool out with nothing picked. What a
  * click would act on is outlined: any building, or ore within `TRANSFER_RANGE`. Holding a click on
  * ore mines it, one at a time, with a beam to it. Clicking a building opens its panel
@@ -93,7 +151,10 @@ export class InteractController implements OnStart {
 				clearRing();
 				ringed = selected;
 				const range = selected && BUILDINGS[selected.GetAttribute("Kind") as BuildingKind].range;
-				clearRing = selected && range !== undefined ? this.ring(selected.GetPivot().Position, range) : () => {};
+				clearRing =
+					selected && range !== undefined
+						? groundRing(selected.GetPivot().Position, range, COLORS.text)
+						: () => {};
 			}
 			if (!selected) return;
 			const distance = this.distanceTo(selected.GetPivot().Position);
@@ -129,40 +190,6 @@ export class InteractController implements OnStart {
 			clearRing();
 			mining = undefined;
 		};
-	}
-
-	/** An outline `radius` round `center`, following the ground, until the returned cleanup runs. */
-	private ring(center: Vector3, radius: number): () => void {
-		const params = new RaycastParams();
-		params.FilterType = Enum.RaycastFilterType.Include;
-		params.FilterDescendantsInstances = [Workspace.Terrain];
-		const down = new Vector3(0, -2 * RING_SEARCH, 0);
-		const points = new Array<Attachment>();
-		for (let i = 0; i < RING_POINTS; i++) {
-			const angle = (i / RING_POINTS) * 2 * math.pi;
-			const x = center.X + radius * math.cos(angle);
-			const z = center.Z + radius * math.sin(angle);
-			const ground = Workspace.Raycast(new Vector3(x, center.Y + RING_SEARCH, z), down, params);
-			// On Terrain, which sits at the origin, so its position is where it is in the world.
-			const point = new Instance("Attachment");
-			point.Position = new Vector3(x, (ground?.Position.Y ?? center.Y) + 0.3, z);
-			point.Parent = Workspace.Terrain;
-			points.push(point);
-		}
-		points.forEach((point, i) => {
-			const beam = new Instance("Beam");
-			beam.Attachment0 = point;
-			beam.Attachment1 = points[(i + 1) % RING_POINTS];
-			beam.Color = new ColorSequence(COLORS.text);
-			beam.FaceCamera = true;
-			beam.LightEmission = 1;
-			beam.Segments = 1;
-			beam.Transparency = new NumberSequence(0.35);
-			beam.Width0 = 0.5;
-			beam.Width1 = 0.5;
-			beam.Parent = point;
-		});
-		return () => points.forEach((point) => point.Destroy());
 	}
 
 	/** Mines `ore` while `held()`: one every `MINE_SECONDS`, until the pack fills or the character leaves its reach. */

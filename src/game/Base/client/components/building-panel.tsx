@@ -151,7 +151,10 @@ export function BuildingPanel({
 			const output = filter();
 			list.push({ label: "OUTPUT", value: output !== undefined ? RESOURCES[output].name.upper() : "NONE" });
 		}
-		if (def.turret) list.push({ label: "AMMO", value: `${read("Ammo")} / ${def.turret.magazine}` });
+		if (def.turret) {
+			list.push({ label: "AMMO", value: `${read("Ammo")} / ${def.turret.magazine}` });
+			list.push({ label: "TARGETS", value: def.turret.targets?.upper() ?? "AIR + GROUND" });
+		}
 		if (def.repair !== undefined) list.push({ label: "REPAIRS", value: `${def.repair} / ${MACHINE_SECONDS}s` });
 		if (def.range !== undefined) list.push({ label: "RANGE", value: `${def.range}` });
 		if (kind === "core") {

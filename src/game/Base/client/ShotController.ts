@@ -63,10 +63,11 @@ function attachment(parent: Instance, position: Vector3): Attachment {
 }
 
 /**
- * Draws turret shots; the server deals their damage, so this is only the look. Rockets and shells
- * fly their curve (see `Shot`) for as long as the server says, chasing their target if they have
- * one, trailing flame and smoke, then blow up. Hitscan shots are a fading streak, a flash out of
- * the barrel and sparks off what they hit; the Cannon's also blasts.
+ * Draws turret and alien shots; the server deals their damage, so this is only the look. Rockets
+ * and shells fly their curve (see `Shot`) for as long as the server says, chasing their target if
+ * they have one, trailing flame and smoke, then blow up. Hitscan shots are a fading streak, a flash
+ * out of the barrel and sparks off what they hit; the Cannon's also blasts. Flak bursts in a dark
+ * puff in the air. A sapper just blasts.
  */
 @Controller()
 export class ShotController implements OnStart {
@@ -119,11 +120,13 @@ export class ShotController implements OnStart {
 		this.impact.Parent = Workspace.Terrain;
 		shotMessaging.client.on(ShotMessage.Fired, (shot) => this.launch(shot));
 		shotMessaging.client.on(ShotMessage.Hit, ({ from, to, size }) => this.hit(from, to, size));
+		shotMessaging.client.on(ShotMessage.Blast, ({ at, splash }) => this.blast(at, splash, true));
 		RunService.RenderStepped.Connect(() => this.render());
 	}
 
 	/** A rocket or shell leaving its barrel, its tail a glowing streak, a flame (rockets) and smoke left hanging in the air. */
 	private launch(shot: Shot) {
+		if (shot.kind === "flak") return this.launchFlak(shot);
 		const rocket = shot.kind === "rocket";
 		const size = rocket ? new Vector3(0.4, 0.4, 1.4) : new Vector3(1.3, 1.3, 1.3);
 		const part = this.spark(size, rocket ? ROCKET : SHELL, shot.from);
@@ -175,6 +178,59 @@ export class ShotController implements OnStart {
 		this.flights.push({ shot, part, fired: os.clock(), to: shot.to });
 	}
 
+	/** Flak: a hot pellet with a short streak behind it, and a flash out of the barrel. No smoke until it bursts. */
+	private launchFlak(shot: Shot) {
+		const part = this.spark(Vector3.one.mul(0.5), HOT, shot.from);
+		part.Shape = Enum.PartType.Ball;
+		const trail = new Instance("Trail");
+		trail.Attachment0 = attachment(part, new Vector3(0, 0.15, 0));
+		trail.Attachment1 = attachment(part, new Vector3(0, -0.15, 0));
+		trail.Color = new ColorSequence(HOT, FLAME);
+		trail.Transparency = curve([0, 0.2], [1, 1]);
+		trail.Lifetime = 0.08;
+		trail.LightEmission = 1;
+		trail.FaceCamera = true;
+		trail.Parent = part;
+		this.muzzle.WorldCFrame = CFrame.lookAt(shot.from, shot.to);
+		this.muzzleFire.Emit(2);
+		this.flights.push({ shot, part, fired: os.clock(), to: shot.to });
+	}
+
+	/** Flak bursting in the air: a quick flash, a few sparks and a ragged puff of dark smoke `splash` studs round. */
+	private puff(at: Vector3, splash: number) {
+		const anchor = new Instance("Attachment");
+		anchor.Parent = Workspace.Terrain;
+		anchor.Position = at;
+		Debris.AddItem(anchor, BLAST_SECONDS);
+
+		const flash = this.spark(Vector3.one, HOT, at);
+		flash.Shape = Enum.PartType.Ball;
+		flash.Transparency = 0.2;
+		TweenService.Create(flash, new TweenInfo(0.12), { Size: Vector3.one.mul(splash), Transparency: 1 }).Play();
+		Debris.AddItem(flash, 0.12);
+		emitter(anchor, {
+			Texture: SMOKE,
+			Color: new ColorSequence(EMBER, ASH),
+			Size: curve([0, splash * 0.4], [1, splash * 0.9]),
+			Transparency: curve([0, 0.2], [1, 1]),
+			Lifetime: new NumberRange(0.8, 1.4),
+			Speed: new NumberRange(1, 3),
+			Drag: 3,
+			SpreadAngle: new Vector2(180, 180),
+			Rotation: new NumberRange(0, 360),
+			RotSpeed: new NumberRange(-40, 40),
+		}).Emit(4);
+		emitter(anchor, {
+			Texture: SPARKLE,
+			Color: new ColorSequence(HOT),
+			LightEmission: 1,
+			Size: curve([0, 0.4], [1, 0]),
+			Lifetime: new NumberRange(0.2, 0.4),
+			Speed: new NumberRange(15, 30),
+			SpreadAngle: new Vector2(180, 180),
+		}).Emit(5);
+	}
+
 	/** A hitscan shot: a streak that fades, a flash out of the barrel, sparks back off what it hit. The Cannon's (`size` 2) also blasts. */
 	private hit(from: Vector3, to: Vector3, size: number) {
 		const length = to.sub(from).Magnitude;
@@ -210,7 +266,8 @@ export class ShotController implements OnStart {
 				part.Transparency = 1;
 				for (const child of part.GetDescendants()) if (child.IsA("ParticleEmitter")) child.Enabled = false;
 				Debris.AddItem(part, TRAIL_SECONDS);
-				this.blast(flight.to, shot.splash, shot.kind === "shell");
+				if (shot.kind === "flak") this.puff(flight.to, shot.splash);
+				else this.blast(flight.to, shot.splash, shot.kind === "shell");
 				return false;
 			}
 			const at = bezier(shot.from, shot.control, flight.to, t);

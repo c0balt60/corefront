@@ -32,6 +32,8 @@ export interface TerrainConfig {
 	/** Picks the biome set, the fluid and the props (see biomes.ts). */
 	readonly kind: PlanetKind;
 	readonly edgeHeight: number;
+	/** How many flat pads near the edge enemies land on (see `inDropZone`). */
+	readonly dropZones: number;
 
 	readonly seaLevel: number;
 	readonly landHeight: number;
@@ -105,6 +107,7 @@ export const TERRAIN_FIELDS: ReadonlyArray<ConfigField> = [
 		options: ["Habitable", "Barren", "Frozen", "Volcanic"],
 	},
 	number("World", "edgeHeight", "Edge cliff height", 140, 0, 300, 1),
+	number("World", "dropZones", "Drop zones", 1, 1, 3, 1),
 
 	// Sea level is also the lava level and the frozen lakes' ice level. Keep it on the 4-stud voxel grid.
 	number("Shape", "seaLevel", "Sea level", 0, -16, 64, 4),
@@ -189,6 +192,7 @@ export function sanitizeConfig(input: unknown, base: TerrainConfig): TerrainConf
 /**
  * The config a planet generates with: its terrain seed and kind, ore clusters
  * from its resources level, and rougher hills and peaks the harder it is.
+ * Medium planets and harder have a second drop zone.
  */
 export function configForPlanet(planet: Planet): TerrainConfig {
 	const base = defaultConfig();
@@ -202,6 +206,7 @@ export function configForPlanet(planet: Planet): TerrainConfig {
 			oreDensity: ORE_DENSITY[planet.resources] ?? base.oreDensity,
 			hillHeight: base.hillHeight * rugged,
 			mountainHeight: base.mountainHeight * rugged,
+			dropZones: planet.difficulty >= 2 ? 2 : 1,
 		},
 		base,
 	);

@@ -19,8 +19,8 @@ export interface PlanetMap {
 	readonly kind: PlanetKind;
 	/** Ground at the map centre (0, y, 0), a cell corner on a flat pad: the Core's 2×2 cells meet here. */
 	readonly landing: Vector3;
-	/** Ground points on flat pads near the map edge, where waves come from. */
-	readonly alienSpawns: ReadonlyArray<Vector3>;
+	/** Drop zones: the ground at the centre of each flat pad near the map edge, where enemies land. */
+	readonly dropZones: ReadonlyArray<Vector3>;
 	readonly ores: ReadonlyArray<OreDeposit>;
 	/** Trees, rocks and ore models. A building destroys the props it lands on. */
 	readonly props: Folder;

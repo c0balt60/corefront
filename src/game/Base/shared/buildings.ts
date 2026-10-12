@@ -1,5 +1,6 @@
 import type { ResourceId, ResourceStack } from "game/Base/shared/resources";
 import type { GlyphId } from "game/Research/shared/research";
+import { CELL_STUDS, cellCenter } from "game/Terrain/shared/map";
 
 /*
  * The server keeps the planet's gameplay instances in `Workspace.Base`:
@@ -8,7 +9,7 @@ import type { GlyphId } from "game/Research/shared/research";
  *   crafters also have `Resource` (what they make) and `Stored`, drills `Yield` (per tick), crafters
  *   `Input_<resource>` for each input, turrets `Ammo`, sorters and sources `Filter`, and belts `Entry`, `PathIn`,
  *   `PathMid`, `PathOut` and `PathEnds` (see `BeltPath`).
- * - `Base.Aliens`: one Model per alien, with `Health` and `MaxHealth`.
+ * - `Base.Aliens`: one Model per alien, with `Kind` (AlienKind), `Health` and `MaxHealth`.
  * Ore deposits are Models tagged "Ore" (CollectionService), with attributes `Resource` and `Cell`.
  */
 
@@ -29,6 +30,8 @@ export type BuildingKind =
 	| "titaniumWall"
 	| "turret"
 	| "autoTurret"
+	| "scatter"
+	| "vulcan"
 	| "cannon"
 	| "swarmer"
 	| "ripple"
@@ -48,9 +51,12 @@ export interface BuildingDef {
 	 * Turrets: damage per shot, and seconds between shots. They shoot within `range`, firing ore
 	 * (see `AMMO`): each item loaded is `shots` shots, and they hold up to `magazine` items.
 	 * With a `burst`, they fire that many shots in quick succession, and `seconds` is the reload
-	 * after each burst. Without a `projectile` a shot hits at once; rockets curve into their target
-	 * and shells arc down near it, `volley` at a time, landing up to `spread` studs off. Either
-	 * hurts every alien within `splash` studs of where it lands.
+	 * after each burst. With a `spinUp`, they start at a fifth of their rate and wind up to it over
+	 * that many seconds while they have a target, winding down without one. Without a `projectile`
+	 * a shot hits at once; rockets curve into their target, shells arc down near it and flak flies
+	 * straight at where its target is going, `volley` at a time, landing up to `spread` studs off.
+	 * Any of them hurts every alien within `splash` studs of where it lands. It shoots only fliers
+	 * or only ground aliens if `targets` says so.
 	 */
 	readonly turret?: {
 		readonly damage: number;
@@ -58,10 +64,12 @@ export interface BuildingDef {
 		readonly shots: number;
 		readonly magazine: number;
 		readonly burst?: number;
-		readonly projectile?: "rocket" | "shell";
+		readonly spinUp?: number;
+		readonly projectile?: "rocket" | "shell" | "flak";
 		readonly volley?: number;
 		readonly spread?: number;
 		readonly splash?: number;
+		readonly targets?: "air" | "ground";
 	};
 	/** Drills, which must go on ore: mined per tick for each cell of its ore under them, and the most they hold. */
 	readonly drill?: { readonly yield: number; readonly storage: number };
@@ -259,9 +267,45 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		range: 60,
 		turret: { damage: 7, seconds: 0.12, shots: 10, magazine: 20 },
 	},
+	scatter: {
+		name: "Scatter",
+		description:
+			"Throws clumps of flak that burst among fliers. Wildly inaccurate, but there's a lot of it. Can't hit the ground.",
+		cost: [
+			{ resource: "copper", amount: 85 },
+			{ resource: "lead", amount: 45 },
+		],
+		health: 500,
+		size: 2,
+		range: 80,
+		turret: {
+			damage: 10,
+			seconds: 0.3,
+			shots: 4,
+			magazine: 24,
+			projectile: "flak",
+			volley: 3,
+			spread: 10,
+			splash: 6,
+			targets: "air",
+		},
+	},
+	vulcan: {
+		name: "Vulcan",
+		description: "A gatling that spins up to a blistering rate on one flier at a time. Can't hit the ground.",
+		cost: [
+			{ resource: "copper", amount: 100 },
+			{ resource: "lead", amount: 50 },
+			{ resource: "graphite", amount: 40 },
+		],
+		health: 600,
+		size: 2,
+		range: 72,
+		turret: { damage: 6, seconds: 0.05, shots: 25, magazine: 40, spinUp: 2.5, targets: "air" },
+	},
 	cannon: {
 		name: "Cannon",
-		description: "Slow, long-range shots that hit very hard. Fires ore, like the Turret.",
+		description: "Slow, long-range shots that hit very hard. Can't hit fliers.",
 		cost: [
 			{ resource: "copper", amount: 75 },
 			{ resource: "titanium", amount: 40 },
@@ -269,7 +313,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		health: 1000,
 		size: 2,
 		range: 100,
-		turret: { damage: 130, seconds: 2.4, shots: 2, magazine: 8 },
+		turret: { damage: 130, seconds: 2.4, shots: 2, magazine: 8, targets: "ground" },
 	},
 	swarmer: {
 		name: "Swarmer",
@@ -286,7 +330,8 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 	},
 	ripple: {
 		name: "Ripple",
-		description: "Lobs bursts of shell volleys a long way. Slow to reload and inaccurate, but each blasts an area.",
+		description:
+			"Lobs volleys of shells a long way. Slow and inaccurate, but each blasts an area. Can't hit fliers.",
 		cost: [
 			{ resource: "copper", amount: 150 },
 			{ resource: "titanium", amount: 60 },
@@ -305,6 +350,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 			volley: 4,
 			spread: 14,
 			splash: 10,
+			targets: "ground",
 		},
 	},
 	mender: {
@@ -350,7 +396,11 @@ export const BUILD_CATEGORIES: ReadonlyArray<BuildCategory> = [
 		kinds: ["conveyor", "titaniumConveyor", "router", "sorter", "junction", "source"],
 	},
 	{ name: "Crafting", glyph: "graphitePress", kinds: ["graphitePress", "siliconSmelter"] },
-	{ name: "Turrets", glyph: "turret", kinds: ["turret", "autoTurret", "cannon", "swarmer", "ripple"] },
+	{
+		name: "Turrets",
+		glyph: "turret",
+		kinds: ["turret", "autoTurret", "scatter", "vulcan", "cannon", "swarmer", "ripple"],
+	},
 	{ name: "Defense", glyph: "wall", kinds: ["wall", "titaniumWall", "mender"] },
 ];
 
@@ -383,6 +433,21 @@ export const MACHINE_SECONDS = 2;
 
 /** The most buildings one drag lays. */
 export const MAX_LINE = 64;
+
+/** Studs round a drop zone's centre: nothing builds there, and anyone in it when an enemy lands dies. */
+export const DROP_ZONE_RADIUS = 72;
+
+/** Whether the `size`×`size` cells with their -X/-Z corner on `cell` reach into any of the drop `zones`. */
+export function inDropZone(cell: number, size: number, zones: ReadonlyArray<Vector3>): boolean {
+	const centre = cellCenter(cell, size);
+	const half = (size * CELL_STUDS) / 2;
+	return zones.some((zone) => {
+		// How far the zone's centre is from the nearest point of the footprint.
+		const dx = math.max(math.abs(zone.X - centre.X) - half, 0);
+		const dz = math.max(math.abs(zone.Z - centre.Z) - half, 0);
+		return dx * dx + dz * dz < DROP_ZONE_RADIUS * DROP_ZONE_RADIUS;
+	});
+}
 
 /** Whether `kind` is a belt: it carries ore along a path, and joins the belts it meets in runs. */
 export function isBelt(kind: BuildingKind): boolean {

@@ -8,7 +8,7 @@ import { EXIT_TIME, useAppear, useScramble, useSpin } from "core/Interface/clien
 import { CARD_TRANSPARENCY, COLORS, FONT, FONT_DISPLAY, FONT_LABEL, SPRINGS } from "core/Interface/client/theme";
 import { useServerTime } from "core/Interface/client/use-server-time";
 import { type Inventory, NOTICE_SECONDS, type Notice } from "game/Base/client/base-state";
-import { ALIEN_KINDS, type AlienKind, type BaseState } from "game/Base/shared/base-network";
+import { AIR_ALIENS, type AlienKind, type BaseState, GROUND_ALIENS } from "game/Base/shared/base-network";
 import { type ResourceId, RESOURCES } from "game/Base/shared/resources";
 
 const clamp01 = (value: number) => math.clamp(value, 0, 1);
@@ -210,15 +210,40 @@ export function WavePanel({ state, show, onCallWave }: WavePanelProps) {
 
 /** How many aliens the sandbox panel can send at once. */
 const SPAWN_COUNTS = [1, 5, 10, 25];
-/** Pixels between a row of chips. */
-const CHIP_GAP = 4;
+/** The sandbox panel's alien kinds, under their headings, this many chips to a row. */
+const KIND_SECTIONS: ReadonlyArray<{ readonly name: string; readonly kinds: ReadonlyArray<AlienKind> }> = [
+	{ name: "GROUND", kinds: GROUND_ALIENS },
+	{ name: "AIR", kinds: AIR_ALIENS },
+];
+const KIND_COLUMNS = 3;
+/** Pixels: a chip's height and the gap between chips, a section's heading, the gap between the panel's rows, and the COUNT label's width. */
+const CHIP_HEIGHT = 26;
+const CHIP_GAP = 6;
+const HEADING = 18;
+const ROW_GAP = 10;
+const COUNT_LABEL = 56;
+
+/** How tall a section of `count` chips is, heading and all. */
+function sectionHeight(count: number): number {
+	const rows = math.ceil(count / KIND_COLUMNS);
+	return HEADING + rows * CHIP_HEIGHT + (rows - 1) * CHIP_GAP;
+}
+
+/** The sandbox panel's rows, in pixels: its title, the sections and the counts. The buttons go under them. */
+const SANDBOX_ROWS =
+	16 +
+	KIND_SECTIONS.reduce((sum, { kinds }) => sum + sectionHeight(kinds.size()), 0) +
+	CHIP_HEIGHT +
+	ROW_GAP * (KIND_SECTIONS.size() + 1);
+/** Its padding, the rows, and the buttons. */
+const SANDBOX_HEIGHT = 18 + SANDBOX_ROWS + ROW_GAP + 28;
 
 interface ChipProps {
 	readonly text: string;
 	/** Lit while true. */
 	readonly picked: () => boolean;
-	/** How many share its row, so it takes its share of the width. */
-	readonly of: number;
+	/** How many share its row, so it takes its share of the width. Left out in a grid, which sizes it. */
+	readonly of?: number;
 	readonly layoutOrder: number;
 	readonly onClick: () => void;
 }
@@ -232,10 +257,10 @@ function Chip({ text, picked, of, layoutOrder, onClick }: ChipProps) {
 			BorderSizePixel={0}
 			FontFace={FONT_DISPLAY}
 			LayoutOrder={layoutOrder}
-			Size={new UDim2(1 / of, (-CHIP_GAP * (of - 1)) / of, 1, 0)}
+			Size={of !== undefined ? new UDim2(1 / of, (-CHIP_GAP * (of - 1)) / of, 1, 0) : undefined}
 			Text={text}
 			TextColor3={() => (picked() ? COLORS.text : COLORS.subtext)}
-			TextSize={12}
+			TextSize={13}
 			Activated={onClick}
 		>
 			<uistroke
@@ -248,31 +273,17 @@ function Chip({ text, picked, of, layoutOrder, onClick }: ChipProps) {
 	);
 }
 
-/** A row of chips, `y` pixels down. */
-function ChipRow({ y, children }: { readonly y: number; readonly children: Vide.Node }) {
-	return (
-		<frame BackgroundTransparency={1} Position={UDim2.fromOffset(0, y)} Size={new UDim2(1, 0, 0, 24)}>
-			<uilistlayout
-				FillDirection={Enum.FillDirection.Horizontal}
-				Padding={new UDim(0, CHIP_GAP)}
-				SortOrder={Enum.SortOrder.LayoutOrder}
-			/>
-			{children}
-		</frame>
-	);
-}
-
 interface SandboxPanelProps extends MissionProps {
-	/** Sends `count` aliens of `kind` from the alien spawns. */
+	/** Sends `count` aliens of `kind` from the drop zones. */
 	readonly onSpawn: (kind: AlienKind, count: number) => void;
 	/** Kills every alien. */
 	readonly onClear: () => void;
 }
 
 /**
- * A sandbox's stand-in for the wave panel, on the right: how many aliens are alive, a kind and a
- * count to pick, and buttons to send them from the alien spawns or clear them all. Slides in from
- * the right.
+ * A sandbox's stand-in for the wave panel, on the right: how many aliens are alive, a kind to pick
+ * from the ground and air sections and a count, and buttons to send them from the drop zones or
+ * clear them all. Slides in from the right.
  */
 export function SandboxPanel({ state, show, onSpawn, onClear }: SandboxPanelProps) {
 	const slide = useAppear(show, 0.1);
@@ -284,43 +295,94 @@ export function SandboxPanel({ state, show, onSpawn, onClear }: SandboxPanelProp
 		<HudBox
 			name="SandboxPanel"
 			anchorPoint={new Vector2(1, 0)}
-			position={() => new UDim2(1, -EDGE + 280 * (1 - slide()), 0.3, 0)}
-			size={UDim2.fromOffset(220, 168)}
+			position={() => new UDim2(1, -EDGE + 340 * (1 - slide()), 0.3, 0)}
+			size={UDim2.fromOffset(300, SANDBOX_HEIGHT)}
 		>
-			<Label text={useScramble("hud", () => "SANDBOX", 0.25)} size={new UDim2(1, 0, 0, 14)} />
-			<Label position={UDim2.fromOffset(0, 20)} size={new UDim2(0.5, 0, 0, 16)} text="ALIENS" />
-			<Label
-				alignX={Enum.TextXAlignment.Right}
-				anchorPoint={new Vector2(1, 0)}
-				color={() => (state().aliens > 0 ? COLORS.danger : COLORS.text)}
-				font={FONT_DISPLAY}
-				position={new UDim2(1, 0, 0, 20)}
-				size={new UDim2(0.5, 0, 0, 16)}
-				text={() => tostring(state().aliens)}
-				textSize={16}
-			/>
-			<ChipRow y={44}>
-				{ALIEN_KINDS.map((option, index) => (
-					<Chip
-						text={option.upper()}
-						picked={() => kind() === option}
-						of={ALIEN_KINDS.size()}
-						layoutOrder={index}
-						onClick={() => kind(option)}
+			<frame BackgroundTransparency={1} Size={new UDim2(1, 0, 0, SANDBOX_ROWS)}>
+				<uilistlayout Padding={new UDim(0, ROW_GAP)} SortOrder={Enum.SortOrder.LayoutOrder} />
+				<frame BackgroundTransparency={1} LayoutOrder={0} Size={new UDim2(1, 0, 0, 16)}>
+					<Label text={useScramble("hud", () => "SANDBOX", 0.25)} size={UDim2.fromScale(0.5, 1)} />
+					<Label
+						alignX={Enum.TextXAlignment.Right}
+						anchorPoint={new Vector2(1, 0)}
+						position={new UDim2(1, -40, 0, 0)}
+						size={UDim2.fromScale(0.4, 1)}
+						text="ALIENS"
 					/>
-				))}
-			</ChipRow>
-			<ChipRow y={74}>
-				{SPAWN_COUNTS.map((option, index) => (
-					<Chip
-						text={`x${option}`}
-						picked={() => count() === option}
-						of={SPAWN_COUNTS.size()}
-						layoutOrder={index}
-						onClick={() => count(option)}
+					<Label
+						alignX={Enum.TextXAlignment.Right}
+						anchorPoint={new Vector2(1, 0)}
+						color={() => (state().aliens > 0 ? COLORS.danger : COLORS.text)}
+						font={FONT_DISPLAY}
+						position={UDim2.fromScale(1, 0)}
+						size={new UDim2(0, 36, 1, 0)}
+						text={() => tostring(state().aliens)}
+						textSize={16}
 					/>
+				</frame>
+				{KIND_SECTIONS.map(({ name, kinds }, index) => (
+					<frame
+						BackgroundTransparency={1}
+						LayoutOrder={index + 1}
+						Size={new UDim2(1, 0, 0, sectionHeight(kinds.size()))}
+					>
+						<Label size={new UDim2(1, 0, 0, 12)} text={name} textSize={11} />
+						<frame
+							BackgroundTransparency={1}
+							Position={UDim2.fromOffset(0, HEADING)}
+							Size={new UDim2(1, 0, 1, -HEADING)}
+						>
+							<uigridlayout
+								CellPadding={UDim2.fromOffset(CHIP_GAP, CHIP_GAP)}
+								CellSize={
+									new UDim2(
+										1 / KIND_COLUMNS,
+										(-CHIP_GAP * (KIND_COLUMNS - 1)) / KIND_COLUMNS,
+										0,
+										CHIP_HEIGHT,
+									)
+								}
+								SortOrder={Enum.SortOrder.LayoutOrder}
+							/>
+							{kinds.map((option, order) => (
+								<Chip
+									text={option.upper()}
+									picked={() => kind() === option}
+									layoutOrder={order}
+									onClick={() => kind(option)}
+								/>
+							))}
+						</frame>
+					</frame>
 				))}
-			</ChipRow>
+				<frame
+					BackgroundTransparency={1}
+					LayoutOrder={KIND_SECTIONS.size() + 1}
+					Size={new UDim2(1, 0, 0, CHIP_HEIGHT)}
+				>
+					<Label size={new UDim2(0, COUNT_LABEL, 1, 0)} text="COUNT" />
+					<frame
+						BackgroundTransparency={1}
+						Position={UDim2.fromOffset(COUNT_LABEL, 0)}
+						Size={new UDim2(1, -COUNT_LABEL, 1, 0)}
+					>
+						<uilistlayout
+							FillDirection={Enum.FillDirection.Horizontal}
+							Padding={new UDim(0, CHIP_GAP)}
+							SortOrder={Enum.SortOrder.LayoutOrder}
+						/>
+						{SPAWN_COUNTS.map((option, index) => (
+							<Chip
+								text={`x${option}`}
+								picked={() => count() === option}
+								of={SPAWN_COUNTS.size()}
+								layoutOrder={index}
+								onClick={() => count(option)}
+							/>
+						))}
+					</frame>
+				</frame>
+			</frame>
 			<Button
 				anchorPoint={new Vector2(0, 1)}
 				color={COLORS.danger}

@@ -383,7 +383,7 @@ export class TerrainService implements OnStart {
 			planet: this.planet,
 			kind: this.config.kind,
 			landing: new Vector3(0, heightAt(0, 0), 0),
-			alienSpawns: sampler.pads.map((pad) => new Vector3(pad.x, heightAt(pad.x, pad.z), pad.z)),
+			dropZones: sampler.pads.map((pad) => new Vector3(pad.x, heightAt(pad.x, pad.z), pad.z)),
 			ores,
 			props: this.props,
 			heightAt,

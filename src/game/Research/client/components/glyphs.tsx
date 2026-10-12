@@ -226,6 +226,22 @@ const GLYPHS: Record<GlyphId, ReadonlyArray<Rect>> = {
 		[1, 7, 10, 4],
 		[5, 4, 2, 2, "cut"],
 	],
+	scatter: [
+		[2, 0, 2, 5],
+		[8, 0, 2, 5],
+		[1, 4, 10, 3],
+		[0, 7, 12, 5],
+		[5, 8, 2, 2, "cut"],
+	],
+	// A ring of barrels, end on.
+	vulcan: [
+		[3, 0, 2, 5],
+		[7, 0, 2, 5],
+		[5, 1, 2, 4],
+		[2, 4, 8, 3],
+		[0, 7, 12, 5],
+		[5, 8, 2, 2, "cut"],
+	],
 	cannon: [
 		[4, 0, 4, 5],
 		[2, 4, 8, 4],
@@ -256,6 +272,17 @@ const GLYPHS: Record<GlyphId, ReadonlyArray<Rect>> = {
 		[5, 8, 2, 4],
 		[0, 5, 4, 2],
 		[8, 5, 4, 2],
+	],
+	// A sign: a triangle with an exclamation mark cut out of it.
+	warning: [
+		[5, 0, 2, 2],
+		[4, 2, 4, 2],
+		[3, 4, 6, 2],
+		[2, 6, 8, 2],
+		[1, 8, 10, 2],
+		[0, 10, 12, 2],
+		[5, 3, 2, 4, "cut"],
+		[5, 8, 2, 2, "cut"],
 	],
 };
 

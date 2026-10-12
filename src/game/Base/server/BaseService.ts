@@ -24,6 +24,7 @@ import {
 	BUILDABLE,
 	BUILDINGS,
 	type BuildingKind,
+	inDropZone,
 	MACHINE_SECONDS,
 	MAX_LINE,
 	isBelt,
@@ -70,6 +71,9 @@ export interface Building {
 	/** Turrets: seconds until they can fire again, and the shots fired so far in their burst (see `BuildingDef`). */
 	cooldown: number;
 	burst: number;
+	/** Turrets that spin up: how far, 0 to 1, and whether they had a target when they last looked. */
+	spin: number;
+	engaged: boolean;
 	/** Drills and crafters: what they make. */
 	readonly resource?: ResourceId;
 	/** Drills and crafters: made and waiting to go out, to a neighbour or a player. */
@@ -108,8 +112,6 @@ interface SavedBase {
 const START_POOL: Stock = { copper: 80, lead: 40 };
 /** Seconds of network jitter a held mine click is allowed, so ordinary lag doesn't drop ore. */
 const MINE_SLACK = 0.05;
-/** Buildings keep this many cells clear of an alien spawn, so waves can't be walled in at the source. */
-const SPAWN_CLEARANCE = 3;
 /** Most height difference across a footprint, in studs. */
 const MAX_SLOPE = 6;
 /** How far a foundation's top stands above the highest ground under it, so it never shares a plane with the terrain. */
@@ -184,7 +186,6 @@ export class BaseService implements OnStart {
 	private readonly ores = new Map<number, OreDeposit>();
 	/** When each player last mined, so a held click mines no faster than `MINE_SECONDS`. */
 	private readonly lastMined = new Map<Player, number>();
-	private spawnCells = new Array<readonly [number, number]>();
 	private readonly inventories = new Map<Player, Stock>();
 	/** Liberated planets' bases, while the team is elsewhere. */
 	private readonly saved = new Map<number, SavedBase>();
@@ -261,7 +262,6 @@ export class BaseService implements OnStart {
 
 		this.map = map;
 		if (!map) {
-			this.spawnCells = [];
 			this.poolAtom({});
 			this.coreHealthAtom(0);
 			this.coreMaxHealthAtom(0);
@@ -280,12 +280,6 @@ export class BaseService implements OnStart {
 		}
 		this.poolAtom(pool);
 		if (this.sandbox()) this.fillPool();
-
-		this.spawnCells = [];
-		for (const spawn of map.alienSpawns) {
-			const cell = cellAt(spawn.X, spawn.Z);
-			if (cell !== undefined) this.spawnCells.push(cellCoords(cell));
-		}
 
 		for (const ore of map.ores) this.ores.set(ore.cell, ore);
 
@@ -586,7 +580,8 @@ export class BaseService implements OnStart {
 		const there = this.cells.get(cell);
 		const replaced = there && replaces(kind, there.kind, line) ? there : undefined;
 		if (cells.some((covered) => this.cells.has(covered) && this.cells.get(covered) !== replaced)) return OCCUPIED;
-		if (cells.some((covered) => this.nearSpawn(covered))) return "Too close to an alien spawn.";
+		// Waves land there, so they can't be walled in at the source.
+		if (inDropZone(cell, def.size, map.dropZones)) return "You can't build in a drop zone.";
 		if (cells.some((covered) => map.isLiquid(cellCenter(covered).X, cellCenter(covered).Z))) {
 			return "You can't build on liquid.";
 		}
@@ -681,6 +676,8 @@ export class BaseService implements OnStart {
 			maxHealth,
 			cooldown: 0,
 			burst: 0,
+			spin: 0,
+			engaged: false,
 			muzzles: [],
 			resource: def.drill ? this.oreUnder(cell, def.size) : def.craft?.output,
 			stored: 0,
@@ -1082,10 +1079,5 @@ export class BaseService implements OnStart {
 		if (!character || !humanoid || humanoid.Health <= 0) return false;
 		const position = character.GetPivot().Position;
 		return new Vector2(position.X - target.X, position.Z - target.Z).Magnitude <= range;
-	}
-
-	private nearSpawn(cell: number): boolean {
-		const [gx, gz] = cellCoords(cell);
-		return this.spawnCells.some(([sx, sz]) => math.max(math.abs(gx - sx), math.abs(gz - sz)) <= SPAWN_CLEARANCE);
 	}
 }
