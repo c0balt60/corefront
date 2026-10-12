@@ -9,7 +9,8 @@ import { CELL_STUDS, cellCenter } from "game/Terrain/shared/map";
  *   crafters also have `Resource` (what they make) and `Stored`, drills `Yield` (per tick), crafters
  *   `Input_<resource>` for each input, turrets `Ammo`, sorters and sources `Filter`, and belts `Entry`, `PathIn`,
  *   `PathMid`, `PathOut` and `PathEnds` (see `BeltPath`).
- * - `Base.Aliens`: one Model per alien, with `Kind` (AlienKind), `Health` and `MaxHealth`.
+ * - `Base.Aliens`: one Model per alien, with `Kind` (AlienKind), `Health` and `MaxHealth`, and for
+ *   each of its turrets (`Turret0` on) an `Aim0` on: where that turret's gun aims, if anywhere.
  * Ore deposits are Models tagged "Ore" (CollectionService), with attributes `Resource` and `Cell`.
  */
 

@@ -135,6 +135,13 @@ function makeFolder(name: string, parent: Instance): Folder {
 	return instance;
 }
 
+function makeModel(name: string, parent: Instance): Model {
+	const instance = new Instance("Model");
+	instance.Name = name;
+	instance.Parent = parent;
+	return instance;
+}
+
 /** The cells a `size`×`size` building with its -X/-Z corner on `cell` covers. */
 function footprint(cell: number, size: number): Array<number> {
 	const [gx, gz] = cellCoords(cell);
@@ -168,7 +175,8 @@ export class BaseService implements OnStart {
 
 	readonly folder = makeFolder("Base", Workspace);
 	readonly buildingsFolder = makeFolder("Buildings", this.folder);
-	readonly aliensFolder = makeFolder("Aliens", this.folder);
+	/** A Model, not a Folder, so one Highlight can show every alien in it (see `PingController`). */
+	readonly aliensFolder = makeModel("Aliens", this.folder);
 
 	readonly buildings = new Set<Building>();
 	/** The building covering each cell. */

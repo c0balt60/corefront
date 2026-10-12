@@ -260,9 +260,12 @@ function Chip({ text, picked, of, layoutOrder, onClick }: ChipProps) {
 			Size={of !== undefined ? new UDim2(1 / of, (-CHIP_GAP * (of - 1)) / of, 1, 0) : undefined}
 			Text={text}
 			TextColor3={() => (picked() ? COLORS.text : COLORS.subtext)}
-			TextSize={13}
+			TextScaled={true}
 			Activated={onClick}
 		>
+			{/* 13 at most: a long name shrinks to fit. */}
+			<uitextsizeconstraint MaxTextSize={13} />
+			<uipadding PaddingLeft={new UDim(0, 4)} PaddingRight={new UDim(0, 4)} />
 			<uistroke
 				ApplyStrokeMode={Enum.ApplyStrokeMode.Border}
 				Color={() => (picked() ? COLORS.text : COLORS.stroke)}

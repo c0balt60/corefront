@@ -20,6 +20,8 @@ export const enum BaseMessage {
 	Collect,
 	Load,
 	Drop,
+	Ping,
+	Pinged,
 }
 
 /**
@@ -82,6 +84,10 @@ export interface BaseMessageData {
 	[BaseMessage.Load]: { readonly x: number; readonly z: number };
 	/** Client -> server: throw away all of `resource` that I carry. */
 	[BaseMessage.Drop]: { readonly resource: ResourceId };
+	/** Client -> server: show everyone every alien. */
+	[BaseMessage.Ping]: undefined;
+	/** Server -> clients: someone pinged, so show every alien for a while (see `PingController`). */
+	[BaseMessage.Pinged]: undefined;
 }
 
 /** One building to place: its -X/-Z corner on cell (x, z), turned `rotation` quarter turns (0-3, see `DIRECTIONS`). */
@@ -135,8 +141,29 @@ export interface BeltMessageData {
 }
 
 /** The aliens that walk, and those that fly, in the order the sandbox panel lists them. */
-export const GROUND_ALIENS = ["crawler", "sapper", "brute", "spitter", "mortar", "shielder", "titan"] as const;
-export const AIR_ALIENS = ["drone", "bomber", "gunship", "carrier"] as const;
+export const GROUND_ALIENS = [
+	"crawler",
+	"sapper",
+	"brute",
+	"spitter",
+	"mortar",
+	"shielder",
+	"strider",
+	"aegis",
+	"hydra",
+	"fortress",
+	"titan",
+] as const;
+export const AIR_ALIENS = [
+	"drone",
+	"wasp",
+	"hornet",
+	"bomber",
+	"gunship",
+	"carrier",
+	"frigate",
+	"dreadnought",
+] as const;
 /** Every kind of alien. */
 export const ALIEN_KINDS = [...GROUND_ALIENS, ...AIR_ALIENS] as const;
 export type AlienKind = (typeof ALIEN_KINDS)[number];
@@ -148,10 +175,13 @@ export const enum ShotMessage {
 	Fired = 150,
 	Hit,
 	Blast,
+	Downed,
 }
 
-/** A rocket, shell or burst of flak, flying a curve from `from` that bends toward `control`, for `seconds`. */
+/** A rocket, shell or burst of flak, flying a curve from `from` that bends toward `control` (see `bezier`), for `seconds`. */
 export interface Shot {
+	/** Which shot it is, so one shot down in the air can be told apart. */
+	readonly id: number;
 	readonly kind: "rocket" | "shell" | "flak";
 	readonly from: Vector3;
 	readonly control: Vector3;
@@ -167,12 +197,20 @@ export interface ShotMessageData {
 	/** Server -> clients: a turret fired a rocket, shell or flak, or an alien a shell, bomb or rocket. */
 	[ShotMessage.Fired]: Shot;
 	/**
-	 * Server -> clients: a turret's shot hit at once, from its barrel at `from` to `to`. `size` is how
-	 * heavy it looks: a slow gun's size in cells, or 1 for a fast one, whose every shot can't blast.
+	 * Server -> clients: a turret's shot hit at once, from its barrel at `from` to `to`, or an alien's
+	 * if `hostile`. `size` is how heavy it looks: a slow gun's size in cells, or 1 for a fast one,
+	 * whose every shot can't blast.
 	 */
-	[ShotMessage.Hit]: { readonly from: Vector3; readonly to: Vector3; readonly size: number };
+	[ShotMessage.Hit]: { readonly from: Vector3; readonly to: Vector3; readonly size: number; readonly hostile?: true };
 	/** Server -> clients: something blew up on the spot, hurting what was within `splash` studs. */
 	[ShotMessage.Blast]: { readonly at: Vector3; readonly splash: number };
+	/** Server -> clients: an alien's point defence shot the shot `id` down in the air, from its barrel at `from`. */
+	[ShotMessage.Downed]: { readonly id: number; readonly from: Vector3 };
+}
+
+/** The point `t` (0 to 1) of the way along a shot's curve: a quadratic Bézier from `from` bending toward `control`. */
+export function bezier(from: Vector3, control: Vector3, to: Vector3, t: number): Vector3 {
+	return from.Lerp(control, t).Lerp(control.Lerp(to, t), t);
 }
 
 /** A sandbox's controls, refused anywhere else. Its own emitter: 160+. */

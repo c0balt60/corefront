@@ -5,13 +5,16 @@ import { Players, RunService, Workspace } from "@rbxts/services";
 
 import { BaseService, type Building } from "game/Base/server/BaseService";
 import { buildFlowfield, terrainCosts } from "game/Base/server/flowfield";
-import { alienModel, setHealth, shieldBubble, tracer } from "game/Base/server/models";
+import { alienModel, alienTurrets, setHealth, shieldBubble } from "game/Base/server/models";
+import { ALIEN_GAITS } from "game/Base/shared/alien-legs";
 import {
 	ALIEN_KINDS,
 	type AlienKind,
 	BaseMessage,
 	baseMessaging,
 	type BaseState,
+	bezier,
+	type Shot,
 	ShotMessage,
 	shotMessaging,
 } from "game/Base/shared/base-network";
@@ -26,50 +29,120 @@ import { CELL_STUDS, cellAt, cellCenter, GRID_SIZE } from "game/Terrain/shared/m
 export const isAlienKind = (value: unknown): value is AlienKind => ALIEN_KINDS.includes(value as AlienKind);
 
 /**
- * How an alien fights:
- * - `melee`: hits the players it reaches, and chews through buildings in its way.
+ * What an alien does with its own body, besides chewing through the buildings in its way (every
+ * walker does that, with its `damage` every `rate` seconds):
+ * - `melee`: hits the players it reaches.
  * - `explode`: like melee, but its first hit blows it up, hurting everything within `splash`.
- * - `shoot`: stops to shoot the nearest player or building within `range`.
- * - `shell`: stops to lob a shell at the nearest player or building within `range`, blasting `splash` round where it lands.
  * - `bomb`: never stops; drops a bomb whenever a building is under it, blasting `splash` round.
- * - `rocket`: stops to fire a pair of rockets at the nearest turret within `range`, or with none
- *   the nearest player or building, each blasting `splash` round where it lands.
  * - `drop`: never stops; drops crawlers from its `cargo` every `rate` seconds until it's empty.
+ * Without one it only fights with its guns.
  */
-type Attack = "melee" | "explode" | "shoot" | "shell" | "bomb" | "rocket" | "drop";
+type Attack = "melee" | "explode" | "bomb" | "drop";
+
+/**
+ * One of an alien's guns, each picking its own target and firing on its own clock: every `rate`
+ * seconds while it has something within `range` (and its `arc`), the nearest building it can find,
+ * or with none in reach the nearest player. It fires on the move: aliens never stop to shoot.
+ * - `shoot`: a shot that hits at once.
+ * - `shell`: a shell lobbed high, blasting `splash` round where it lands.
+ * - `rocket`: a `salvo` of rockets (two if not said), each veering off to a side before curving
+ *   down, blasting `splash` round.
+ * - `intercept`: point defence. Shoots the nearest turret rocket or shell in the air out of it.
+ */
+interface Gun {
+	readonly kind: "shoot" | "shell" | "rocket" | "intercept";
+	readonly damage: number;
+	readonly rate: number;
+	readonly range: number;
+	readonly splash?: number;
+	readonly salvo?: number;
+	/**
+	 * The turret on the model it's mounted in, which turns to aim it (see `alienTurrets`), and how far
+	 * either way it turns off where it rests, in degrees (all the way round if not said). Without a
+	 * turret it's fixed in the hull and fires from its middle: rocket racks, whose rockets curve round.
+	 */
+	readonly turret?: number;
+	readonly arc?: number;
+	/** Picks the nearest turret when it has one in reach, before any other building. */
+	readonly prefers?: "turrets";
+	/** How heavy its shots look (see `ShotMessage.Hit`): 2 and up also blast. */
+	readonly size?: number;
+}
 
 interface AlienDef {
 	readonly health: number;
 	/** Studs per second. */
 	readonly speed: number;
-	/** Per hit, to buildings and players alike. */
+	/** Per hit of its own `attack` and its chewing, to buildings and players alike. */
 	readonly damage: number;
-	/** Seconds between hits. */
+	/** Seconds between those hits. */
 	readonly rate: number;
-	readonly attack: Attack;
+	readonly attack?: Attack;
+	readonly guns?: ReadonlyArray<Gun>;
 	/** Melee reach past the edge of what it hits, in studs. */
 	readonly reach?: number;
 	/** Height of the body's centre above the ground. */
 	readonly hover: number;
-	/** Ranged aliens stop this far out to shoot. */
-	readonly range?: number;
-	/** Studs round where its explosion, shell or bomb goes off that it hurts. */
+	/** Studs round where its explosion or bomb goes off that it hurts. */
 	readonly splash?: number;
 	/** Flies straight for the Core over everything, and only turrets that shoot fliers can hit it. */
 	readonly air?: true;
+	/** The most it turns, in radians a second (`TURN_RATE` if not said): big machines come round slowly. */
+	readonly turn?: number;
+	/**
+	 * Fliers that fly like aircraft: always under way, in sweeping passes over the base instead of
+	 * hovering over the Core (see `steer`).
+	 */
+	readonly aircraft?: true;
 	/** Shielders: their bubble's radius, in studs, and the damage it soaks before it breaks (see `absorb`). */
 	readonly shield?: { readonly radius: number; readonly health: number };
 	/** Carriers: the crawlers aboard. */
 	readonly cargo?: number;
 }
 
+/** A frigate's or dreadnought's broadside: the same gun on each of its four side turrets, `first` on. */
+function broadside(first: number, gun: Omit<Gun, "turret">): Array<Gun> {
+	return [first, first + 1, first + 2, first + 3].map((turret) => ({ ...gun, turret }));
+}
+
+/*
+ * Ranges against the turrets': the Turret's 56, the Auto-Turret's 60, the Vulcan's 72, the Scatter's
+ * and the Swarmer's 80, the Cannon's 100 and the Ripple's 220.
+ */
 const ALIENS: Record<AlienKind, AlienDef> = {
 	crawler: { health: 30, speed: 14, damage: 6, rate: 0.8, attack: "melee", reach: 4, hover: 1.5 },
 	sapper: { health: 40, speed: 16, damage: 70, rate: 0, attack: "explode", reach: 3, hover: 1.2, splash: 10 },
-	brute: { health: 240, speed: 6, damage: 40, rate: 1.6, attack: "melee", reach: 6, hover: 1.9 },
-	spitter: { health: 50, speed: 9, damage: 10, rate: 1.5, attack: "shoot", reach: 4, hover: 2.8, range: 36 },
+	brute: {
+		health: 240,
+		speed: 6,
+		damage: 40,
+		rate: 1.6,
+		attack: "melee",
+		reach: 6,
+		hover: 1.9,
+		turn: 1.5,
+		guns: [{ kind: "shoot", damage: 8, rate: 0.8, range: 36, turret: 0 }],
+	},
+	spitter: {
+		health: 50,
+		speed: 9,
+		damage: 10,
+		rate: 1.5,
+		reach: 4,
+		hover: 2.8,
+		guns: [{ kind: "shoot", damage: 10, rate: 1.5, range: 36, turret: 0, arc: 60 }],
+	},
 	// Outranges the Turret and Auto-Turret.
-	mortar: { health: 200, speed: 5, damage: 35, rate: 4, attack: "shell", reach: 6, hover: 2.5, range: 72, splash: 8 },
+	mortar: {
+		health: 200,
+		speed: 5,
+		damage: 35,
+		rate: 4,
+		reach: 6,
+		hover: 2.5,
+		turn: 1.6,
+		guns: [{ kind: "shell", damage: 35, rate: 4, range: 72, splash: 8, turret: 0 }],
+	},
 	shielder: {
 		health: 220,
 		speed: 7,
@@ -80,22 +153,147 @@ const ALIENS: Record<AlienKind, AlienDef> = {
 		hover: 1.4,
 		shield: { radius: 16, health: 400 },
 	},
-	titan: { health: 2500, speed: 3.5, damage: 150, rate: 2, attack: "melee", reach: 9, hover: 8.8 },
-	drone: { health: 35, speed: 18, damage: 5, rate: 0.6, attack: "shoot", hover: 16, range: 30, air: true },
-	bomber: { health: 260, speed: 8, damage: 30, rate: 1.2, attack: "bomb", hover: 22, splash: 9, air: true },
-	// Outranges the Turret and Auto-Turret, not the Scatter or Vulcan.
+	strider: {
+		health: 320,
+		speed: 8,
+		damage: 12,
+		rate: 1,
+		reach: 4,
+		hover: 3.2,
+		turn: 2.5,
+		guns: [{ kind: "shoot", damage: 7, rate: 0.5, range: 44, turret: 0 }],
+	},
+	// Point defence for the units round it. Each rocket or shell it shoots down is one that never lands.
+	aegis: {
+		health: 300,
+		speed: 7,
+		damage: 6,
+		rate: 1,
+		reach: 4,
+		hover: 2.4,
+		guns: [{ kind: "intercept", damage: 0, rate: 0.4, range: 30, turret: 0 }],
+	},
+	hydra: {
+		health: 900,
+		speed: 5,
+		damage: 30,
+		rate: 1.5,
+		reach: 6,
+		hover: 3.4,
+		turn: 1.6,
+		guns: [
+			{ kind: "shoot", damage: 5, rate: 0.2, range: 36, turret: 0 },
+			{ kind: "shell", damage: 30, rate: 3.5, range: 64, splash: 6, turret: 1 },
+			{ kind: "rocket", damage: 16, rate: 4, range: 56, splash: 5, turret: 2, prefers: "turrets" },
+		],
+	},
+	// Its cannon outranges everything but the Cannon and Ripple; its flank guns cover its sides.
+	fortress: {
+		health: 1600,
+		speed: 3,
+		damage: 80,
+		rate: 2,
+		attack: "melee",
+		reach: 7,
+		hover: 6.4,
+		turn: 1.2,
+		guns: [
+			{ kind: "shell", damage: 60, rate: 5, range: 84, splash: 10, turret: 0 },
+			{ kind: "shoot", damage: 6, rate: 0.2, range: 36, turret: 1, arc: 120 },
+			{ kind: "shoot", damage: 6, rate: 0.2, range: 36, turret: 2, arc: 120 },
+		],
+	},
+	titan: {
+		health: 2500,
+		speed: 3.5,
+		damage: 150,
+		rate: 2,
+		attack: "melee",
+		reach: 9,
+		hover: 8.8,
+		turn: 0.9,
+		guns: [
+			{ kind: "shoot", damage: 30, rate: 1.6, range: 48, turret: 0, arc: 70, size: 2 },
+			{ kind: "shoot", damage: 30, rate: 1.6, range: 48, turret: 1, arc: 70, size: 2 },
+			{ kind: "rocket", damage: 20, rate: 4, range: 64, splash: 6, turret: 2, prefers: "turrets" },
+		],
+	},
+	drone: {
+		health: 35,
+		speed: 18,
+		damage: 0,
+		rate: 0,
+		hover: 16,
+		air: true,
+		turn: 3,
+		guns: [{ kind: "shoot", damage: 5, rate: 0.6, range: 30, turret: 0 }],
+	},
+	wasp: {
+		health: 80,
+		speed: 24,
+		damage: 0,
+		rate: 0,
+		hover: 14,
+		air: true,
+		turn: 1.6,
+		aircraft: true,
+		guns: [{ kind: "shoot", damage: 4, rate: 0.25, range: 32, turret: 0 }],
+	},
+	hornet: {
+		health: 160,
+		speed: 13,
+		damage: 0,
+		rate: 0,
+		hover: 18,
+		turn: 2.5,
+		air: true,
+		guns: [
+			{ kind: "shoot", damage: 5, rate: 0.4, range: 32, turret: 0 },
+			{ kind: "rocket", damage: 12, rate: 3.5, range: 48, splash: 4, salvo: 4 },
+		],
+	},
+	bomber: { health: 260, speed: 8, damage: 30, rate: 1.2, attack: "bomb", hover: 22, splash: 9, air: true, turn: 1 },
+	// Its rockets outrange the Turret and Auto-Turret, not the Scatter or Vulcan.
 	gunship: {
 		health: 700,
 		speed: 7,
-		damage: 30,
-		rate: 3,
-		attack: "rocket",
+		damage: 0,
+		rate: 0,
 		hover: 26,
-		range: 64,
-		splash: 6,
+		turn: 1.2,
 		air: true,
+		guns: [
+			{ kind: "rocket", damage: 30, rate: 3, range: 64, splash: 6, prefers: "turrets" },
+			{ kind: "shoot", damage: 6, rate: 0.35, range: 40, turret: 0 },
+		],
 	},
-	carrier: { health: 600, speed: 6, damage: 0, rate: 5, attack: "drop", hover: 24, cargo: 8, air: true },
+	carrier: { health: 600, speed: 6, damage: 0, rate: 5, attack: "drop", hover: 24, cargo: 8, air: true, turn: 0.8 },
+	frigate: {
+		health: 1400,
+		speed: 5,
+		damage: 0,
+		rate: 0,
+		hover: 28,
+		air: true,
+		turn: 0.35,
+		aircraft: true,
+		guns: broadside(0, { kind: "shoot", damage: 8, rate: 0.45, range: 44, arc: 100 }),
+	},
+	dreadnought: {
+		health: 4500,
+		speed: 3,
+		damage: 0,
+		rate: 0,
+		hover: 34,
+		air: true,
+		turn: 0.2,
+		aircraft: true,
+		guns: [
+			{ kind: "shell", damage: 80, rate: 6, range: 90, splash: 12, turret: 0 },
+			...broadside(1, { kind: "shoot", damage: 7, rate: 0.3, range: 44, arc: 110 }),
+			{ kind: "rocket", damage: 16, rate: 5, range: 64, splash: 6, salvo: 6, prefers: "turrets" },
+		],
+	},
 };
 
 /** A shielder's shield. It's down while `broken`, until it's back to `SHIELD_REARM` of its `max`. */
@@ -108,6 +306,13 @@ interface Shield {
 	readonly bubble: BasePart;
 }
 
+/** One of an alien's guns as it fights: its clock, and what it's aiming at, if anything. */
+interface Weapon {
+	readonly gun: Gun;
+	cooldown: number;
+	at?: Vector3;
+}
+
 interface Alien {
 	readonly model: Model;
 	readonly root: BasePart;
@@ -116,30 +321,42 @@ interface Alien {
 	health: number;
 	x: number;
 	z: number;
-	/**
-	 * A fixed nudge off each cell centre, so a swarm doesn't walk in single file.
-	 * ponytail: aliens never push each other apart, so crowds overlap; add separation if that reads badly.
-	 */
+	/** A fixed nudge off each cell centre, so a swarm doesn't walk in single file. */
 	readonly offset: Vector3;
+	/** How far round it other aliens keep off (see `separate`). */
+	readonly radius: number;
 	facing: Vector3;
 	/** Fliers: their height, which climbs ahead of rising ground, and how far they're tipped nose up, in radians. */
 	y: number;
 	pitch: number;
+	/** Aircraft (see `steer`): how far they're banked into a turn, in radians, and where their pass is headed. */
+	roll: number;
+	goal?: Vector3;
 	/** Studs per second, as it last moved: where flak leads it. */
 	velocity: Vector3;
 	cooldown: number;
-	/** Ranged aliens: what they are shooting at. They stand still while they have it. */
-	aim?: Vector3;
+	/** Its guns (see `trigger`). */
+	readonly weapons: ReadonlyArray<Weapon>;
+	/** Where its turrets pivot on its hull, and how far out of each its gun fires (see `alienTurrets`). */
+	readonly mounts: ReadonlyArray<readonly [pivot: CFrame, barrel: number]>;
 	readonly shield?: Shield;
 	/** Carriers: the crawlers still aboard. */
 	cargo: number;
 }
 
-/** A turret's rocket or shell, or an alien's shell or bomb, in the air (see `Shot`). It lands at `lands`, an `os.clock()` time. */
+/**
+ * A turret's rocket, shell or flak, or an alien's shell, bomb or rocket, in the air (see `Shot`): fired
+ * at `fired` and landing at `lands`, `os.clock()` times.
+ */
 interface Projectile {
+	readonly id: number;
+	readonly kind: Shot["kind"];
+	readonly from: Vector3;
+	readonly control: Vector3;
 	/** Where it lands: its target's position, while that lives. */
 	to: Vector3;
 	readonly target?: Alien;
+	readonly fired: number;
 	readonly lands: number;
 	readonly damage: number;
 	readonly splash: number;
@@ -147,6 +364,13 @@ interface Projectile {
 	readonly targets?: "air" | "ground";
 	/** An alien's: it hurts buildings and players instead. */
 	readonly hostile?: true;
+}
+
+/** Something an alien's gun can shoot: a player or a building, and where it is. */
+interface Mark {
+	readonly at: Vector3;
+	readonly humanoid?: Humanoid;
+	readonly building?: Building;
 }
 
 const GRACE_SECONDS = 90;
@@ -158,7 +382,10 @@ const SPAWN_SPREAD = 6;
 const RESULT_SECONDS = 8;
 const FIELD_SECONDS = 0.5;
 const STATE_SECONDS = 0.2;
-const ENEMY_TRACER = Color3.fromRGB(255, 70, 60);
+/** Seconds a gun with nothing to shoot waits before it looks again. */
+const RETARGET_SECONDS = 0.25;
+/** How far a turret's aim must move before clients hear of it, in studs. */
+const AIM_SLACK = 0.5;
 /** How fast rockets and shells fly, in studs per second, after a moment to clear the turret. */
 const ROCKET_SPEED = 90;
 const SHELL_SPEED = 110;
@@ -178,6 +405,21 @@ const CLIMB_RATE = 2.5;
 const PITCH_RATE = 4;
 /** The furthest a flier tips nose up or down. */
 const MAX_PITCH = math.rad(35);
+/** The furthest an aircraft banks, in a turn as tight as it can make, and the rate per second it eases into it. */
+const MAX_BANK = math.rad(40);
+const BANK_RATE = 3;
+/** How far round the Core an aircraft's passes cross. */
+const PASS_RADIUS = 36;
+/**
+ * The most an alien turns in a second, in radians, unless it says (see `AlienDef.turn`), and the
+ * share of its speed it keeps while turning to go back the way it came.
+ */
+const TURN_RATE = 4;
+const SLOWEST_SHARE = 0.15;
+/** Nearer its goal than this, an alien slides the rest of the way: it's inside the circle it turns in. */
+const ARRIVE_STUDS = 3;
+/** Cells down the flowfield a walker steers for, so it cuts the path's corners instead of turning at each cell. */
+const LOOKAHEAD = 2;
 /**
  * Shield regained per second once it's gone this many seconds without a hit, and the share of its
  * max a broken shield needs back before it holds again.
@@ -187,13 +429,23 @@ const SHIELD_DELAY = 2;
 const SHIELD_REARM = 0.5;
 /** Crawlers a carrier drops at a time. */
 const DROP_COUNT = 2;
+/**
+ * The fastest overlapping aliens are pushed apart, in studs a second: ones that land on top of each
+ * other slide apart rather than jump, yet a crowd walking into those ahead can't squeeze in. And how
+ * far out to a walker's feet others keep off.
+ */
+const SHOVE_SPEED = 60;
+const LEG_SHARE = 0.8;
+/** Seconds between one player's pings. */
+const PING_DEBOUNCE = 0.25;
 
 const random = new Random();
 
 /**
- * Which aliens wave `wave` (from 1) sends: a growing swarm, sappers from wave 2, brutes and drones
- * from wave 3, spitters and shielders from wave 4, mortars from wave 6, bombers from wave 7,
- * gunships from wave 8 and carriers from wave 9. The `final` wave brings a Titan.
+ * Which aliens wave `wave` (from 1) sends: a growing swarm, sappers from wave 2, brutes, drones and
+ * striders from wave 3, spitters, shielders and wasps from wave 4, aegises and hornets from wave 5,
+ * mortars from wave 6, bombers and hydras from wave 7, gunships and fortresses from wave 8, and
+ * carriers and frigates from wave 9. The `final` wave brings a Titan and a Dreadnought.
  */
 function composition(wave: number, final: boolean): Array<AlienKind> {
 	const kinds = new Array<AlienKind>();
@@ -204,14 +456,33 @@ function composition(wave: number, final: boolean): Array<AlienKind> {
 	add("sapper", math.floor(wave / 2));
 	add("brute", math.floor((wave - 1) / 2));
 	add("drone", wave - 2);
+	add("strider", math.floor((wave - 1) / 2));
 	add("spitter", wave - 3);
 	add("shielder", math.floor((wave - 2) / 2));
+	add("wasp", math.floor((wave - 2) / 2));
+	add("aegis", math.floor((wave - 3) / 2));
+	add("hornet", math.floor((wave - 3) / 2));
 	add("mortar", math.floor((wave - 4) / 2));
 	add("bomber", math.floor((wave - 5) / 2));
+	add("hydra", math.floor((wave - 5) / 2));
 	add("gunship", math.floor((wave - 6) / 2));
+	add("fortress", math.floor((wave - 6) / 2));
 	add("carrier", math.floor((wave - 7) / 2));
+	add("frigate", math.floor((wave - 7) / 2));
 	add("titan", final ? 1 : 0);
+	add("dreadnought", final ? 1 : 0);
 	return kinds;
+}
+
+/** How far round an alien others keep off: the longer half of its hull, or most of the way out to its feet. */
+function footprint(kind: AlienKind, hull: Vector3): number {
+	let radius = math.max(hull.X, hull.Z) / 2;
+	const gait = ALIEN_GAITS[kind];
+	if (!gait) return radius;
+	const pad = (gait.pad?.X ?? 0) / 2;
+	for (const { rest } of gait.legs)
+		radius = math.max(radius, LEG_SHARE * (math.sqrt(rest.X ** 2 + rest.Z ** 2) + pad));
+	return radius;
 }
 
 /** Whether a turret that shoots `targets` (both, when undefined) can hit `alien`. */
@@ -235,11 +506,11 @@ function groundFrame(map: PlanetMap, x: number, z: number, hover: number, facing
 	return CFrame.fromMatrix(position, forward.Cross(up), up);
 }
 
-/** Where an alien's body goes: on the ground (see `groundFrame`), or for a flier at its height, tipped by its pitch. */
+/** Where an alien's body goes: on the ground (see `groundFrame`), or for a flier at its height, tipped by its pitch and banked by its roll. */
 function bodyFrame(map: PlanetMap, alien: Alien): CFrame {
 	if (!alien.def.air) return groundFrame(map, alien.x, alien.z, alien.def.hover, alien.facing);
 	const position = new Vector3(alien.x, alien.y, alien.z);
-	return CFrame.lookAt(position, position.add(alien.facing)).mul(CFrame.Angles(alien.pitch, 0, 0));
+	return CFrame.lookAt(position, position.add(alien.facing)).mul(CFrame.Angles(alien.pitch, 0, alien.roll));
 }
 
 /**
@@ -267,14 +538,67 @@ function recharge(shield: Shield, dt: number) {
 	shield.bubble.Transparency = shield.broken ? 1 : 0.6 * (1 - shield.health / shield.max);
 }
 
-/** Moves an alien up to its speed toward `goal`, across the ground, facing the way it goes. */
+/** Turns an alien's facing toward `want` (level), at most its `turn` a second. Returns how far it turned, in radians: positive is left. */
+function turnToward(alien: Alien, want: Vector3, dt: number): number {
+	const { facing } = alien;
+	// Signed, about +Y.
+	const wanted = math.atan2(facing.Z * want.X - facing.X * want.Z, facing.Dot(want));
+	const most = (alien.def.turn ?? TURN_RATE) * dt;
+	const angle = math.clamp(wanted, -most, most);
+	alien.facing = CFrame.Angles(0, angle, 0).mul(facing).Unit;
+	return angle;
+}
+
+/**
+ * Moves an alien toward `goal` across the ground the way it faces, turning toward it as it goes (see
+ * `turnToward`). It slows while the goal is off to its side, down to `SLOWEST_SHARE` of its speed
+ * with it behind, so it comes round on the spot rather than swinging wide. Within `ARRIVE_STUDS` it
+ * slides straight on and stops there, still facing the way it came: turning, it would circle round it.
+ */
 function walk(alien: Alien, goal: Vector3, dt: number) {
 	const delta = new Vector3(goal.X - alien.x, 0, goal.Z - alien.z);
-	if (delta.Magnitude <= 0.05) return;
-	const step = delta.Unit.mul(math.min(alien.def.speed * dt, delta.Magnitude));
-	alien.x += step.X;
-	alien.z += step.Z;
-	alien.facing = delta.Unit;
+	const distance = delta.Magnitude;
+	if (distance < 1e-3) return;
+	if (distance <= ARRIVE_STUDS) {
+		const slide = delta.Unit.mul(math.min(alien.def.speed * dt, distance));
+		alien.x += slide.X;
+		alien.z += slide.Z;
+		return;
+	}
+	turnToward(alien, delta, dt);
+	const step = alien.def.speed * math.max(alien.facing.Dot(delta.Unit), SLOWEST_SHARE) * dt;
+	alien.x += alien.facing.X * step;
+	alien.z += alien.facing.Z * step;
+}
+
+/**
+ * Flies an aircraft on at full speed, turning toward its goal at most its `turn` a second, so it
+ * sweeps past and has to come round again, banking into the turn. Once it's flown past (the goal is
+ * behind it, nearer than a full turn takes), it picks another over the base.
+ */
+function steer(map: PlanetMap, alien: Alien, dt: number) {
+	const { speed, turn = TURN_RATE } = alien.def;
+	let toward = alien.goal && new Vector3(alien.goal.X - alien.x, 0, alien.goal.Z - alien.z);
+	if (!toward || (toward.Dot(alien.facing) < 0 && toward.Magnitude < (2 * speed) / turn)) {
+		const angle = random.NextNumber(0, 2 * math.pi);
+		const off = PASS_RADIUS * math.sqrt(random.NextNumber());
+		alien.goal = map.landing.add(new Vector3(math.cos(angle) * off, 0, math.sin(angle) * off));
+		toward = new Vector3(alien.goal.X - alien.x, 0, alien.goal.Z - alien.z);
+	}
+	const angle = turnToward(alien, toward, dt);
+	alien.x += alien.facing.X * speed * dt;
+	alien.z += alien.facing.Z * speed * dt;
+	// Its outer wing up, as far as the turn is tight.
+	const most = turn * dt;
+	const bank = most > 0 ? (angle / most) * MAX_BANK : 0;
+	alien.roll += (bank - alien.roll) * math.min(dt * BANK_RATE, 1);
+}
+
+/** Whether `point` is within `arc` degrees either way of where a turret resting at `mount` looks. Without an arc, it turns all the way round. */
+function inArc(mount: CFrame, point: Vector3, arc: number | undefined): boolean {
+	if (arc === undefined) return true;
+	const offset = mount.PointToObjectSpace(point);
+	return math.abs(math.deg(math.atan2(-offset.X, -offset.Z))) <= arc;
 }
 
 function flatDistance(a: Vector3, b: Vector3): number {
@@ -301,8 +625,8 @@ function livePlayers(): Array<[Vector3, Humanoid]> {
  * Runs the defend mission on the active planet: starts a fresh base for each
  * new map, launches the waves, lands the aliens in the drop zones (killing
  * anyone standing there), moves and fights them (walkers along a flowfield,
- * fliers straight for the Core), fires the turrets, and turns the result into a
- * conquest or a retreat. A liberated planet has no waves: the base just runs.
+ * fliers straight for the Core, aircraft in passes over it, every gun on its
+ * own, none standing in another), fires the turrets, and turns the result into a conquest or a retreat. A liberated planet has no waves: the base just runs.
  * It also owns `BaseState`, which it sends to everyone as it changes.
  */
 @Service()
@@ -336,6 +660,7 @@ export class WaveService implements OnStart {
 
 	private readonly aliens = new Map<Model, Alien>();
 	private projectiles = new Array<Projectile>();
+	private shotId = 0;
 	/** Aliens waiting to spawn: in the drop zones, or `at` a spot of their own. */
 	private pending = new Array<{ readonly kind: AlienKind; readonly at?: Vector3 }>();
 	private healthScale = 1;
@@ -346,6 +671,7 @@ export class WaveService implements OnStart {
 	private fieldAt = 0;
 	private spawnTimer = 0;
 	private lastCall = -math.huge;
+	private readonly lastPing = new Map<Player, number>();
 	private broadcastQueued = false;
 
 	constructor(
@@ -365,6 +691,8 @@ export class WaveService implements OnStart {
 			this.lastCall = os.clock();
 			this.launch();
 		});
+		baseMessaging.server.on(BaseMessage.Ping, (player) => this.ping(player));
+		Players.PlayerRemoving.Connect((player) => this.lastPing.delete(player));
 
 		subscribe(this.state, () => this.queueBroadcast());
 		listen(this.planetsService.currentMap, (map) => this.begin(map));
@@ -372,6 +700,14 @@ export class WaveService implements OnStart {
 			if (result !== undefined) this.finish(result);
 		});
 		RunService.Heartbeat.Connect((dt) => this.tick(dt));
+	}
+
+	/** A player pinged: everyone sees every alien for a while (see `PingController`). */
+	private ping(player: Player) {
+		const now = os.clock();
+		if (now - (this.lastPing.get(player) ?? -math.huge) < PING_DEBOUNCE) return;
+		this.lastPing.set(player, now);
+		baseMessaging.client.emitAll(BaseMessage.Pinged);
 	}
 
 	/** Launches the next wave now. False when no mission is running or every wave is out. */
@@ -551,11 +887,13 @@ export class WaveService implements OnStart {
 		const def = ALIENS[kind];
 		const maxHealth = math.round(def.health * this.healthScale);
 		const y = map.heightAt(x, z) + def.hover;
-		const facing = new Vector3(0, 0, -1);
-		// A CFrame looks along -Z: `facing`.
+		// Landing facing the Core, so it doesn't start by turning round.
+		const toCore = new Vector3(map.landing.X - x, 0, map.landing.Z - z);
+		const facing = toCore.Magnitude > 1e-3 ? toCore.Unit : new Vector3(0, 0, -1);
+		const at = new Vector3(x, y, z);
 		const [model, root] = alienModel(
 			kind,
-			def.air ? new CFrame(x, y, z) : groundFrame(map, x, z, def.hover, facing),
+			def.air ? CFrame.lookAt(at, at.add(facing)) : groundFrame(map, x, z, def.hover, facing),
 		);
 		model.SetAttribute("Kind", kind);
 		setHealth(model, maxHealth, maxHealth);
@@ -581,11 +919,16 @@ export class WaveService implements OnStart {
 			x,
 			z,
 			offset: new Vector3(random.NextNumber(-2.5, 2.5), 0, random.NextNumber(-2.5, 2.5)),
+			radius: footprint(kind, root.Size),
 			facing,
 			y,
 			pitch: 0,
+			roll: 0,
 			velocity: Vector3.zero,
 			cooldown: 0,
+			// Each on its own clock from the start, so they don't all fire at once.
+			weapons: (def.guns ?? []).map((gun) => ({ gun, cooldown: random.NextNumber(0, gun.rate) })),
+			mounts: alienTurrets(kind),
 			shield,
 			cargo: def.cargo ?? 0,
 		});
@@ -620,8 +963,8 @@ export class WaveService implements OnStart {
 
 	private moveAliens(map: PlanetMap, dt: number) {
 		const players = livePlayers();
-		const parts = new Array<BasePart>();
-		const cframes = new Array<CFrame>();
+		// Every alien still alive once it's moved, to be pushed apart and put where it's got to.
+		const moved = new Array<Alien>();
 
 		// Where carriers drop crawlers, landed once every alien has moved: none join the map mid-loop.
 		const drops = new Array<Vector3>();
@@ -633,16 +976,13 @@ export class WaveService implements OnStart {
 			if (alien.shield) recharge(alien.shield, dt);
 			const here = new Vector3(alien.x, alien.root.Position.Y, alien.z);
 			const from = new Vector3(alien.x, alien.y, alien.z);
-			// Something it is attacking: it stands still and faces it.
-			let look: Vector3 | undefined;
 
-			if (def.range !== undefined) {
-				if (alien.cooldown <= 0) {
-					alien.aim = this.shoot(alien, here, def.range, players);
-					alien.cooldown = alien.aim ? def.rate : 0.25;
-				}
-				look = alien.aim;
-			} else if (def.attack === "bomb") {
+			// Its guns fire on the move: its turrets turn to aim them, never its legs.
+			for (const weapon of alien.weapons) {
+				weapon.cooldown -= dt;
+				if (weapon.cooldown <= 0) this.trigger(alien, weapon, players);
+			}
+			if (def.attack === "bomb") {
 				if (alien.cooldown <= 0 && this.bomb(map, alien)) alien.cooldown = def.rate;
 			} else if (def.attack === "drop") {
 				if (alien.cooldown <= 0 && alien.cargo > 0) {
@@ -650,7 +990,7 @@ export class WaveService implements OnStart {
 					for (let i = 0; i < math.min(DROP_COUNT, alien.cargo); i++) drops.push(here);
 					alien.cargo = math.max(alien.cargo - DROP_COUNT, 0);
 				}
-			} else if (alien.cooldown <= 0) {
+			} else if (def.attack !== undefined && alien.cooldown <= 0) {
 				const victim = players.find(
 					([position]) => flatDistance(position, here) <= reach + 1 && math.abs(position.Y - here.Y) < 8,
 				);
@@ -664,18 +1004,19 @@ export class WaveService implements OnStart {
 				}
 			}
 
-			if (!look && def.air) {
+			if (def.aircraft) {
+				steer(map, alien, dt);
+			} else if (def.air) {
 				// Straight for the Core, over walls and all.
 				walk(alien, map.landing.add(alien.offset), dt);
-			} else if (!look) {
+			} else {
 				const cell = cellAt(alien.x, alien.z);
 				const step = cell === undefined ? -1 : this.field[cell];
 				const target = step >= 0 ? cellCenter(step) : map.landing;
-				const onStep = step >= 0 ? this.baseService.cells.get(step) : undefined;
-				const building = onStep && !BUILDINGS[onStep.kind].walkable ? onStep : undefined;
+				const building = this.solidAt(step);
 				if (building && flatDistance(target, here) <= CELL_STUDS / 2 + reach) {
-					// Its path runs through a building: chew through it, or blow it up.
-					look = target;
+					// Its path runs through a building: it stops to chew through it, or blow it up.
+					turnToward(alien, new Vector3(target.X - alien.x, 0, target.Z - alien.z), dt);
 					if (alien.cooldown <= 0 && def.attack === "explode") {
 						this.explode(alien);
 						continue;
@@ -685,23 +1026,103 @@ export class WaveService implements OnStart {
 						alien.cooldown = def.rate;
 					}
 				} else {
-					walk(alien, target.add(alien.offset), dt);
+					walk(alien, (building ? target : this.ahead(here, step, map)).add(alien.offset), dt);
 				}
 			}
 
-			const toward = look && new Vector3(look.X - alien.x, 0, look.Z - alien.z);
-			if (toward && toward.Magnitude > 0.05) alien.facing = toward.Unit;
 			if (def.air) fly(map, alien, from, dt);
 			alien.velocity = new Vector3(alien.x, alien.y, alien.z).sub(from).div(dt);
-			parts.push(alien.root);
-			cframes.push(bodyFrame(map, alien));
+			moved.push(alien);
 		}
 
-		Workspace.BulkMoveTo(parts, cframes, Enum.BulkMoveMode.FireCFrameChanged);
+		this.separate(moved, dt);
+		Workspace.BulkMoveTo(
+			moved.map((alien) => alien.root),
+			moved.map((alien) => bodyFrame(map, alien)),
+			Enum.BulkMoveMode.FireCFrameChanged,
+		);
 		for (const at of drops) {
 			if (this.aliens.size() >= MAX_ALIENS) break;
 			this.spawn(map, "crawler", at.X + random.NextNumber(-3, 3), at.Z + random.NextNumber(-3, 3));
 		}
+	}
+
+	/**
+	 * Pushes apart aliens standing in each other, each kept its `radius` clear across the ground, the
+	 * smaller giving way more: crowds spread out round what they're chewing on, and a flier only meets
+	 * those near its own height.
+	 * ponytail: checks every pair, cheap at `MAX_ALIENS`; bucket aliens by cell if the cap rises past a few hundred.
+	 */
+	private separate(aliens: ReadonlyArray<Alien>, dt: number) {
+		for (let i = 0; i < aliens.size(); i++) {
+			const a = aliens[i];
+			for (let j = i + 1; j < aliens.size(); j++) {
+				const b = aliens[j];
+				const apart = a.radius + b.radius;
+				const dx = b.x - a.x;
+				const dz = b.z - a.z;
+				if (math.abs(dx) >= apart || math.abs(dz) >= apart) continue;
+				if (math.abs(a.root.Position.Y - b.root.Position.Y) >= apart) continue;
+				const distance = math.sqrt(dx * dx + dz * dz);
+				if (distance >= apart) continue;
+				// Right on top of each other, any way apart will do.
+				const nx = distance > 1e-3 ? dx / distance : 1;
+				const nz = distance > 1e-3 ? dz / distance : 0;
+				const push = math.min(apart - distance, SHOVE_SPEED * dt);
+				// By area: a crawler gives way to a Titan, not the other way round.
+				const share = b.radius ** 2 / (a.radius ** 2 + b.radius ** 2);
+				this.shove(a, -nx * push * share, -nz * push * share);
+				this.shove(b, nx * push * (1 - share), nz * push * (1 - share));
+			}
+		}
+	}
+
+	/** Moves an alien by (dx, dz) where it can go (see `open`), or failing that along just one, so it slides along a building's side. */
+	private shove(alien: Alien, dx: number, dz: number) {
+		const x = alien.x + dx;
+		const z = alien.z + dz;
+		if (this.open(alien, x, z)) {
+			alien.x = x;
+			alien.z = z;
+		} else if (this.open(alien, x, alien.z)) {
+			alien.x = x;
+		} else if (this.open(alien, alien.x, z)) {
+			alien.z = z;
+		}
+	}
+
+	/** Whether an alien can be pushed to (x, z): a flier anywhere, a walker on the map and off any building it wasn't already on. */
+	private open(alien: Alien, x: number, z: number): boolean {
+		if (alien.def.air) return true;
+		const cell = cellAt(x, z);
+		return (
+			cell !== undefined && (!this.solidAt(cell) || this.solidAt(cellAt(alien.x, alien.z) ?? -1) !== undefined)
+		);
+	}
+
+	/** The building on `cell` that's in aliens' way, if any: anything but what they walk over. */
+	private solidAt(cell: number): Building | undefined {
+		const building = cell >= 0 ? this.baseService.cells.get(cell) : undefined;
+		return building && !BUILDINGS[building.kind].walkable ? building : undefined;
+	}
+
+	/**
+	 * Where a walker at `from` stepping onto `step` steers for: as far on down the flowfield as
+	 * `LOOKAHEAD` cells of open ground go, so it cuts across the path's corners, unless the way there
+	 * cuts through a building's. At the Core, the Core.
+	 */
+	private ahead(from: Vector3, step: number, map: PlanetMap): Vector3 {
+		if (step < 0) return map.landing;
+		let ahead = step;
+		for (let i = 1; i < LOOKAHEAD; i++) {
+			const after = this.field[ahead];
+			if (after < 0 || this.solidAt(after)) break;
+			ahead = after;
+		}
+		const there = cellCenter(ahead);
+		// ponytail: checks the halfway point only, which is where a corner gets cut with two cells' lookahead.
+		const halfway = cellAt((from.X + there.X) / 2, (from.Z + there.Z) / 2);
+		return halfway !== undefined && this.solidAt(halfway) ? cellCenter(step) : there;
 	}
 
 	/** A sapper blows up where it stands, hurting everything round it, and is gone. */
@@ -719,28 +1140,34 @@ export class WaveService implements OnStart {
 		for (const building of this.baseService.buildings) {
 			if (!reaches(building, ground, alien.def.splash ?? 0)) continue;
 			const from = alien.root.Position;
+			const { damage, splash = 0 } = alien.def;
 			// Straight down: the curve's bend is halfway.
-			this.lob("shell", from, from.add(ground).div(2), ground, alien.def, BOMB_SECONDS);
+			const control = from.add(ground).div(2);
+			this.loft({ kind: "shell", from, control, to: ground, damage, splash, hostile: true }, BOMB_SECONDS);
 			return true;
 		}
 		return false;
 	}
 
 	/**
-	 * An alien's shell, bomb or rocket, from `from` onto `to` along a curve bending toward `control`,
-	 * landing in `seconds` once clients have drawn it, and hurting the buildings and players round it.
+	 * Puts a shot in the air, to land in `seconds` (see `landProjectiles`), and has clients draw its
+	 * flight. The time starts now, so the server lands it about when clients see it come down.
 	 */
-	private lob(
-		kind: "shell" | "rocket",
-		from: Vector3,
-		control: Vector3,
-		to: Vector3,
-		def: AlienDef,
-		seconds: number,
-	) {
-		const splash = def.splash ?? 0;
-		this.projectiles.push({ to, lands: os.clock() + seconds, damage: def.damage, splash, hostile: true });
-		shotMessaging.client.emitAll(ShotMessage.Fired, { kind, from, control, to, seconds, splash });
+	private loft(shot: Omit<Projectile, "id" | "fired" | "lands">, seconds: number) {
+		const id = this.shotId++;
+		const fired = os.clock();
+		this.projectiles.push({ ...shot, id, fired, lands: fired + seconds });
+		const { kind, from, control, to, target, splash } = shot;
+		shotMessaging.client.emitAll(ShotMessage.Fired, {
+			id,
+			kind,
+			from,
+			control,
+			to,
+			target: target?.model,
+			seconds,
+			splash,
+		});
 	}
 
 	/** Hurts every building and player within `splash` studs of `at`: an alien's explosion, shell or bomb. */
@@ -754,72 +1181,131 @@ export class WaveService implements OnStart {
 	}
 
 	/**
-	 * A ranged alien's attack on the nearest player or building in range (a gunship's on the nearest
-	 * turret, if it has one in range): a shot that hits at once, or a mortar's shell or a gunship's
-	 * rockets, which land later. Returns what it aimed at, if anything.
+	 * A gun's turn: it fires (see `fire`), then waits its `rate`, or with nothing to shoot looks again
+	 * soon. When its aim moves enough to see, clients hear of it, to turn its turret after it (see
+	 * `AlienController`).
 	 */
-	private shoot(
-		alien: Alien,
-		here: Vector3,
-		range: number,
-		players: ReadonlyArray<[Vector3, Humanoid]>,
-	): Vector3 | undefined {
-		const { attack } = alien.def;
-		let best = range;
-		let aim: Vector3 | undefined;
-		let humanoid: Humanoid | undefined;
-		let building: Building | undefined;
-		// ponytail: scans every building per shot; bucket buildings by cell if bases grow to thousands.
-		if (attack === "rocket") {
-			for (const candidate of this.baseService.buildings) {
-				const distance = flatDistance(candidate.position, here);
-				if (distance >= best || !BUILDINGS[candidate.kind].turret) continue;
-				best = distance;
-				aim = candidate.position;
-			}
-		}
-		if (!aim) {
-			for (const [position, candidate] of players) {
-				const distance = flatDistance(position, here);
-				if (distance >= best) continue;
-				best = distance;
-				aim = position;
-				humanoid = candidate;
-			}
-			for (const candidate of this.baseService.buildings) {
-				const distance = flatDistance(candidate.position, here);
-				if (distance >= best) continue;
-				best = distance;
-				aim = candidate.position;
-				humanoid = undefined;
-				building = candidate;
-			}
-		}
-		if (!aim) return undefined;
+	private trigger(alien: Alien, weapon: Weapon, players: ReadonlyArray<[Vector3, Humanoid]>) {
+		const { gun } = weapon;
+		const at = this.fire(alien, gun, players);
+		weapon.cooldown = at ? gun.rate : RETARGET_SECONDS;
+		const moved = at && weapon.at ? at.sub(weapon.at).Magnitude > AIM_SLACK : at !== weapon.at;
+		if (!moved) return;
+		weapon.at = at;
+		if (gun.turret !== undefined) alien.model.SetAttribute(`Aim${gun.turret}`, at);
+	}
 
-		const from = alien.root.Position;
-		const distance = aim.sub(from).Magnitude;
-		if (attack === "shell") {
+	/**
+	 * Fires `gun` at the nearest thing it can reach (see `nearest`), out of its barrel: its turret's,
+	 * as though turned to face it, or the hull's middle. Point defence shoots a shot down instead (see
+	 * `intercept`). Returns where it aimed, if anywhere.
+	 */
+	private fire(alien: Alien, gun: Gun, players: ReadonlyArray<[Vector3, Humanoid]>): Vector3 | undefined {
+		const mounted = gun.turret !== undefined ? alien.mounts[gun.turret] : undefined;
+		const mount = mounted ? alien.root.CFrame.mul(mounted[0]) : alien.root.CFrame;
+		const barrel = (to: Vector3) =>
+			mounted ? mount.Position.add(to.sub(mount.Position).Unit.mul(mounted[1])) : alien.root.Position;
+		if (gun.kind === "intercept") return this.intercept(mount, gun, barrel);
+
+		// Buildings over players: a player only draws fire with no building in reach.
+		const mark =
+			(gun.prefers === "turrets" ? this.nearest(mount, gun, players, "turrets") : undefined) ??
+			this.nearest(mount, gun, players, "buildings") ??
+			this.nearest(mount, gun, players, "players");
+		if (!mark) return undefined;
+		const to = mark.at;
+		const from = barrel(to);
+		const distance = to.sub(from).Magnitude;
+		const { damage, splash = 0 } = gun;
+		if (gun.kind === "shell") {
 			const control = from
-				.add(aim)
+				.add(to)
 				.div(2)
 				.add(new Vector3(0, distance * 0.6, 0));
-			this.lob("shell", from, control, aim, alien.def, LAUNCH_SECONDS + distance / SHELL_SPEED);
-			return aim;
-		}
-		if (attack === "rocket") {
-			// A pair, each veering off to its own side before curving down.
-			for (const side of [-1, 1]) {
-				const veer = new Vector3(side * random.NextNumber(0.1, 0.35) * distance, distance * 0.2, 0);
-				const control = from.add(aim).div(2).add(veer);
-				this.lob("rocket", from, control, aim, alien.def, LAUNCH_SECONDS + distance / ROCKET_SPEED);
+			this.loft(
+				{ kind: "shell", from, control, to, damage, splash, hostile: true },
+				LAUNCH_SECONDS + distance / SHELL_SPEED,
+			);
+		} else if (gun.kind === "rocket") {
+			// Each veering off to a side, turn and turn about, before curving down.
+			const across = new Vector3(from.Z - to.Z, 0, to.X - from.X);
+			const side = across.Magnitude > 1e-3 ? across.Unit : Vector3.xAxis;
+			for (let i = 0; i < (gun.salvo ?? 2); i++) {
+				const veer = side
+					.mul((i % 2 === 0 ? -1 : 1) * random.NextNumber(0.1, 0.35) * distance)
+					.add(new Vector3(0, distance * 0.2, 0));
+				const control = from.add(to).div(2).add(veer);
+				this.loft(
+					{ kind: "rocket", from, control, to, damage, splash, hostile: true },
+					LAUNCH_SECONDS + distance / ROCKET_SPEED,
+				);
 			}
-			return aim;
+		} else {
+			shotMessaging.client.emitAll(ShotMessage.Hit, { from, to, size: gun.size ?? 1, hostile: true });
+			if (mark.humanoid) mark.humanoid.TakeDamage(damage);
+			else if (mark.building) this.baseService.damage(mark.building, damage);
 		}
-		tracer(from, aim, ENEMY_TRACER);
-		if (humanoid) humanoid.TakeDamage(alien.def.damage);
-		else if (building) this.baseService.damage(building, alien.def.damage);
-		return aim;
+		return to;
+	}
+
+	/**
+	 * The nearest of `among` (turrets, any building, or players) that `gun`, on a turret resting at
+	 * `mount`, can reach: within its range across the ground, and its arc.
+	 */
+	private nearest(
+		mount: CFrame,
+		gun: Gun,
+		players: ReadonlyArray<[Vector3, Humanoid]>,
+		among: "turrets" | "buildings" | "players",
+	): Mark | undefined {
+		const pivot = mount.Position;
+		let best = gun.range;
+		let mark: Mark | undefined;
+		if (among === "players") {
+			for (const [at, humanoid] of players) {
+				const distance = flatDistance(at, pivot);
+				if (distance >= best || !inArc(mount, at, gun.arc)) continue;
+				best = distance;
+				mark = { at, humanoid };
+			}
+			return mark;
+		}
+		// ponytail: scans every building per shot; bucket buildings by cell if bases grow to thousands.
+		for (const building of this.baseService.buildings) {
+			if (among === "turrets" && !BUILDINGS[building.kind].turret) continue;
+			const distance = flatDistance(building.position, pivot);
+			if (distance >= best || !inArc(mount, building.position, gun.arc)) continue;
+			best = distance;
+			mark = { at: building.position, building };
+		}
+		return mark;
+	}
+
+	/**
+	 * Point defence: shoots the nearest turret rocket or shell within `gun`'s range, and its arc, out of
+	 * the air, so it never lands, and has clients draw it go. Returns where it was, if there was one.
+	 */
+	private intercept(mount: CFrame, gun: Gun, barrel: (to: Vector3) => Vector3): Vector3 | undefined {
+		const pivot = mount.Position;
+		const now = os.clock();
+		let best = gun.range;
+		let downed: Projectile | undefined;
+		let at = pivot;
+		for (const shot of this.projectiles) {
+			// Flak flies at fliers, never near it.
+			if (shot.hostile || shot.kind === "flak") continue;
+			const t = math.clamp((now - shot.fired) / (shot.lands - shot.fired), 0, 1);
+			const position = bezier(shot.from, shot.control, shot.to, t);
+			const distance = position.sub(pivot).Magnitude;
+			if (distance >= best || !inArc(mount, position, gun.arc)) continue;
+			best = distance;
+			downed = shot;
+			at = position;
+		}
+		if (!downed) return undefined;
+		this.projectiles.remove(this.projectiles.indexOf(downed));
+		shotMessaging.client.emitAll(ShotMessage.Downed, { id: downed.id, from: barrel(at) });
+		return at;
 	}
 
 	/**
@@ -926,24 +1412,19 @@ export class WaveService implements OnStart {
 				.add(new Vector3(0, distance * 0.6, 0));
 			seconds = LAUNCH_SECONDS + distance / SHELL_SPEED;
 		}
-		const splash = gun.splash ?? 0;
-		this.projectiles.push({
-			to,
-			target: rocket ? target : undefined,
-			lands: os.clock() + seconds,
-			damage,
-			splash,
-			targets: gun.targets,
-		});
-		shotMessaging.client.emitAll(ShotMessage.Fired, {
-			kind: gun.projectile ?? "shell",
-			from,
-			control,
-			to,
-			target: rocket ? target.model : undefined,
+		this.loft(
+			{
+				kind: gun.projectile ?? "shell",
+				from,
+				control,
+				to,
+				target: rocket ? target : undefined,
+				damage,
+				splash: gun.splash ?? 0,
+				targets: gun.targets,
+			},
 			seconds,
-			splash,
-		});
+		);
 	}
 
 	/**

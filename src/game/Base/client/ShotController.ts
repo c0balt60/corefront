@@ -1,7 +1,7 @@
 import { Controller, OnStart } from "@flamework/core";
 import { Debris, RunService, TweenService, Workspace } from "@rbxts/services";
 
-import { type Shot, ShotMessage, shotMessaging } from "game/Base/shared/base-network";
+import { bezier, type Shot, ShotMessage, shotMessaging } from "game/Base/shared/base-network";
 
 /** Roblox's own particle textures, so nothing has to be uploaded. */
 const SMOKE = "rbxasset://textures/particles/smoke_main.dds";
@@ -20,6 +20,7 @@ const DIRT = Color3.fromRGB(96, 80, 62);
 const ROCKET = Color3.fromRGB(255, 150, 60);
 const SHELL = Color3.fromRGB(255, 220, 120);
 const TRACER = Color3.fromRGB(255, 200, 90);
+const ENEMY_TRACER = Color3.fromRGB(255, 70, 60);
 /** The splash a blast is drawn at its usual size for. Bigger and smaller ones scale with it. */
 const BLAST_SPLASH = 8;
 /** Seconds a landed shot's smoke trail is left to clear. */
@@ -34,11 +35,6 @@ interface Flight {
 	readonly fired: number;
 	/** Where it lands: its target's position, while that's still there. */
 	to: Vector3;
-}
-
-/** The point `t` of the way along a quadratic Bézier curve. */
-function bezier(from: Vector3, control: Vector3, to: Vector3, t: number): Vector3 {
-	return from.Lerp(control, t).Lerp(control.Lerp(to, t), t);
 }
 
 /** A NumberSequence through (time, value) points. */
@@ -66,8 +62,9 @@ function attachment(parent: Instance, position: Vector3): Attachment {
  * Draws turret and alien shots; the server deals their damage, so this is only the look. Rockets
  * and shells fly their curve (see `Shot`) for as long as the server says, chasing their target if
  * they have one, trailing flame and smoke, then blow up. Hitscan shots are a fading streak, a flash
- * out of the barrel and sparks off what they hit; the Cannon's also blasts. Flak bursts in a dark
- * puff in the air. A sapper just blasts.
+ * out of the barrel and sparks off what they hit, red for an alien's; the Cannon's also blasts.
+ * Flak bursts in a dark puff in the air. A sapper just blasts. A shot that point defence downs pops
+ * where it is, struck by a red streak.
  */
 @Controller()
 export class ShotController implements OnStart {
@@ -119,8 +116,9 @@ export class ShotController implements OnStart {
 		this.muzzle.Parent = Workspace.Terrain;
 		this.impact.Parent = Workspace.Terrain;
 		shotMessaging.client.on(ShotMessage.Fired, (shot) => this.launch(shot));
-		shotMessaging.client.on(ShotMessage.Hit, ({ from, to, size }) => this.hit(from, to, size));
+		shotMessaging.client.on(ShotMessage.Hit, ({ from, to, size, hostile }) => this.hit(from, to, size, hostile));
 		shotMessaging.client.on(ShotMessage.Blast, ({ at, splash }) => this.blast(at, splash, true));
+		shotMessaging.client.on(ShotMessage.Downed, ({ id, from }) => this.down(id, from));
 		RunService.RenderStepped.Connect(() => this.render());
 	}
 
@@ -232,11 +230,11 @@ export class ShotController implements OnStart {
 	}
 
 	/** A hitscan shot: a streak that fades, a flash out of the barrel, sparks back off what it hit. The Cannon's (`size` 2) also blasts. */
-	private hit(from: Vector3, to: Vector3, size: number) {
+	private hit(from: Vector3, to: Vector3, size: number, hostile?: boolean) {
 		const length = to.sub(from).Magnitude;
 		if (length < 0.1) return;
 		const width = 0.18 * size;
-		const streak = this.spark(new Vector3(width, width, length), TRACER, from);
+		const streak = this.spark(new Vector3(width, width, length), hostile ? ENEMY_TRACER : TRACER, from);
 		streak.CFrame = CFrame.lookAt(from, to).mul(new CFrame(0, 0, -length / 2));
 		const fade = 0.1 * size;
 		TweenService.Create(streak, new TweenInfo(fade), {
@@ -255,6 +253,24 @@ export class ShotController implements OnStart {
 		}
 	}
 
+	/** The shot `id`, shot down by point defence from `from`: struck where it is now, it pops in a puff, short of where it was going. */
+	private down(id: number, from: Vector3) {
+		const flight = this.flights.find((each) => each.shot.id === id);
+		if (!flight) return;
+		this.flights.remove(this.flights.indexOf(flight));
+		const at = flight.part.Position;
+		this.hit(from, at, 1, true);
+		this.puff(at, 3);
+		this.vanish(flight.part);
+	}
+
+	/** Hides a landed or downed shot. Its smoke stays hanging a while after it's gone. */
+	private vanish(part: Part) {
+		part.Transparency = 1;
+		for (const child of part.GetDescendants()) if (child.IsA("ParticleEmitter")) child.Enabled = false;
+		Debris.AddItem(part, TRAIL_SECONDS);
+	}
+
 	private render() {
 		const now = os.clock();
 		this.flights = this.flights.filter((flight) => {
@@ -262,10 +278,7 @@ export class ShotController implements OnStart {
 			if (shot.target?.Parent) flight.to = shot.target.GetPivot().Position;
 			const t = (now - flight.fired) / shot.seconds;
 			if (t >= 1) {
-				// Its smoke stays hanging a while after it's gone.
-				part.Transparency = 1;
-				for (const child of part.GetDescendants()) if (child.IsA("ParticleEmitter")) child.Enabled = false;
-				Debris.AddItem(part, TRAIL_SECONDS);
+				this.vanish(part);
 				if (shot.kind === "flak") this.puff(flight.to, shot.splash);
 				else this.blast(flight.to, shot.splash, shot.kind === "shell");
 				return false;
