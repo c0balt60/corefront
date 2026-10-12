@@ -4,6 +4,7 @@ import Vide, { cleanup, Index, Show, source } from "@rbxts/vide";
 import { Button } from "core/Interface/client/components/button";
 import { COLORS, FONT_DISPLAY } from "core/Interface/client/theme";
 import { HudBox, Label, Swatch } from "game/Base/client/components/base-hud";
+import { InfoButton } from "game/Base/client/components/turret-info";
 import { BUILDINGS, type BuildingKind, MACHINE_SECONDS } from "game/Base/shared/buildings";
 import { RESOURCE_ORDER, RESOURCES, type ResourceId, type ResourceStack } from "game/Base/shared/resources";
 import { CELL_STUDS } from "game/Terrain/shared/map";
@@ -11,8 +12,9 @@ import { CELL_STUDS } from "game/Terrain/shared/map";
 const WIDTH = 260;
 const ROW = 18;
 const SWATCH = 24;
-/** Between swatches: all nine ores fit across the panel. */
+/** Between swatches. A row fits this many; an ore picker wraps onto more rows. */
 const GAP = 2;
+const PER_ROW = 9;
 /** The title's height, and HudBox's padding top and bottom. */
 const CHROME = 20 + 18;
 const BUTTONS = 36;
@@ -35,11 +37,13 @@ interface BuildingPanelProps {
 	readonly near: () => boolean;
 	readonly onCollect: () => void;
 	readonly onLoad: () => void;
-	/** Sorters and sources: the ore to let through or hand out now, or undefined for none. */
+	/** Sorters, sources and unloaders: the ore to let through, hand out or take now, or undefined for none (any, for an unloader). */
 	readonly onPick: (resource: ResourceId | undefined) => void;
 	/** Belts: the ore on it, and taking all of one ore off it. */
 	readonly ore: () => ReadonlyArray<ResourceId>;
 	readonly onTake: (resource: ResourceId) => void;
+	/** Turrets: opens the info page (see `TurretInfo`). */
+	readonly onInfo: () => void;
 }
 
 interface OreButtonProps {
@@ -84,9 +88,11 @@ function OreButton({ resource, text = () => "", picked = () => false, layoutOrde
  * or over a belt, which lies flat: its name, health and what it holds or does, and buttons to move
  * items in or out, greyed out until the local player is close enough. A Sorter's has a swatch for
  * every ore, the one it lets through outlined: clicking one lets that ore through instead, and
- * clicking the outlined one lets nothing through. A Source's picks the ore it hands out the same way. A belt's has a swatch for each ore on it, with
- * its count: clicking one takes all of that ore. It has to live in PlayerGui, not on the
- * building, to take clicks.
+ * clicking the outlined one lets nothing through. A Source's picks the ore it hands out, and an
+ * Unloader's the ore it takes, the same way. A belt's has a swatch for each ore on it, with its
+ * count: clicking one takes all of that ore. Storage lists what it holds; what's on the power
+ * network shows its power. A turret's has a ? button in its corner, which opens its info page. It
+ * has to live in PlayerGui, not on the building, to take clicks.
  */
 export function BuildingPanel({
 	building,
@@ -98,6 +104,7 @@ export function BuildingPanel({
 	onPick,
 	ore,
 	onTake,
+	onInfo,
 }: BuildingPanelProps) {
 	const kind = building.GetAttribute("Kind") as BuildingKind;
 	const def = BUILDINGS[kind];
@@ -152,8 +159,46 @@ export function BuildingPanel({
 			list.push({ label: "OUTPUT", value: output !== undefined ? RESOURCES[output].name.upper() : "NONE" });
 		}
 		if (def.turret) {
-			list.push({ label: "AMMO", value: `${read("Ammo")} / ${def.turret.magazine}` });
+			if (!def.turret.energy) {
+				list.push({ label: "AMMO", value: `${read("Ammo")} / ${def.turret.maxAmmo}` });
+				// No swatch: rows keep theirs from when they're made, and this one's ore comes and goes.
+				const firing = attributes().get("AmmoType") as ResourceId | undefined;
+				list.push({ label: "FIRING", value: firing !== undefined ? RESOURCES[firing].name.upper() : "NONE" });
+			}
 			list.push({ label: "TARGETS", value: def.turret.targets?.upper() ?? "AIR + GROUND" });
+		}
+		if (def.power !== undefined) {
+			list.push({ label: "POWER", value: `${math.round(read("Power") * 100)}%` });
+			list.push({ label: "USES", value: `${def.power} / s` });
+		}
+		const generator = def.generator;
+		if (generator) {
+			list.push({ label: "OUTPUT", value: `${read("PowerOut")} / s` });
+			for (const resource of RESOURCE_ORDER) {
+				if (generator.fuel?.[resource] === undefined) continue;
+				const fuel = `${read(`Input_${resource}`)} / ${generator.storage ?? 0}`;
+				list.push({ label: RESOURCES[resource].name.upper(), value: fuel, resource });
+			}
+		}
+		if (def.battery !== undefined) list.push({ label: "CHARGE", value: `${read("Charge")} / ${def.battery}` });
+		if (def.node !== undefined) {
+			list.push(
+				{ label: "LINKS", value: `${read("Links")} / ${def.node}` },
+				{ label: "MAKING", value: `${read("Produced")} / s` },
+				{ label: "USING", value: `${read("Demand")} / s` },
+				{ label: "STORED", value: tostring(read("Stored")) },
+			);
+		}
+		if (kind === "unloader") {
+			const picked = filter();
+			list.push({ label: "TAKES", value: picked !== undefined ? RESOURCES[picked].name.upper() : "ANY" });
+		}
+		if (def.store !== undefined) {
+			list.push({ label: "HOLDS", value: `${def.store} OF EACH` });
+			for (const resource of RESOURCE_ORDER) {
+				const held = read(`Input_${resource}`);
+				if (held > 0) list.push({ label: RESOURCES[resource].name.upper(), value: tostring(held), resource });
+			}
 		}
 		if (def.repair !== undefined) list.push({ label: "REPAIRS", value: `${def.repair} / ${MACHINE_SECONDS}s` });
 		if (def.range !== undefined) list.push({ label: "RANGE", value: `${def.range}` });
@@ -167,7 +212,9 @@ export function BuildingPanel({
 
 	const actions = new Array<[text: string, onClick: () => void]>();
 	if (kind === "core") actions.push(["DEPOSIT ALL", onLoad]);
-	if (def.turret) actions.push(["LOAD AMMO", onLoad]);
+	if (def.turret && !def.turret.energy) actions.push(["LOAD AMMO", onLoad]);
+	if (def.generator?.fuel) actions.push(["LOAD FUEL", onLoad]);
+	if (def.store !== undefined) actions.push(["STORE ALL", onLoad]);
 	if (def.craft) {
 		const { inputs } = def.craft;
 		actions.push([
@@ -175,11 +222,12 @@ export function BuildingPanel({
 			onLoad,
 		]);
 	}
-	if (def.drill || def.craft || belt) actions.push(["COLLECT ALL", onCollect]);
-	// Sorters and sources pick an ore.
-	const sorter = kind === "sorter" || kind === "source";
-	// Below the rows: the swatches, then the buttons.
-	const extra = (sorter || belt ? SWATCH + 8 : 0) + (actions.isEmpty() ? 0 : BUTTONS);
+	if (def.drill || def.craft || belt || def.store !== undefined) actions.push(["COLLECT ALL", onCollect]);
+	// Sorters, sources and unloaders pick an ore.
+	const sorter = kind === "sorter" || kind === "source" || kind === "unloader";
+	// Below the rows: the swatches (a belt's in one row), then the buttons.
+	const swatches = sorter ? math.ceil(RESOURCE_ORDER.size() / PER_ROW) * (SWATCH + GAP) + 6 : belt ? SWATCH + 8 : 0;
+	const extra = swatches + (actions.isEmpty() ? 0 : BUTTONS);
 	// What's on a belt, as counts.
 	const onBelt = () => {
 		const carried = ore();
@@ -216,6 +264,7 @@ export function BuildingPanel({
 					text={def.name.upper()}
 					textSize={14}
 				/>
+				{def.turret ? <InfoButton position={UDim2.fromScale(1, 0)} onClick={onInfo} /> : undefined}
 				<frame BackgroundTransparency={1} Position={UDim2.fromOffset(0, 20)} Size={new UDim2(1, 0, 1, -20)}>
 					<uilistlayout SortOrder={Enum.SortOrder.LayoutOrder} />
 					<Index each={rows}>
@@ -247,13 +296,21 @@ export function BuildingPanel({
 						}}
 					</Index>
 					{sorter || belt ? (
-						<frame BackgroundTransparency={1} LayoutOrder={100} Size={new UDim2(1, 0, 0, SWATCH + 8)}>
+						<frame BackgroundTransparency={1} LayoutOrder={100} Size={new UDim2(1, 0, 0, swatches)}>
 							<uipadding PaddingTop={new UDim(0, 4)} />
-							<uilistlayout
-								FillDirection={Enum.FillDirection.Horizontal}
-								Padding={new UDim(0, GAP)}
-								SortOrder={Enum.SortOrder.LayoutOrder}
-							/>
+							{sorter ? (
+								<uigridlayout
+									CellPadding={UDim2.fromOffset(GAP, GAP)}
+									CellSize={UDim2.fromOffset(SWATCH, SWATCH)}
+									SortOrder={Enum.SortOrder.LayoutOrder}
+								/>
+							) : (
+								<uilistlayout
+									FillDirection={Enum.FillDirection.Horizontal}
+									Padding={new UDim(0, GAP)}
+									SortOrder={Enum.SortOrder.LayoutOrder}
+								/>
+							)}
 							{sorter
 								? RESOURCE_ORDER.map((resource, index) => (
 										<OreButton

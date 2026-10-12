@@ -11,6 +11,7 @@ import {
 	buildModeAtom,
 	coreAttackedAtom,
 	equippedAtom,
+	infoAtom,
 	inventoryAtom,
 	nearSelectedAtom,
 	noticesAtom,
@@ -31,6 +32,7 @@ import {
 import { BuildBar } from "game/Base/client/components/build-bar";
 import { BuildingPanel } from "game/Base/client/components/building-panel";
 import { Hotbar } from "game/Base/client/components/hotbar";
+import { TurretInfo } from "game/Base/client/components/turret-info";
 import { cellOf } from "game/Base/client/InteractController";
 import {
 	BaseMessage,
@@ -40,7 +42,7 @@ import {
 	SandboxMessage,
 	sandboxMessaging,
 } from "game/Base/shared/base-network";
-import { BUILD_TOOL, BUILDABLE } from "game/Base/shared/buildings";
+import { BUILD_TOOL, type BuildableKind, BUILDABLE } from "game/Base/shared/buildings";
 import { LoadoutPanel, PlanPanel, TravelOverlay } from "game/Planets/client/components/launch-panel";
 import { PlanetPanel } from "game/Planets/client/components/planet-panel";
 import { ControlsHint, StarMap } from "game/Planets/client/components/star-map";
@@ -91,6 +93,7 @@ export function GameApp() {
 	const levels = useAtom(levelsAtom);
 	const discovered = useAtom(discoveredAtom);
 	const researchOpen = useAtom(researchOpenAtom);
+	const info = useAtom(infoAtom);
 
 	// The team between planets, for the local player once they're down there.
 	const travel = () => (deployed() ? world()?.travel : undefined);
@@ -284,6 +287,7 @@ export function GameApp() {
 								held={() => inventory().items}
 								mode={buildMode}
 								onSelect={toggleBuildMode}
+								onInfo={(kind) => infoAtom(kind)}
 								show={show}
 							/>,
 							EXIT_TIME,
@@ -317,6 +321,11 @@ export function GameApp() {
 							/>,
 							EXIT_TIME,
 						)
+					}
+				</Show>
+				<Show when={() => (mission() !== undefined ? info() : undefined)}>
+					{(kind, show) =>
+						$tuple(<TurretInfo kind={kind()} onClose={() => infoAtom(undefined)} show={show} />, EXIT_TIME)
 					}
 				</Show>
 			</screengui>
@@ -392,6 +401,7 @@ export function GameApp() {
 						onTake={(resource) =>
 							baseMessaging.server.emit(BaseMessage.Collect, { ...cellOf(building), resource })
 						}
+						onInfo={() => infoAtom(building.GetAttribute("Kind") as BuildableKind)}
 					/>
 				)}
 			</For>

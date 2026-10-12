@@ -4,8 +4,8 @@ import { RunService } from "@rbxts/services";
 import { BaseService, type Building, type Item } from "game/Base/server/BaseService";
 import { BeltMessage, beltMessaging, type HeldItem, type ItemMove } from "game/Base/shared/base-network";
 import { BELT_SPACING } from "game/Base/shared/belts";
-import { BUILDINGS, isBelt } from "game/Base/shared/buildings";
-import type { ResourceId } from "game/Base/shared/resources";
+import { BUILDINGS, isBelt, isStorage } from "game/Base/shared/buildings";
+import { RESOURCE_ORDER, type ResourceId } from "game/Base/shared/resources";
 
 /** Seconds between ticks. Clients run the belts in between, so ore glides. */
 const TICK = 0.1;
@@ -40,9 +40,10 @@ function sideSlot(items: ReadonlyArray<Item>): number | undefined {
 
 /**
  * Moves ore between buildings, Mindustry-style: drills, crafters and sources hand what they make to their
- * neighbours, belts carry it the way they face, routers pass it round, sorters split it and
- * junctions let it cross, until something takes it in for good (see `BaseService.receive`): the
- * Core, a turret's ammo or a crafter's inputs. Clients hear every move and animate it.
+ * neighbours, unloaders take it out of storage and the Core, belts carry it the way they face,
+ * routers pass it round, sorters split it and junctions let it cross, until something takes it in
+ * for good (see `BaseService.receive`): the Core, storage, a turret's ammo, a crafter's inputs or a
+ * generator's fuel. Clients hear every move and animate it.
  */
 @Service()
 export class LogisticsService implements OnStart {
@@ -74,6 +75,7 @@ export class LogisticsService implements OnStart {
 		for (const building of this.baseService.buildings) {
 			if (isBelt(building.kind)) this.carry(building);
 			else if (building.kind === "router") this.route(building);
+			else if (building.kind === "unloader") this.unload(building);
 			else if (building.kind === "source") {
 				if (building.filter !== undefined) this.offload(building, building.filter);
 			} else if (building.resource !== undefined && building.stored > 0)
@@ -127,6 +129,35 @@ export class LogisticsService implements OnStart {
 			}
 			source.turn = index + 1;
 			return;
+		}
+	}
+
+	/**
+	 * Takes one ore out of the next storage building (or the Core) round an unloader that has
+	 * anything to give, and hands it to the first of its other neighbours that takes it: its picked
+	 * ore, or with none picked, the one it has most of that something takes.
+	 */
+	private unload(unloader: Building) {
+		const around = this.baseService.around(unloader);
+		for (let i = 0; i < around.size(); i++) {
+			const index = (unloader.turn + i) % around.size();
+			const [store] = around[index];
+			if (!isStorage(store.kind)) continue;
+			const stock = this.baseService.stock(store);
+			const has = (resource: ResourceId) => (stock[resource] ?? 0) > 0;
+			const wanted =
+				unloader.filter !== undefined
+					? [unloader.filter].filter(has)
+					: RESOURCE_ORDER.filter(has).sort((a, b) => stock[a]! > stock[b]!);
+			for (const resource of wanted) {
+				for (const [onward, side] of around) {
+					if (isStorage(onward.kind) || !this.offer(onward, resource, unloader, side, unloader.cell))
+						continue;
+					this.baseService.release(store, resource);
+					unloader.turn = index + 1;
+					return;
+				}
+			}
 		}
 	}
 

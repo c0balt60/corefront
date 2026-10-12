@@ -44,6 +44,27 @@ export type GlyphId =
 	| "cannon"
 	| "swarmer"
 	| "ripple"
+	| "hail"
+	| "scorch"
+	| "fuse"
+	| "salvo"
+	| "reaper"
+	| "harbinger"
+	| "container"
+	| "vault"
+	| "unloader"
+	| "kiln"
+	| "pulverizer"
+	| "pyratiteMixer"
+	| "combustionGenerator"
+	| "solarPanel"
+	| "rtgGenerator"
+	| "battery"
+	| "largeBattery"
+	| "powerNode"
+	| "largePowerNode"
+	| "arc"
+	| "meltdown"
 	| "crosshair"
 	| "warning";
 
@@ -102,6 +123,12 @@ export type ResearchId =
 	| "swarmer"
 	| "cannon"
 	| "ripple"
+	| "hail"
+	| "scorch"
+	| "fuse"
+	| "salvo"
+	| "reaper"
+	| "harbinger"
 	| "drillBits"
 	| "advancedDrill"
 	| "laserDrill"
@@ -110,7 +137,22 @@ export type ResearchId =
 	| "router"
 	| "sorter"
 	| "junction"
-	| "titaniumConveyor";
+	| "titaniumConveyor"
+	| "container"
+	| "vault"
+	| "unloader"
+	| "kiln"
+	| "pulverizer"
+	| "pyratiteMixer"
+	| "combustionGenerator"
+	| "solarPanel"
+	| "rtgGenerator"
+	| "battery"
+	| "largeBattery"
+	| "powerNode"
+	| "largePowerNode"
+	| "arc"
+	| "meltdown";
 
 export interface ResearchNode {
 	readonly name: string;
@@ -248,9 +290,9 @@ export const RESEARCH: Record<ResearchId, ResearchNode> = {
 	},
 	mender: {
 		name: "Mender",
-		description: "Build menders, which repair buildings around them.",
+		description: "Build menders, which repair buildings around them. They need power.",
 		glyph: "mender",
-		requires: ["plating"],
+		requires: ["plating", "powerNode"],
 		cost: [
 			{ resource: "copper", amount: 20 },
 			{ resource: "lead", amount: 40 },
@@ -360,6 +402,87 @@ export const RESEARCH: Record<ResearchId, ResearchNode> = {
 		discover: "silicon",
 		conquered: 2,
 	},
+	scorch: {
+		name: "Scorch",
+		description: "Build scorches: flamethrowers that burn coal to melt ground aliens up close.",
+		glyph: "scorch",
+		requires: ["turret"],
+		cost: [
+			{ resource: "copper", amount: 40 },
+			{ resource: "graphite", amount: 25 },
+		],
+		unlocks: "scorch",
+		discover: "coal",
+	},
+	hail: {
+		name: "Hail",
+		description: "Build hails: small artillery that shells ground aliens from far back.",
+		glyph: "hail",
+		requires: ["turret"],
+		cost: [
+			{ resource: "copper", amount: 50 },
+			{ resource: "graphite", amount: 25 },
+		],
+		unlocks: "hail",
+		discover: "graphite",
+	},
+	fuse: {
+		name: "Fuse",
+		description: "Build fuses: short-range shotguns whose shards tear through crowds.",
+		glyph: "fuse",
+		requires: ["autoTurret"],
+		cost: [
+			{ resource: "copper", amount: 100 },
+			{ resource: "lead", amount: 50 },
+			{ resource: "graphite", amount: 50 },
+		],
+		unlocks: "fuse",
+		conquered: 1,
+	},
+	salvo: {
+		name: "Salvo",
+		description: "Build salvos, which fire bursts of heavy rounds at fliers and the ground.",
+		glyph: "salvo",
+		requires: ["autoTurret"],
+		cost: [
+			{ resource: "copper", amount: 120 },
+			{ resource: "graphite", amount: 60 },
+			{ resource: "titanium", amount: 40 },
+		],
+		unlocks: "salvo",
+		discover: "titanium",
+		conquered: 1,
+	},
+	reaper: {
+		name: "Reaper",
+		description: "Build reapers: huge twin guns that hammer out heavy rounds at a frightening rate.",
+		glyph: "reaper",
+		requires: ["salvo"],
+		cost: [
+			{ resource: "copper", amount: 300 },
+			{ resource: "graphite", amount: 150 },
+			{ resource: "silicon", amount: 120 },
+			{ resource: "thorium", amount: 80 },
+		],
+		unlocks: "reaper",
+		discover: "thorium",
+		conquered: 3,
+	},
+	harbinger: {
+		name: "Harbinger",
+		description: "Build harbingers: rail cannons that snipe the toughest alien from across the map.",
+		glyph: "harbinger",
+		requires: ["ripple"],
+		cost: [
+			{ resource: "copper", amount: 400 },
+			{ resource: "titanium", amount: 200 },
+			{ resource: "silicon", amount: 150 },
+			{ resource: "thorium", amount: 150 },
+		],
+		unlocks: "harbinger",
+		discover: "thorium",
+		conquered: 3,
+	},
 	drillBits: {
 		name: "Drill Bits",
 		description: "Drills you place mine more each tick.",
@@ -389,7 +512,7 @@ export const RESEARCH: Record<ResearchId, ResearchNode> = {
 		name: "Laser Drill",
 		description: "Build laser drills: 2×2, mining fast from every cell of ore under them.",
 		glyph: "laserDrill",
-		requires: ["advancedDrill"],
+		requires: ["advancedDrill", "powerNode"],
 		cost: [
 			{ resource: "copper", amount: 80 },
 			{ resource: "graphite", amount: 40 },
@@ -412,9 +535,9 @@ export const RESEARCH: Record<ResearchId, ResearchNode> = {
 	},
 	siliconSmelter: {
 		name: "Silicon Smelter",
-		description: "Build silicon smelters, which smelt sand, coal and lead into silicon.",
+		description: "Build silicon smelters, which smelt sand, coal and lead into silicon. They need power.",
 		glyph: "siliconSmelter",
-		requires: ["graphitePress"],
+		requires: ["graphitePress", "powerNode"],
 		cost: [
 			{ resource: "copper", amount: 60 },
 			{ resource: "lead", amount: 40 },
@@ -466,6 +589,192 @@ export const RESEARCH: Record<ResearchId, ResearchNode> = {
 		unlocks: "titaniumConveyor",
 		discover: "titanium",
 	},
+	container: {
+		name: "Container",
+		description: "Build containers, which store ore off the belts until Unloaders take it out.",
+		glyph: "container",
+		requires: ["router"],
+		cost: [
+			{ resource: "copper", amount: 40 },
+			{ resource: "lead", amount: 40 },
+		],
+		unlocks: "container",
+	},
+	vault: {
+		name: "Vault",
+		description: "Build vaults: huge storage for ore.",
+		glyph: "vault",
+		requires: ["container"],
+		cost: [
+			{ resource: "titanium", amount: 120 },
+			{ resource: "thorium", amount: 60 },
+		],
+		unlocks: "vault",
+		discover: "thorium",
+	},
+	unloader: {
+		name: "Unloader",
+		description: "Build unloaders, which take ore out of storage or the Core for the buildings beside them.",
+		glyph: "unloader",
+		requires: ["container"],
+		cost: [
+			{ resource: "copper", amount: 30 },
+			{ resource: "graphite", amount: 20 },
+		],
+		unlocks: "unloader",
+		discover: "graphite",
+	},
+	kiln: {
+		name: "Kiln",
+		description: "Build kilns, which fire lead and sand into metaglass. They need power.",
+		glyph: "kiln",
+		requires: ["graphitePress", "powerNode"],
+		cost: [
+			{ resource: "copper", amount: 60 },
+			{ resource: "lead", amount: 30 },
+			{ resource: "graphite", amount: 30 },
+		],
+		unlocks: "kiln",
+		discover: "sand",
+	},
+	pulverizer: {
+		name: "Pulverizer",
+		description: "Build pulverizers, which grind scrap into sand. They need power.",
+		glyph: "pulverizer",
+		requires: ["graphitePress", "powerNode"],
+		cost: [
+			{ resource: "copper", amount: 30 },
+			{ resource: "lead", amount: 25 },
+		],
+		unlocks: "pulverizer",
+		discover: "scrap",
+	},
+	pyratiteMixer: {
+		name: "Pyratite Mixer",
+		description: "Build pyratite mixers, which mix coal, lead and sand into pyratite. They need power.",
+		glyph: "pyratiteMixer",
+		requires: ["siliconSmelter"],
+		cost: [
+			{ resource: "copper", amount: 50 },
+			{ resource: "lead", amount: 30 },
+		],
+		unlocks: "pyratiteMixer",
+		discover: "sand",
+	},
+	combustionGenerator: {
+		name: "Combustion Generator",
+		description: "Build combustion generators, which burn coal or pyratite for power.",
+		glyph: "combustionGenerator",
+		side: "up",
+		requires: [],
+		cost: [
+			{ resource: "copper", amount: 30 },
+			{ resource: "lead", amount: 20 },
+		],
+		unlocks: "combustionGenerator",
+		discover: "coal",
+	},
+	powerNode: {
+		name: "Power Node",
+		description: "Build power nodes, which carry power from generators to what needs it.",
+		glyph: "powerNode",
+		requires: ["combustionGenerator"],
+		cost: [
+			{ resource: "copper", amount: 15 },
+			{ resource: "lead", amount: 20 },
+		],
+		unlocks: "powerNode",
+	},
+	solarPanel: {
+		name: "Solar Panel",
+		description: "Build solar panels: a trickle of power with no fuel.",
+		glyph: "solarPanel",
+		requires: ["powerNode"],
+		cost: [
+			{ resource: "copper", amount: 20 },
+			{ resource: "lead", amount: 20 },
+		],
+		unlocks: "solarPanel",
+	},
+	battery: {
+		name: "Battery",
+		description: "Build batteries, which store spare power for when it's needed.",
+		glyph: "battery",
+		requires: ["powerNode"],
+		cost: [
+			{ resource: "copper", amount: 15 },
+			{ resource: "lead", amount: 40 },
+		],
+		unlocks: "battery",
+	},
+	largeBattery: {
+		name: "Large Battery",
+		description: "Build large batteries, which store a great deal of power.",
+		glyph: "largeBattery",
+		requires: ["battery"],
+		cost: [
+			{ resource: "lead", amount: 60 },
+			{ resource: "titanium", amount: 30 },
+			{ resource: "silicon", amount: 30 },
+		],
+		unlocks: "largeBattery",
+		discover: "titanium",
+	},
+	largePowerNode: {
+		name: "Large Node",
+		description: "Build large nodes, which carry power much further.",
+		glyph: "largePowerNode",
+		requires: ["powerNode"],
+		cost: [
+			{ resource: "lead", amount: 40 },
+			{ resource: "titanium", amount: 20 },
+			{ resource: "silicon", amount: 15 },
+		],
+		unlocks: "largePowerNode",
+		discover: "titanium",
+	},
+	rtgGenerator: {
+		name: "RTG Generator",
+		description: "Build RTG generators, which slowly decay thorium for a great deal of power.",
+		glyph: "rtgGenerator",
+		requires: ["combustionGenerator"],
+		cost: [
+			{ resource: "lead", amount: 120 },
+			{ resource: "silicon", amount: 80 },
+			{ resource: "thorium", amount: 60 },
+		],
+		unlocks: "rtgGenerator",
+		discover: "thorium",
+		conquered: 2,
+	},
+	arc: {
+		name: "Arc",
+		description: "Build arcs: tesla coils that run on power, their lightning leaping between ground aliens.",
+		glyph: "arc",
+		requires: ["turret", "powerNode"],
+		cost: [
+			{ resource: "copper", amount: 50 },
+			{ resource: "lead", amount: 50 },
+		],
+		unlocks: "arc",
+	},
+	meltdown: {
+		name: "Meltdown",
+		description:
+			"Build meltdowns: colossal lasers that melt every alien along their beam. They need a lot of power.",
+		glyph: "meltdown",
+		requires: ["arc"],
+		cost: [
+			{ resource: "copper", amount: 500 },
+			{ resource: "lead", amount: 300 },
+			{ resource: "silicon", amount: 250 },
+			{ resource: "metaglass", amount: 80 },
+			{ resource: "thorium", amount: 150 },
+		],
+		unlocks: "meltdown",
+		discover: "thorium",
+		conquered: 3,
+	},
 };
 
 /** Every node, in the order the tree lays out siblings left to right, roots on each side of the Core likewise. */
@@ -481,22 +790,43 @@ export const RESEARCH_ORDER: ReadonlyArray<ResearchId> = [
 	"laserDrill",
 	"graphitePress",
 	"siliconSmelter",
+	"pyratiteMixer",
+	"kiln",
+	"pulverizer",
 	"router",
 	"sorter",
 	"junction",
 	"titaniumConveyor",
+	"container",
+	"vault",
+	"unloader",
+	"combustionGenerator",
+	"powerNode",
+	"solarPanel",
+	"battery",
+	"largeBattery",
+	"largePowerNode",
+	"rtgGenerator",
 	"wall",
 	"plating",
 	"mender",
 	"titaniumWall",
 	"turret",
 	"hardenedRounds",
+	"scorch",
+	"arc",
+	"meltdown",
+	"hail",
 	"autoTurret",
+	"fuse",
+	"salvo",
+	"reaper",
 	"swarmer",
 	"scatter",
 	"vulcan",
 	"cannon",
 	"ripple",
+	"harbinger",
 ];
 
 // A node missing from the order would never be drawn, so catch it on load.

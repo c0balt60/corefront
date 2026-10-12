@@ -1,14 +1,24 @@
 import type { Planet, PlanetKind } from "core/Worlds/shared/star-system";
 
 export type ResourceId =
-	"copper" | "lead" | "coal" | "sand" | "titanium" | "scrap" | "thorium" | "graphite" | "silicon";
+	| "copper"
+	| "lead"
+	| "coal"
+	| "sand"
+	| "titanium"
+	| "scrap"
+	| "thorium"
+	| "graphite"
+	| "silicon"
+	| "metaglass"
+	| "pyratite";
 
 export interface ResourceStack {
 	readonly resource: ResourceId;
 	readonly amount: number;
 }
 
-/** Every resource. Graphite and silicon are made, not mined: see the Graphite Press and Silicon Smelter. */
+/** Every resource. Graphite, silicon, metaglass and pyratite are made, not mined: see the Crafting buildings. */
 export const RESOURCES: Record<ResourceId, { readonly name: string; readonly color: Color3 }> = {
 	copper: { name: "Copper", color: Color3.fromRGB(217, 140, 84) },
 	lead: { name: "Lead", color: Color3.fromRGB(150, 150, 200) },
@@ -19,6 +29,8 @@ export const RESOURCES: Record<ResourceId, { readonly name: string; readonly col
 	thorium: { name: "Thorium", color: Color3.fromRGB(205, 105, 165) },
 	graphite: { name: "Graphite", color: Color3.fromRGB(104, 112, 140) },
 	silicon: { name: "Silicon", color: Color3.fromRGB(196, 205, 214) },
+	metaglass: { name: "Metaglass", color: Color3.fromRGB(235, 200, 225) },
+	pyratite: { name: "Pyratite", color: Color3.fromRGB(240, 120, 70) },
 };
 
 /** Display order, everywhere resources are listed. */
@@ -32,6 +44,8 @@ export const RESOURCE_ORDER: ReadonlyArray<ResourceId> = [
 	"thorium",
 	"graphite",
 	"silicon",
+	"metaglass",
+	"pyratite",
 ];
 
 /**

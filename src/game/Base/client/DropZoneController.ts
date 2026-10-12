@@ -5,7 +5,7 @@ import { mount } from "@rbxts/vide";
 
 import { COLORS } from "core/Interface/client/theme";
 import { baseStateAtom } from "game/Base/client/base-state";
-import { groundRing } from "game/Base/client/InteractController";
+import { groundRing } from "game/Base/client/BuildController";
 import { DROP_ZONE_RADIUS } from "game/Base/shared/buildings";
 import { Glyph } from "game/Research/client/components/glyphs";
 

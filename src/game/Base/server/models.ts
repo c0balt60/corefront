@@ -29,8 +29,11 @@ const GLOW = Color3.fromRGB(255, 170, 60);
 const TITANIUM = Color3.fromRGB(140, 195, 225);
 const REPAIR = Color3.fromRGB(110, 230, 120);
 const FURNACE = Color3.fromRGB(255, 110, 40);
-/** A sorter's or source's light with no ore picked. */
+/** A sorter's, source's or unloader's light with no ore picked. */
 const UNSORTED = Color3.fromRGB(235, 235, 240);
+/** Power: node tips, links and battery bands. */
+const POWER = Color3.fromRGB(255, 228, 90);
+const SOLAR = Color3.fromRGB(40, 60, 110);
 
 /** How thick a wall's post is, and how tall it stands above its footprint: thinner than a cell. */
 const WALL_WIDTH = 6;
@@ -64,6 +67,31 @@ const BARRELS: Partial<Record<BuildingKind, readonly [size: Vector3, centres: Re
 			0,
 		],
 		ripple: [new Vector3(1.4, 1.4, 9), [-3, -1, 1, 3].map((x) => new Vector3(x, 0, -6)), 25],
+		// A stubby mortar tube, raised to lob.
+		hail: [new Vector3(1.2, 1.2, 3), [new Vector3(0, 0.4, -2)], 35],
+		// A short wide nozzle.
+		scorch: [new Vector3(1.1, 1.1, 2.6), [new Vector3(0, 0, -2.3)], 0],
+		// Three thick prongs side by side.
+		fuse: [new Vector3(1, 1, 5), [-2, 0, 2].map((x) => new Vector3(x, 0, -5)), 0],
+		// Four barrels in a square.
+		salvo: [
+			new Vector3(0.7, 0.7, 6),
+			[
+				new Vector3(-0.8, 0.8, -5.5),
+				new Vector3(0.8, 0.8, -5.5),
+				new Vector3(-0.8, -0.8, -5.5),
+				new Vector3(0.8, -0.8, -5.5),
+			],
+			0,
+		],
+		// Twin heavy barrels, fired in turn.
+		reaper: [new Vector3(1.6, 1.6, 11), [new Vector3(-2, 0, -9.5), new Vector3(2, 0, -9.5)], 0],
+		// One very long rail.
+		harbinger: [new Vector3(1.2, 1.2, 18), [new Vector3(0, 0.5, -13)], 0],
+		// A short coil the lightning leaps from.
+		arc: [new Vector3(0.7, 0.7, 2.2), [new Vector3(0, 0.6, -1.4)], 0],
+		// One huge emitter.
+		meltdown: [new Vector3(3, 3, 8), [new Vector3(0, 0, -7)], 0],
 	};
 
 /** Alien machines: gunmetal hulls and plates, lit red so they never read as the team's. */
@@ -593,39 +621,66 @@ export function setHealth(model: Model, health: number, maxHealth: number) {
 	fill.BackgroundColor3 = Color3.fromRGB(255, 80, 80).Lerp(Color3.fromRGB(110, 230, 120), fraction);
 }
 
-/** Writes a turret's `Ammo` (items loaded), and shows NO AMMO over it while that's none. */
-export function setAmmo(model: Model, items: number) {
-	model.SetAttribute("Ammo", items);
+/** Writes a turret's `Ammo` (shots loaded) and `AmmoType` (the ore it fires next), and shows NO AMMO over it while it has none. */
+export function setAmmo(model: Model, shots: number, resource: ResourceId | undefined) {
+	model.SetAttribute("Ammo", shots);
+	model.SetAttribute("AmmoType", resource);
+	warn(model, "NoAmmo", "NO AMMO", shots === 0);
+}
+
+/** Writes `Power`, the share of its need a building gets, and shows NO POWER over it while it gets none. */
+export function setPower(model: Model, power: number) {
+	model.SetAttribute("Power", power);
+	warn(model, "NoPower", "NO POWER", power <= 0);
+}
+
+/** A red warning over a building, made once as `name`, shown while `shown`. */
+function warn(model: Model, name: string, text: string, shown: boolean) {
 	const root = model.PrimaryPart;
 	if (!root) return;
 
-	let sign = model.FindFirstChild("NoAmmo") as BillboardGui | undefined;
+	let sign = model.FindFirstChild(name) as BillboardGui | undefined;
 	if (!sign) {
 		sign = new Instance("BillboardGui");
-		sign.Name = "NoAmmo";
+		sign.Name = name;
 		sign.Adornee = root;
 		sign.Size = UDim2.fromOffset(90, 18);
 		sign.StudsOffsetWorldSpace = new Vector3(0, root.Size.Y / 2 + 5, 0);
 		sign.MaxDistance = 160;
-		const text = new Instance("TextLabel");
-		text.BackgroundTransparency = 1;
-		text.Size = UDim2.fromScale(1, 1);
-		text.Font = Enum.Font.GothamBold;
-		text.Text = "NO AMMO";
-		text.TextColor3 = Color3.fromRGB(255, 80, 80);
-		text.TextSize = 14;
-		text.TextStrokeTransparency = 0.4;
-		text.Parent = sign;
+		const label = new Instance("TextLabel");
+		label.BackgroundTransparency = 1;
+		label.Size = UDim2.fromScale(1, 1);
+		label.Font = Enum.Font.GothamBold;
+		label.Text = text;
+		label.TextColor3 = Color3.fromRGB(255, 80, 80);
+		label.TextSize = 14;
+		label.TextStrokeTransparency = 0.4;
+		label.Parent = sign;
 		sign.Parent = model;
 	}
-	sign.Enabled = items === 0;
+	sign.Enabled = shown;
 }
 
-/** Writes a sorter's or source's `Filter`, and lights it in that ore's colour (white for none). */
+/** Writes a sorter's, source's or unloader's `Filter`, and lights it in that ore's colour (white for none). */
 export function setFilter(model: Model, resource: ResourceId | undefined) {
 	model.SetAttribute("Filter", resource);
 	const light = model.FindFirstChild("Light");
 	if (light?.IsA("BasePart")) light.Color = resource !== undefined ? RESOURCES[resource].color : UNSORTED;
+}
+
+/** A node's power links, in its model: a thin lit line from `from` to each of `ends`, which nothing touches or hits. */
+export function linkLines(model: Model, from: Vector3, ends: ReadonlyArray<Vector3>) {
+	for (const child of model.GetChildren()) if (child.Name === "Link") child.Destroy();
+	for (const to of ends) {
+		const length = to.sub(from).Magnitude;
+		const cframe = CFrame.lookAt(from, to).mul(new CFrame(0, 0, -length / 2));
+		const line = block(model, new Vector3(0.25, 0.25, length), cframe, POWER, Enum.Material.Neon);
+		line.Name = "Link";
+		line.CanCollide = false;
+		line.CanQuery = false;
+		line.CanTouch = false;
+		line.CastShadow = false;
+	}
 }
 
 /** A neon flash from `from` to `to`, `width` studs thick, seen by everyone. Shots are hitscan; this is only the look. */
@@ -852,6 +907,51 @@ export function buildingModel(
 		for (const x of [-4.5, 4.5]) {
 			block(model, new Vector3(2, 6, 2), at(8).mul(new CFrame(x, 0, 4)), DARK, Enum.Material.Metal);
 		}
+	} else if (def.node !== undefined) {
+		// A pole on a plate with a crossbar, lit at its tip, where its links run from (see `linkLines`).
+		const scale = def.size;
+		const tall = 7 * scale;
+		body = block(model, new Vector3(3, 1, 3).mul(scale), at(0.5), DARK, Enum.Material.Metal);
+		block(model, new Vector3(0.8 * scale, tall, 0.8 * scale), at(1 + tall / 2), METAL, Enum.Material.Metal);
+		block(model, new Vector3(3.5 * scale, 0.5, 0.6), at(tall - 0.5), METAL, Enum.Material.Metal);
+		const tip = block(model, Vector3.one.mul(1.4 * scale), at(1 + tall + 0.7 * scale), POWER, Enum.Material.Neon);
+		tip.Name = "Tip";
+		tip.Shape = Enum.PartType.Ball;
+	} else if (kind === "solarPanel") {
+		// A panel on a post, tipped toward the sun.
+		body = block(model, new Vector3(5, 1, 5), at(0.5), DARK, Enum.Material.Metal);
+		block(model, new Vector3(1, 1.5, 1), at(1.75), METAL, Enum.Material.Metal);
+		const tilt = CFrame.Angles(math.rad(-15), 0, 0);
+		block(model, new Vector3(7, 0.3, 7), at(2.8).mul(tilt), SOLAR, Enum.Material.Glass);
+	} else if (def.battery !== undefined) {
+		// A cell with bands of charge round it, and its terminal on top.
+		const width = def.size * CELL_STUDS - 2;
+		const height = 2 + def.size * 2;
+		body = block(model, new Vector3(width, height, width), at(height / 2), DARK, Enum.Material.Metal);
+		for (const y of [height * 0.35, height * 0.7]) {
+			block(model, new Vector3(width + 0.2, 0.4, width + 0.2), at(y), POWER, Enum.Material.Neon);
+		}
+		block(model, new Vector3(width / 3, 0.8, width / 3), at(height + 0.4), METAL, Enum.Material.Metal);
+	} else if (def.store !== undefined) {
+		// A crate with a band across it.
+		const width = def.size * CELL_STUDS - 1;
+		const height = 3 + def.size * 1.5;
+		body = block(model, new Vector3(width, height, width), at(height / 2), METAL, Enum.Material.DiamondPlate);
+		block(model, new Vector3(width + 0.2, 0.5, width + 0.2), at(height - 0.6), GLOW, Enum.Material.Neon);
+		block(model, new Vector3(width + 0.2, 0.8, width / 3), at(height / 2), DARK, Enum.Material.Metal);
+	} else if (kind === "unloader") {
+		body = block(model, new Vector3(5, 2.5, 5), at(1.25), METAL, Enum.Material.DiamondPlate);
+		block(model, new Vector3(5.3, 0.5, 5.3), at(0.6), GLOW, Enum.Material.Neon);
+		// Lit in the colour of the ore it takes (see `setFilter`).
+		block(model, new Vector3(2.4, 1, 2.4), at(3), UNSORTED, Enum.Material.Neon).Name = "Light";
+	} else if (def.generator || def.craft) {
+		// Generators and the other crafters: a banded housing, its works glowing on top in what it makes, or its fire.
+		const width = def.size * CELL_STUDS - 3;
+		const height = 2 + def.size * 2;
+		const works = oreColor ?? (kind === "rtgGenerator" ? RESOURCES.thorium.color : FURNACE);
+		body = block(model, new Vector3(width, height, width), at(height / 2), METAL, Enum.Material.DiamondPlate);
+		block(model, new Vector3(width + 0.2, 0.5, width + 0.2), at(height - 0.8), GLOW, Enum.Material.Neon);
+		block(model, new Vector3(width / 2.5, 1, width / 2.5), at(height + 0.5), works, Enum.Material.Neon);
 	} else {
 		// Turrets: a body, and a head that turns to aim with its barrels welded on. Bigger ones scale up.
 		const scale = def.size;

@@ -12,13 +12,15 @@ import {
 	nearSelectedAtom,
 	selectedAtom,
 } from "game/Base/client/base-state";
-import { pointedAt } from "game/Base/client/BuildController";
+import { groundRing, pointedAt } from "game/Base/client/BuildController";
 import { BaseMessage, baseMessaging } from "game/Base/shared/base-network";
 import {
 	BUILD_RANGE,
 	BUILD_TOOL,
 	BUILDINGS,
 	type BuildingKind,
+	isPowered,
+	linkReach,
 	MINE_SECONDS,
 	TRANSFER_RANGE,
 } from "game/Base/shared/buildings";
@@ -28,9 +30,6 @@ import { cellCenter, cellCoords } from "game/Terrain/shared/map";
 
 /** Most seconds between the two clicks of a double click. */
 const DOUBLE_CLICK = 0.3;
-/** Points round a range ring, each set on the ground, and how far above and below one to look for it. */
-const RING_POINTS = 64;
-const RING_SEARCH = 200;
 
 /** A building's -X/-Z corner cell, as the server's messages take it. */
 export function cellOf(model: Model) {
@@ -38,62 +37,15 @@ export function cellOf(model: Model) {
 	return { x, z };
 }
 
-/**
- * A glowing outline `radius` round `center`, following the ground, until the returned cleanup runs.
- * With a `wall`, a glow also rises that many studs off it, fading as it goes up.
- */
-export function groundRing(center: Vector3, radius: number, color: Color3, wall = 0): () => void {
-	const params = new RaycastParams();
-	params.FilterType = Enum.RaycastFilterType.Include;
-	params.FilterDescendantsInstances = [Workspace.Terrain];
-	const down = new Vector3(0, -2 * RING_SEARCH, 0);
-	const points = new Array<Attachment>();
-	for (let i = 0; i < RING_POINTS; i++) {
-		const angle = (i / RING_POINTS) * 2 * math.pi;
-		const x = center.X + radius * math.cos(angle);
-		const z = center.Z + radius * math.sin(angle);
-		const ground = Workspace.Raycast(new Vector3(x, center.Y + RING_SEARCH, z), down, params);
-		// On Terrain, which sits at the origin, so its position is where it is in the world.
-		const point = new Instance("Attachment");
-		point.Position = new Vector3(x, (ground?.Position.Y ?? center.Y) + 0.3, z);
-		point.Parent = Workspace.Terrain;
-		points.push(point);
-	}
-	points.forEach((point, i) => {
-		const beam = new Instance("Beam");
-		beam.Attachment0 = point;
-		beam.Attachment1 = points[(i + 1) % RING_POINTS];
-		beam.Color = new ColorSequence(color);
-		beam.FaceCamera = true;
-		beam.LightEmission = 1;
-		beam.Segments = 1;
-		beam.Transparency = new NumberSequence(0.35);
-		beam.Width0 = 0.5;
-		beam.Width1 = 0.5;
-		beam.Parent = point;
-	});
-	if (wall > 0) {
-		// A strip up from each point, a little wider than the gap to the next so they meet in a curtain.
-		const width = ((2 * math.pi * radius) / RING_POINTS) * 1.15;
-		for (const point of [...points]) {
-			const top = new Instance("Attachment");
-			top.Position = point.Position.add(new Vector3(0, wall, 0));
-			top.Parent = Workspace.Terrain;
-			points.push(top);
-			const beam = new Instance("Beam");
-			beam.Attachment0 = point;
-			beam.Attachment1 = top;
-			beam.Color = new ColorSequence(color);
-			beam.FaceCamera = true;
-			beam.LightEmission = 1;
-			beam.Segments = 1;
-			beam.Transparency = new NumberSequence(0.55, 1);
-			beam.Width0 = width;
-			beam.Width1 = width;
-			beam.Parent = point;
-		}
-	}
-	return () => points.forEach((point) => point.Destroy());
+/** Whether clicking `building` while `selected` is open links or unlinks them: a power node, and something on the power network in its range. */
+function linksTo(selected: Model | undefined, building: Model): boolean {
+	if (!selected || selected === building) return false;
+	const node = selected.GetAttribute("Kind") as BuildingKind;
+	const other = building.GetAttribute("Kind") as BuildingKind;
+	const cell = (model: Model) => model.GetAttribute("Cell") as number;
+	return (
+		BUILDINGS[node].node !== undefined && isPowered(other) && linkReach(node, cell(selected), other, cell(building))
+	);
 }
 
 /**
@@ -101,9 +53,11 @@ export function groundRing(center: Vector3, radius: number, color: Color3, wall 
  * click would act on is outlined: any building, or ore within `TRANSFER_RANGE`. Holding a click on
  * ore mines it, one at a time, with a beam to it. Clicking a building opens its panel
  * (`selectedAtom`), until something else is clicked or the character walks out of `BUILD_RANGE`;
- * one that reaches out (turrets, menders) also shows its range as a ring on the ground.
- * Double-clicking it also moves items: in what it takes from the pack (everything for the Core,
- * ammo for a turret, inputs for a crafter), then out what a drill or crafter made or a belt carries.
+ * one that reaches out (turrets, menders, power nodes) also shows its range as a ring on the ground.
+ * While a power node's is open, clicking something in its range on the power network links or
+ * unlinks it instead. Double-clicking a building also moves items: in what it takes from the pack
+ * (everything for the Core or storage, ammo for a turret, inputs for a crafter, fuel for a
+ * generator), then out what a drill or crafter made or a belt carries.
  */
 @Controller()
 export class InteractController implements OnStart {
@@ -173,6 +127,10 @@ export class InteractController implements OnStart {
 			} else if (selectedAtom() === building && os.clock() - clicked <= DOUBLE_CLICK) {
 				this.quickTransfer(building);
 				clicked = 0;
+			} else if (linksTo(selectedAtom(), building)) {
+				const { x, z } = cellOf(selectedAtom()!);
+				const to = cellOf(building);
+				baseMessaging.server.emit(BaseMessage.Link, { x, z, toX: to.x, toZ: to.z });
 			} else {
 				selectedAtom(building);
 				clicked = os.clock();
@@ -237,7 +195,8 @@ export class InteractController implements OnStart {
 		const kind = building.GetAttribute("Kind") as BuildingKind;
 		const def = BUILDINGS[kind];
 		const at = cellOf(building);
-		if (kind === "core" || def.turret || def.craft) baseMessaging.server.emit(BaseMessage.Load, at);
+		const loads = (def.turret && !def.turret.energy) || def.craft || def.store !== undefined || def.generator?.fuel;
+		if (kind === "core" || loads) baseMessaging.server.emit(BaseMessage.Load, at);
 		if (def.drill || def.craft || def.belt !== undefined) baseMessaging.server.emit(BaseMessage.Collect, at);
 	}
 

@@ -8,6 +8,7 @@ import { useAppear, useScramble } from "core/Interface/client/motion";
 import { COLORS, FONT, FONT_DISPLAY, SPRINGS } from "core/Interface/client/theme";
 import { amountOf, type BuildMode, canAfford } from "game/Base/client/base-state";
 import { HudBox, Label, Swatch } from "game/Base/client/components/base-hud";
+import { InfoButton } from "game/Base/client/components/turret-info";
 import {
 	BUILD_CATEGORIES,
 	type BuildableKind,
@@ -177,6 +178,8 @@ interface BuildBarProps {
 	readonly held: () => ReadonlyArray<ResourceStack>;
 	readonly mode: () => BuildMode | undefined;
 	readonly onSelect: (mode: BuildMode) => void;
+	/** Opens a turret's info page (see `TurretInfo`). */
+	readonly onInfo: (kind: BuildableKind) => void;
 	/** Turns false to put it away. Return `$tuple(node, EXIT_TIME)` from the Show that renders it. */
 	readonly show: () => boolean;
 }
@@ -185,11 +188,11 @@ interface BuildBarProps {
  * The build menu, bottom right: a rail of categories with the remove tool under them, the open
  * category's buildings as a grid of glyphs beside it, and over both a header naming whatever is
  * hovered (or else picked), with its cost, red where the Core can't pay, how much of each the Core
- * and backpack hold together, and description. Picking a building any other way, like copying one
+ * and backpack hold together, and description, with a ? that opens a turret's info page. Picking a building any other way, like copying one
  * with Q, opens its category. The controls for the current mode sit above the hotbar. Shown while
  * the Build tool is out, shrunk to stay under the wave panel. Slides in from the right.
  */
-export function BuildBar({ kinds, pool, held, mode, onSelect, show }: BuildBarProps) {
+export function BuildBar({ kinds, pool, held, mode, onSelect, onInfo, show }: BuildBarProps) {
 	const appear = useAppear(show, 0.1);
 	const hint = useScramble(
 		"hud",
@@ -222,6 +225,11 @@ export function BuildBar({ kinds, pool, held, mode, onSelect, show }: BuildBarPr
 	const info = () => {
 		const subject = hovered() ?? mode();
 		return subject !== undefined ? infoOf(subject) : undefined;
+	};
+	// The turret the header is about, for its ?. Reaching for it leaves the tile, so it's the picked one's.
+	const turret = () => {
+		const subject = hovered() ?? mode();
+		return typeIs(subject, "string") && subject !== "remove" && BUILDINGS[subject].turret ? subject : undefined;
 	};
 
 	// The rail, the remove tool's tile included, is nearly always the tallest.
@@ -291,9 +299,17 @@ export function BuildBar({ kinds, pool, held, mode, onSelect, show }: BuildBarPr
 								<Label
 									color={COLORS.text}
 									font={FONT_DISPLAY}
-									size={new UDim2(1, -40, 1, 0)}
+									size={new UDim2(1, -64, 1, 0)}
 									text={() => info()?.name.upper() ?? ""}
 									textSize={14}
+								/>
+								<InfoButton
+									position={new UDim2(1, -44, 0, 0)}
+									visible={() => turret() !== undefined}
+									onClick={() => {
+										const kind = turret();
+										if (kind) onInfo(kind);
+									}}
 								/>
 								<Label
 									alignX={Enum.TextXAlignment.Right}

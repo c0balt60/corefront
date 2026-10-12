@@ -21,6 +21,15 @@ const ROCKET = Color3.fromRGB(255, 150, 60);
 const SHELL = Color3.fromRGB(255, 220, 120);
 const TRACER = Color3.fromRGB(255, 200, 90);
 const ENEMY_TRACER = Color3.fromRGB(255, 70, 60);
+const LASER = Color3.fromRGB(255, 90, 70);
+const LIGHTNING = Color3.fromRGB(150, 205, 255);
+/** Seconds a laser's pulse takes to fade: just past the next, so the beam looks steady. */
+const PULSE_SECONDS = 0.15;
+/** How many jags lightning makes between two aliens, and how far each strays off the straight line, in studs. */
+const ARC_KINKS = 4;
+const ARC_STRAY = 1.5;
+
+const random = new Random();
 /** The splash a blast is drawn at its usual size for. Bigger and smaller ones scale with it. */
 const BLAST_SPLASH = 8;
 /** Seconds a landed shot's smoke trail is left to clear. */
@@ -28,7 +37,7 @@ const TRAIL_SECONDS = 1.3;
 /** Seconds a blast's slowest particles, its smoke, last. */
 const BLAST_SECONDS = 2.6;
 
-/** A rocket or shell as drawn, until it lands. */
+/** A shot as drawn, until it lands. */
 interface Flight {
 	readonly shot: Shot;
 	readonly part: Part;
@@ -59,12 +68,14 @@ function attachment(parent: Instance, position: Vector3): Attachment {
 }
 
 /**
- * Draws turret and alien shots; the server deals their damage, so this is only the look. Rockets
- * and shells fly their curve (see `Shot`) for as long as the server says, chasing their target if
- * they have one, trailing flame and smoke, then blow up. Hitscan shots are a fading streak, a flash
- * out of the barrel and sparks off what they hit, red for an alien's; the Cannon's also blasts.
- * Flak bursts in a dark puff in the air. A sapper just blasts. A shot that point defence downs pops
- * where it is, struck by a red streak.
+ * Draws turret and alien shots; the server deals their damage, so this is only the look. Every
+ * turret shot flies its curve (see `Shot`) for as long as the server says, chasing its target if it
+ * has one. Bullets are glowing tracers that spark where they end, and blast if they splash; flames
+ * are fireballs that flare where they end. Rockets and shells trail flame and smoke, then blow up.
+ * Flak bursts in a dark puff in the air. Aliens' hitscan shots are a fading red streak, a flash out
+ * of the barrel and sparks off what they hit; a heavy one also blasts. A sapper just blasts. A shot
+ * that point defence downs pops where it is, struck by a red streak. A laser pulses a white-hot
+ * beam; lightning crackles in jags from alien to alien.
  */
 @Controller()
 export class ShotController implements OnStart {
@@ -108,6 +119,16 @@ export class ShotController implements OnStart {
 		SpreadAngle: new Vector2(55, 55),
 		EmissionDirection: Enum.NormalId.Front,
 	});
+	private readonly impactFire = emitter(this.impact, {
+		Texture: FIRE,
+		Color: new ColorSequence(HOT, FLAME),
+		LightEmission: 1,
+		Size: curve([0, 1.5], [1, 3]),
+		Transparency: curve([0, 0.2], [1, 1]),
+		Lifetime: new NumberRange(0.2, 0.4),
+		Speed: new NumberRange(3, 8),
+		SpreadAngle: new Vector2(180, 180),
+	});
 
 	onStart() {
 		this.folder.Name = "Shots";
@@ -119,12 +140,16 @@ export class ShotController implements OnStart {
 		shotMessaging.client.on(ShotMessage.Hit, ({ from, to, size, hostile }) => this.hit(from, to, size, hostile));
 		shotMessaging.client.on(ShotMessage.Blast, ({ at, splash }) => this.blast(at, splash, true));
 		shotMessaging.client.on(ShotMessage.Downed, ({ id, from }) => this.down(id, from));
+		shotMessaging.client.on(ShotMessage.Beam, ({ from, to }) => this.beam(from, to));
+		shotMessaging.client.on(ShotMessage.Arc, ({ points }) => this.arc(points));
 		RunService.RenderStepped.Connect(() => this.render());
 	}
 
 	/** A rocket or shell leaving its barrel, its tail a glowing streak, a flame (rockets) and smoke left hanging in the air. */
 	private launch(shot: Shot) {
 		if (shot.kind === "flak") return this.launchFlak(shot);
+		if (shot.kind === "bullet") return this.launchBullet(shot);
+		if (shot.kind === "flame") return this.launchFlame(shot);
 		const rocket = shot.kind === "rocket";
 		const size = rocket ? new Vector3(0.4, 0.4, 1.4) : new Vector3(1.3, 1.3, 1.3);
 		const part = this.spark(size, rocket ? ROCKET : SHELL, shot.from);
@@ -194,6 +219,46 @@ export class ShotController implements OnStart {
 		this.flights.push({ shot, part, fired: os.clock(), to: shot.to });
 	}
 
+	/** A bullet: a glowing tracer as heavy as its turret, with a short streak behind it, and a flash (and smoke, from a big gun) out of the barrel. */
+	private launchBullet(shot: Shot) {
+		const size = shot.size ?? 1;
+		const part = this.spark(new Vector3(0.2, 0.2, 1.2).mul(size), TRACER, shot.from);
+		const width = 0.1 * size;
+		const trail = new Instance("Trail");
+		trail.Attachment0 = attachment(part, new Vector3(0, width, 0));
+		trail.Attachment1 = attachment(part, new Vector3(0, -width, 0));
+		trail.Color = new ColorSequence(HOT, TRACER);
+		trail.Transparency = curve([0, 0.2], [1, 1]);
+		trail.Lifetime = 0.06;
+		trail.LightEmission = 1;
+		trail.FaceCamera = true;
+		trail.Parent = part;
+		this.muzzle.WorldCFrame = CFrame.lookAt(shot.from, shot.to);
+		this.muzzleFire.Emit(2 * size);
+		if (size > 1) this.muzzleSmoke.Emit(2 * size);
+		this.flights.push({ shot, part, fired: os.clock(), to: shot.to });
+	}
+
+	/** A flame: a fireball that licks out of the nozzle, shedding fire as it goes. */
+	private launchFlame(shot: Shot) {
+		const part = this.spark(Vector3.one, FLAME, shot.from);
+		part.Shape = Enum.PartType.Ball;
+		part.Transparency = 0.4;
+		emitter(part, {
+			Texture: FIRE,
+			Color: new ColorSequence(HOT, FLAME),
+			LightEmission: 1,
+			Size: curve([0, 1], [1, 2.5]),
+			Transparency: curve([0, 0.2], [1, 1]),
+			Lifetime: new NumberRange(0.15, 0.3),
+			Speed: new NumberRange(1, 3),
+			SpreadAngle: new Vector2(180, 180),
+			Rate: 40,
+			Enabled: true,
+		});
+		this.flights.push({ shot, part, fired: os.clock(), to: shot.to });
+	}
+
 	/** Flak bursting in the air: a quick flash, a few sparks and a ragged puff of dark smoke `splash` studs round. */
 	private puff(at: Vector3, splash: number) {
 		const anchor = new Instance("Attachment");
@@ -229,7 +294,7 @@ export class ShotController implements OnStart {
 		}).Emit(5);
 	}
 
-	/** A hitscan shot: a streak that fades, a flash out of the barrel, sparks back off what it hit. The Cannon's (`size` 2) also blasts. */
+	/** An alien's hitscan shot: a streak that fades, a flash out of the barrel, sparks back off what it hit. A heavy one (`size` 2 and up) also blasts. */
 	private hit(from: Vector3, to: Vector3, size: number, hostile?: boolean) {
 		const length = to.sub(from).Magnitude;
 		if (length < 0.1) return;
@@ -251,6 +316,44 @@ export class ShotController implements OnStart {
 			this.muzzleSmoke.Emit(4);
 			this.blast(to, 2 * size, false);
 		}
+	}
+
+	/** A laser's pulse: a red beam round a white-hot core, flaring where it ends. */
+	private beam(from: Vector3, to: Vector3) {
+		this.bolt(from, to, 2.2, LASER, PULSE_SECONDS);
+		this.bolt(from, to, 0.8, HOT, PULSE_SECONDS);
+		this.impact.WorldCFrame = CFrame.lookAt(to, from);
+		this.impactFire.Emit(1);
+	}
+
+	/** Lightning through `points`, in jags between each and the next, sparking off each alien it strikes. */
+	private arc(points: ReadonlyArray<Vector3>) {
+		for (let i = 1; i < points.size(); i++) {
+			const from = points[i - 1];
+			const to = points[i];
+			let last = from;
+			for (let kink = 1; kink <= ARC_KINKS; kink++) {
+				const stray = new Vector3(random.NextNumber(-1, 1), random.NextNumber(-1, 1), random.NextNumber(-1, 1));
+				const point = kink === ARC_KINKS ? to : from.Lerp(to, kink / ARC_KINKS).add(stray.mul(ARC_STRAY));
+				this.bolt(last, point, 0.3, LIGHTNING, 0.12);
+				last = point;
+			}
+			this.impact.WorldCFrame = CFrame.lookAt(to, from);
+			this.impactSparks.Emit(3);
+		}
+	}
+
+	/** A glowing bar from `from` to `to`, `width` thick, thinning away to nothing over `fade` seconds. */
+	private bolt(from: Vector3, to: Vector3, width: number, color: Color3, fade: number) {
+		const length = to.sub(from).Magnitude;
+		if (length < 0.1) return;
+		const part = this.spark(new Vector3(width, width, length), color, from);
+		part.CFrame = CFrame.lookAt(from, to).mul(new CFrame(0, 0, -length / 2));
+		TweenService.Create(part, new TweenInfo(fade), {
+			Transparency: 1,
+			Size: new Vector3(width / 4, width / 4, length),
+		}).Play();
+		Debris.AddItem(part, fade);
 	}
 
 	/** The shot `id`, shot down by point defence from `from`: struck where it is now, it pops in a puff, short of where it was going. */
@@ -279,8 +382,7 @@ export class ShotController implements OnStart {
 			const t = (now - flight.fired) / shot.seconds;
 			if (t >= 1) {
 				this.vanish(part);
-				if (shot.kind === "flak") this.puff(flight.to, shot.splash);
-				else this.blast(flight.to, shot.splash, shot.kind === "shell");
+				this.land(flight);
 				return false;
 			}
 			const at = bezier(shot.from, shot.control, flight.to, t);
@@ -288,6 +390,19 @@ export class ShotController implements OnStart {
 			part.CFrame = ahead.sub(at).Magnitude > 1e-3 ? CFrame.lookAt(at, ahead) : new CFrame(at);
 			return true;
 		});
+	}
+
+	/** A shot coming down where it was going: flak puffs, a bullet sparks and a flame flares, blasting if it splashes; a rocket or shell blows up. */
+	private land({ shot, to }: Flight) {
+		if (shot.kind === "flak") return this.puff(to, shot.splash);
+		if (shot.kind === "bullet" || shot.kind === "flame") {
+			this.impact.WorldCFrame = CFrame.lookAt(to, shot.from);
+			if (shot.kind === "flame") this.impactFire.Emit(3);
+			else this.impactSparks.Emit(3 * (shot.size ?? 1));
+			if (shot.splash > 0 && shot.kind === "bullet") this.blast(to, shot.splash, false);
+			return;
+		}
+		this.blast(to, shot.splash, shot.kind === "shell");
 	}
 
 	/**

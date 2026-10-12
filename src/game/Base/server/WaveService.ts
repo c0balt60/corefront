@@ -18,7 +18,7 @@ import {
 	ShotMessage,
 	shotMessaging,
 } from "game/Base/shared/base-network";
-import { BUILDINGS, type BuildingDef, DROP_ZONE_RADIUS } from "game/Base/shared/buildings";
+import { BUILDINGS, DROP_ZONE_RADIUS, type EnergyDef, type TurretDef } from "game/Base/shared/buildings";
 import { RESOURCE_ORDER } from "game/Base/shared/resources";
 import { PlanetsService } from "game/Planets/server/PlanetsService";
 import { TravelService } from "game/Planets/server/TravelService";
@@ -106,8 +106,9 @@ function broadside(first: number, gun: Omit<Gun, "turret">): Array<Gun> {
 }
 
 /*
- * Ranges against the turrets': the Turret's 56, the Auto-Turret's 60, the Vulcan's 72, the Scatter's
- * and the Swarmer's 80, the Cannon's 100 and the Ripple's 220.
+ * Ranges against the turrets': the Scorch's 28, the Fuse's 36, the Turret's 56, the Auto-Turret's 60,
+ * the Vulcan's 72, the Salvo's 76, the Scatter's and the Swarmer's 80, the Hail's and the Cannon's
+ * 100, the Reaper's 104, the Ripple's 220 and the Harbinger's 320. Some ammo reaches further.
  */
 const ALIENS: Record<AlienKind, AlienDef> = {
 	crawler: { health: 30, speed: 14, damage: 6, rate: 0.8, attack: "melee", reach: 4, hover: 1.5 },
@@ -187,7 +188,7 @@ const ALIENS: Record<AlienKind, AlienDef> = {
 			{ kind: "rocket", damage: 16, rate: 4, range: 56, splash: 5, turret: 2, prefers: "turrets" },
 		],
 	},
-	// Its cannon outranges everything but the Cannon and Ripple; its flank guns cover its sides.
+	// Its cannon outranges everything but the artillery, the Cannon, Reaper and Harbinger; its flank guns cover its sides.
 	fortress: {
 		health: 1600,
 		speed: 3,
@@ -345,8 +346,8 @@ interface Alien {
 }
 
 /**
- * A turret's rocket, shell or flak, or an alien's shell, bomb or rocket, in the air (see `Shot`): fired
- * at `fired` and landing at `lands`, `os.clock()` times.
+ * A turret's bullet, flame, rocket, shell or flak, or an alien's shell, bomb or rocket, in the air
+ * (see `Shot`): fired at `fired` and landing at `lands`, `os.clock()` times.
  */
 interface Projectile {
 	readonly id: number;
@@ -362,6 +363,10 @@ interface Projectile {
 	readonly splash: number;
 	/** A turret's: the aliens it can hit (see `canHit`). */
 	readonly targets?: "air" | "ground";
+	/** A piercing bullet's: how many aliens along its flight it hits after the first (see `pierceAliens`). */
+	readonly pierce?: number;
+	/** Bullets' and flames': how heavy they look (see `Shot`). */
+	readonly size?: number;
 	/** An alien's: it hurts buildings and players instead. */
 	readonly hostile?: true;
 }
@@ -386,6 +391,10 @@ const STATE_SECONDS = 0.2;
 const RETARGET_SECONDS = 0.25;
 /** How far a turret's aim must move before clients hear of it, in studs. */
 const AIM_SLACK = 0.5;
+/** How fast bullets fly, in studs per second, unless their turret says (see `TurretDef.speed`). */
+const BULLET_SPEED = 150;
+/** How far off an alien's middle, past its `radius`, a bullet still hits it. */
+const BULLET_SLACK = 1;
 /** How fast rockets and shells fly, in studs per second, after a moment to clear the turret. */
 const ROCKET_SPEED = 90;
 const SHELL_SPEED = 110;
@@ -394,7 +403,9 @@ const LAUNCH_SECONDS = 0.3;
 const FLAK_SPEED = 160;
 /** Seconds a bomber's bomb takes to fall. */
 const BOMB_SECONDS = 0.6;
-/** Seconds between the shots of a turret's burst. */
+/** How far lightning leaps from one alien to the next, in studs (see `AmmoDef.chain`). */
+const ARC_JUMP = 18;
+/** Seconds between the shots of a turret's burst, unless it says (see `TurretDef.gap`). */
 const BURST_SECONDS = 0.4;
 /** A turret that spins up fires at this share of its full rate from a standstill, and winds all the way down in this many seconds. */
 const SPIN_SLOWEST = 0.2;
@@ -1157,7 +1168,7 @@ export class WaveService implements OnStart {
 		const id = this.shotId++;
 		const fired = os.clock();
 		this.projectiles.push({ ...shot, id, fired, lands: fired + seconds });
-		const { kind, from, control, to, target, splash } = shot;
+		const { kind, from, control, to, target, splash, size } = shot;
 		shotMessaging.client.emitAll(ShotMessage.Fired, {
 			id,
 			kind,
@@ -1167,6 +1178,7 @@ export class WaveService implements OnStart {
 			target: target?.model,
 			seconds,
 			splash,
+			size,
 		});
 	}
 
@@ -1292,8 +1304,8 @@ export class WaveService implements OnStart {
 		let downed: Projectile | undefined;
 		let at = pivot;
 		for (const shot of this.projectiles) {
-			// Flak flies at fliers, never near it.
-			if (shot.hostile || shot.kind === "flak") continue;
+			// Flak flies at fliers, never near it, and bullets and flames are too quick and small to shoot.
+			if (shot.hostile || (shot.kind !== "rocket" && shot.kind !== "shell")) continue;
 			const t = math.clamp((now - shot.fired) / (shot.lands - shot.fired), 0, 1);
 			const position = bezier(shot.from, shot.control, shot.to, t);
 			const distance = position.sub(pivot).Magnitude;
@@ -1310,8 +1322,10 @@ export class WaveService implements OnStart {
 
 	/**
 	 * Every loaded turret that has cooled down shoots the nearest alien in range that it can hit (see
-	 * `canHit`), and turns its head to face it. Damage scales with the ore it fires and its placer's
-	 * research. Rockets, shells and flak land later.
+	 * `canHit`), or the toughest for one that picks it out, and turns its head to face it. Its ammo
+	 * sets the damage, with its placer's research, and can stretch its range and change its rate. A
+	 * power turret reloads slower on less power. Every shot is a projectile, which lands later, but
+	 * a laser's beam and an arc's lightning, which strike at once.
 	 */
 	private fireTurrets(map: PlanetMap, dt: number) {
 		for (const turret of this.baseService.buildings) {
@@ -1319,21 +1333,25 @@ export class WaveService implements OnStart {
 			const gun = def.turret;
 			const head = turret.head;
 			if (!gun || !head) continue;
+			const ammo = this.baseService.nextAmmo(turret);
 			if (gun.spinUp !== undefined) {
 				// Winds up while it has something to shoot, and down while it hasn't.
-				const engaged = turret.engaged && !turret.ammo.isEmpty();
+				const engaged = turret.engaged && ammo !== undefined;
 				turret.spin = math.clamp(turret.spin + (engaged ? dt / gun.spinUp : -dt / SPIN_DOWN_SECONDS), 0, 1);
 			}
-			if (turret.ammo.isEmpty()) continue;
-			turret.cooldown -= dt;
+			if (!ammo) continue;
+			turret.cooldown -= dt * (gun.energy ? turret.power : 1);
 			if (turret.cooldown > 0) continue;
 			const from = head.Position;
-			let best = def.range ?? 0;
+			const range = (def.range ?? 0) + (ammo.range ?? 0);
+			let best = math.huge;
 			let target: Alien | undefined;
 			for (const [, alien] of this.aliens) {
 				const distance = flatDistance(alien.root.Position, from);
-				if (distance >= best || !canHit(gun.targets, alien)) continue;
-				best = distance;
+				if (distance >= range || !canHit(gun.targets, alien)) continue;
+				const score = gun.strongest ? -alien.health : distance;
+				if (score >= best) continue;
+				best = score;
 				target = alien;
 			}
 			turret.engaged = target !== undefined;
@@ -1342,7 +1360,7 @@ export class WaveService implements OnStart {
 			const at = target.root.Position;
 			// Level at what's on the ground; tipped up at fliers.
 			head.CFrame = CFrame.lookAt(from, target.def.air ? at : new Vector3(at.X, from.Y, at.Z));
-			// Each shot from the next barrel round, and each shell of a volley from its own.
+			// Each shot from the next barrel round, and each of a volley from its own.
 			const fired = turret.fired;
 			const muzzle = (index: number) => {
 				const tip = turret.muzzles[(fired + index) % math.max(turret.muzzles.size(), 1)];
@@ -1350,42 +1368,62 @@ export class WaveService implements OnStart {
 			};
 			// A burst's shots come in quick succession, then it reloads. One that spins up fires faster as it winds.
 			turret.burst = (turret.burst + 1) % (gun.burst ?? 1);
-			const rate = gun.spinUp !== undefined ? SPIN_SLOWEST + (1 - SPIN_SLOWEST) * turret.spin : 1;
-			turret.cooldown = turret.burst === 0 ? gun.seconds / rate : BURST_SECONDS;
-			const damage = gun.damage * (this.baseService.shoot(turret) ?? 0) * statOf(turret.owner, "turretDamage");
-			if (gun.projectile) {
-				for (let i = 0; i < (gun.volley ?? 1); i++) this.loose(map, muzzle(i), target, gun, damage);
-			} else {
-				// A slow gun's shot looks as heavy as the gun; a fast one's every shot can't blast.
-				const size = gun.seconds >= 1 ? def.size : 1;
-				shotMessaging.client.emitAll(ShotMessage.Hit, { from: muzzle(0).Position, to: at, size });
-				this.damageAlien(target.model, damage);
+			const spin = gun.spinUp !== undefined ? SPIN_SLOWEST + (1 - SPIN_SLOWEST) * turret.spin : 1;
+			const rate = spin * (ammo.rate ?? 1);
+			turret.cooldown = turret.burst === 0 ? gun.seconds / rate : (gun.gap ?? BURST_SECONDS);
+			const damage = ammo.damage * statOf(turret.owner, "turretDamage");
+			this.baseService.shoot(turret);
+			if (gun.projectile === "laser") {
+				this.burn(muzzle(0).Position, target, range, damage, gun.targets);
+				continue;
+			}
+			if (gun.projectile === "arc") {
+				this.zap(muzzle(0).Position, target, damage, ammo.chain ?? 0, gun.targets);
+				continue;
+			}
+			const volley = gun.volley ?? 1;
+			for (let i = 0; i < volley; i++) {
+				// Fanned evenly either side of the aim.
+				const turn = (i - (volley - 1) / 2) * (gun.fan ?? 0);
+				this.loose(map, muzzle(i), target, gun, ammo, { damage, range, turn, size: def.size });
 			}
 		}
 	}
 
 	/**
-	 * Fires a rocket, shell or flak out of `muzzle` at `target`, which lands once clients have drawn
-	 * its flight: a rocket shoots out the front, veering off to a random side before curving round
-	 * into the target, chasing it; a shell arcs high and comes down anywhere within the turret's
-	 * `spread` of where the target stood; flak flies straight and fast for where the target will be,
-	 * bursting anywhere within `spread` of it.
+	 * Fires a projectile out of `muzzle` at `target`, which lands once clients have drawn its flight.
+	 * A bullet or flame flies straight for where the target will be by then, turned `turn` degrees
+	 * for a fan, and hits whatever is there when it arrives (see `landProjectiles`): one that pierces
+	 * flies on to the end of the turret's `range`. A rocket shoots out the front, veering off to a
+	 * random side before curving round into the target, chasing it; a shell arcs high and comes down
+	 * anywhere within the turret's `spread` of where the target stood; flak flies straight and fast
+	 * for where the target will be, bursting anywhere within `spread` of it. Homing ammo chases its
+	 * target whatever it is, so it never misses.
 	 */
 	private loose(
 		map: PlanetMap,
 		muzzle: CFrame,
 		target: Alien,
-		gun: NonNullable<BuildingDef["turret"]>,
-		damage: number,
+		gun: TurretDef,
+		ammo: EnergyDef,
+		shot: { readonly damage: number; readonly range: number; readonly turn: number; readonly size: number },
 	) {
 		const from = muzzle.Position;
 		const at = target.root.Position;
 		const distance = at.sub(from).Magnitude;
-		const rocket = gun.projectile === "rocket";
+		const homing = ammo.homing === true;
 		let to = at;
 		let control: Vector3;
 		let seconds: number;
-		if (rocket) {
+		if (gun.projectile === "bullet" || gun.projectile === "flame") {
+			const speed = gun.speed ?? BULLET_SPEED;
+			const lead = at.add(target.velocity.mul(distance / speed));
+			const aim = CFrame.Angles(0, math.rad(shot.turn), 0).VectorToWorldSpace(lead.sub(from).Unit);
+			const reach = ammo.pierce !== undefined ? shot.range : lead.sub(from).Magnitude;
+			to = homing ? at : from.add(aim.mul(reach));
+			control = from.add(to).div(2);
+			seconds = to.sub(from).Magnitude / speed;
+		} else if (gun.projectile === "rocket") {
 			const ahead = muzzle.LookVector.mul(distance * 0.5);
 			const veer = muzzle.RightVector.mul(random.NextNumber(-0.3, 0.3) * distance);
 			control = from
@@ -1400,9 +1438,9 @@ export class WaveService implements OnStart {
 			control = from.add(to).div(2);
 			seconds = to.sub(from).Magnitude / FLAK_SPEED;
 		} else {
-			// Evenly over the circle, not bunched at its middle.
+			// Evenly over the circle, not bunched at its middle. Homing shells come down on the target.
 			const angle = random.NextNumber(0, 2 * math.pi);
-			const off = (gun.spread ?? 0) * math.sqrt(random.NextNumber());
+			const off = homing ? 0 : (gun.spread ?? 0) * math.sqrt(random.NextNumber());
 			const x = at.X + math.cos(angle) * off;
 			const z = at.Z + math.sin(angle) * off;
 			to = new Vector3(x, map.heightAt(x, z), z);
@@ -1412,24 +1450,29 @@ export class WaveService implements OnStart {
 				.add(new Vector3(0, distance * 0.6, 0));
 			seconds = LAUNCH_SECONDS + distance / SHELL_SPEED;
 		}
+		const straight = gun.projectile === "bullet" || gun.projectile === "flame";
 		this.loft(
 			{
-				kind: gun.projectile ?? "shell",
+				// Lasers and arcs never get here (see `fireTurrets`).
+				kind: gun.projectile as Shot["kind"],
 				from,
 				control,
 				to,
-				target: rocket ? target : undefined,
-				damage,
-				splash: gun.splash ?? 0,
+				target: gun.projectile === "rocket" || homing ? target : undefined,
+				damage: shot.damage,
+				splash: ammo.splash ?? 0,
 				targets: gun.targets,
+				pierce: ammo.pierce,
+				size: straight ? shot.size : undefined,
 			},
 			seconds,
 		);
 	}
 
 	/**
-	 * Lands the rockets, shells and bombs that are due, each hurting what's within its splash of where
-	 * it comes down: the aliens a turret's can hit, or the buildings and players for an alien's.
+	 * Lands the shots that are due. An alien's hurts the buildings and players within its splash of
+	 * where it comes down. A turret's hurts the aliens it can hit: every one within its splash, or a
+	 * bullet's the one it meets, if any, or a piercing bullet's those along its flight.
 	 */
 	private landProjectiles() {
 		const now = os.clock();
@@ -1437,9 +1480,81 @@ export class WaveService implements OnStart {
 			if (shot.target && this.aliens.has(shot.target.model)) shot.to = shot.target.root.Position;
 			if (now < shot.lands) return true;
 			if (shot.hostile) this.blastBase(shot.to, shot.splash, shot.damage);
-			else this.blastAliens(shot.to, shot.splash, shot.damage, shot.targets);
+			else if (shot.pierce !== undefined)
+				this.pierceAliens(shot.from, shot.to, shot.damage, shot.targets, shot.pierce);
+			else if (shot.splash > 0) this.blastAliens(shot.to, shot.splash, shot.damage, shot.targets);
+			else this.hitAlien(shot.to, shot.damage, shot.targets);
 			return false;
 		});
+	}
+
+	/** Hurts the alien a bullet landing at `at` meets: the nearest it can hit whose body reaches there, if any. */
+	private hitAlien(at: Vector3, damage: number, targets: "air" | "ground" | undefined) {
+		let best = math.huge;
+		let hit: Alien | undefined;
+		for (const [, alien] of this.aliens) {
+			const off = alien.root.Position.sub(at).Magnitude;
+			if (off > alien.radius + BULLET_SLACK || off >= best || !canHit(targets, alien)) continue;
+			best = off;
+			hit = alien;
+		}
+		if (hit) this.damageAlien(hit.model, damage);
+	}
+
+	/**
+	 * Hurts the aliens a piercing bullet or a laser passed through from `from` to `to`, nearest
+	 * `from` first: those it can hit whose body reaches its line, up to one more than it pierces.
+	 * They're where they are as it lands.
+	 */
+	private pierceAliens(
+		from: Vector3,
+		to: Vector3,
+		damage: number,
+		targets: "air" | "ground" | undefined,
+		pierce: number,
+	) {
+		const line = to.sub(from);
+		const length = line.Magnitude;
+		if (length < 1e-3) return;
+		const along = line.div(length);
+		const struck = new Array<[number, Alien]>();
+		for (const [, alien] of this.aliens) {
+			if (!canHit(targets, alien)) continue;
+			const offset = alien.root.Position.sub(from);
+			const t = math.clamp(offset.Dot(along), 0, length);
+			if (offset.sub(along.mul(t)).Magnitude <= alien.radius + BULLET_SLACK) struck.push([t, alien]);
+		}
+		struck.sort((a, b) => a[0] < b[0]);
+		for (let i = 0; i < math.min(struck.size(), pierce + 1); i++) this.damageAlien(struck[i][1].model, damage);
+	}
+
+	/** A laser's pulse: burns every alien it can hit along its beam, from `from` through `target` out to `range`. */
+	private burn(from: Vector3, target: Alien, range: number, damage: number, targets: "air" | "ground" | undefined) {
+		const to = from.add(target.root.Position.sub(from).Unit.mul(range));
+		this.pierceAliens(from, to, damage, targets, math.huge);
+		shotMessaging.client.emitAll(ShotMessage.Beam, { from, to });
+	}
+
+	/** Lightning: strikes `target`, then leaps `chain` times on to the nearest alien it can hit within `ARC_JUMP` of the last. */
+	private zap(from: Vector3, target: Alien, damage: number, chain: number, targets: "air" | "ground" | undefined) {
+		const points = [from];
+		const struck = new Set<Alien>();
+		let striking: Alien | undefined = target;
+		while (striking && struck.size() <= chain) {
+			const at = striking.root.Position;
+			struck.add(striking);
+			points.push(at);
+			this.damageAlien(striking.model, damage);
+			let best = ARC_JUMP;
+			striking = undefined;
+			for (const [, alien] of this.aliens) {
+				const distance = alien.root.Position.sub(at).Magnitude;
+				if (distance >= best || struck.has(alien) || !canHit(targets, alien)) continue;
+				best = distance;
+				striking = alien;
+			}
+		}
+		shotMessaging.client.emitAll(ShotMessage.Arc, { points });
 	}
 
 	/**

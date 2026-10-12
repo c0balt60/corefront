@@ -22,6 +22,7 @@ export const enum BaseMessage {
 	Drop,
 	Ping,
 	Pinged,
+	Link,
 }
 
 /**
@@ -88,6 +89,8 @@ export interface BaseMessageData {
 	[BaseMessage.Ping]: undefined;
 	/** Server -> clients: someone pinged, so show every alien for a while (see `PingController`). */
 	[BaseMessage.Pinged]: undefined;
+	/** Client -> server: link the power node covering cell (x, z) to the building covering (toX, toZ), or unlink them if they are. */
+	[BaseMessage.Link]: { readonly x: number; readonly z: number; readonly toX: number; readonly toZ: number };
 }
 
 /** One building to place: its -X/-Z corner on cell (x, z), turned `rotation` quarter turns (0-3, see `DIRECTIONS`). */
@@ -176,13 +179,18 @@ export const enum ShotMessage {
 	Hit,
 	Blast,
 	Downed,
+	Beam,
+	Arc,
 }
 
-/** A rocket, shell or burst of flak, flying a curve from `from` that bends toward `control` (see `bezier`), for `seconds`. */
+/**
+ * A bullet, flame, rocket, shell or burst of flak, flying a curve from `from` that bends toward
+ * `control` (see `bezier`; straight for bullets, flames and flak), for `seconds`.
+ */
 export interface Shot {
 	/** Which shot it is, so one shot down in the air can be told apart. */
 	readonly id: number;
-	readonly kind: "rocket" | "shell" | "flak";
+	readonly kind: "bullet" | "flame" | "rocket" | "shell" | "flak";
 	readonly from: Vector3;
 	readonly control: Vector3;
 	/** Where it lands, unless it chases `target` while that lives. */
@@ -191,21 +199,26 @@ export interface Shot {
 	readonly seconds: number;
 	/** Its blast's radius, in studs. */
 	readonly splash: number;
+	/** Bullets and flames: how heavy they look, the size of the turret that fired them. */
+	readonly size?: number;
 }
 
 export interface ShotMessageData {
-	/** Server -> clients: a turret fired a rocket, shell or flak, or an alien a shell, bomb or rocket. */
+	/** Server -> clients: a turret fired a bullet, flame, rocket, shell or flak, or an alien a shell, bomb or rocket. */
 	[ShotMessage.Fired]: Shot;
 	/**
-	 * Server -> clients: a turret's shot hit at once, from its barrel at `from` to `to`, or an alien's
-	 * if `hostile`. `size` is how heavy it looks: a slow gun's size in cells, or 1 for a fast one,
-	 * whose every shot can't blast.
+	 * Server -> clients: an alien's shot hit at once, from its barrel at `from` to `to`. `size` is how
+	 * heavy it looks: 2 and up also blast.
 	 */
 	[ShotMessage.Hit]: { readonly from: Vector3; readonly to: Vector3; readonly size: number; readonly hostile?: true };
 	/** Server -> clients: something blew up on the spot, hurting what was within `splash` studs. */
 	[ShotMessage.Blast]: { readonly at: Vector3; readonly splash: number };
 	/** Server -> clients: an alien's point defence shot the shot `id` down in the air, from its barrel at `from`. */
 	[ShotMessage.Downed]: { readonly id: number; readonly from: Vector3 };
+	/** Server -> clients: a laser turret's beam burned from `from` to `to` (one pulse of many). */
+	[ShotMessage.Beam]: { readonly from: Vector3; readonly to: Vector3 };
+	/** Server -> clients: lightning leapt through `points`, from a turret's coil to each alien it struck in turn. */
+	[ShotMessage.Arc]: { readonly points: ReadonlyArray<Vector3> };
 }
 
 /** The point `t` (0 to 1) of the way along a shot's curve: a quadratic Bézier from `from` bending toward `control`. */

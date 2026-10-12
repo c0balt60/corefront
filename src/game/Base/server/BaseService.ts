@@ -10,24 +10,29 @@ import {
 	beltModel,
 	buildingModel,
 	buildToolHandle,
+	linkLines,
 	setAmmo,
 	setFilter,
 	setHealth,
+	setPower,
 } from "game/Base/server/models";
 import { BaseMessage, baseMessaging, BeltMessage, beltMessaging, type Phase } from "game/Base/shared/base-network";
 import { alongPath, type BeltPath, DIRECTIONS, entryOf, feedsBelt, runPaths } from "game/Base/shared/belts";
 import {
-	AMMO,
 	BUILD_RANGE,
 	BUILD_TOOL,
 	type BuildableKind,
 	BUILDABLE,
+	type BuildingDef,
 	BUILDINGS,
 	type BuildingKind,
+	type EnergyDef,
 	inDropZone,
+	isBelt,
+	isPowered,
+	linkReach,
 	MACHINE_SECONDS,
 	MAX_LINE,
-	isBelt,
 	MINE_SECONDS,
 	REFUND,
 	replaces,
@@ -86,10 +91,14 @@ export interface Building {
 	path?: BeltPath;
 	/** Belts: the ore on them, back to front. Routers: the one they hold. */
 	readonly items: Array<Item>;
-	/** Turrets: the ore loaded, fired from the front, and how many shots the front one has given. */
-	readonly ammo: Array<ResourceId>;
+	/**
+	 * Turrets: the shots loaded of each ore, the one loaded last at the back, which fires first, and
+	 * all of them together. And the shots fired, so each comes from the next barrel round.
+	 */
+	readonly ammo: Array<{ readonly resource: ResourceId; amount: number }>;
+	totalAmmo: number;
 	fired: number;
-	/** Crafters: how much of each input they hold. */
+	/** Crafters: how much of each input they hold. Generators: their fuel. Storage: everything in it. */
 	readonly input: Stock;
 	/** Sorters: the ore they let straight through. Everything else turns aside. Sources: the ore they hand out. */
 	filter?: ResourceId;
@@ -97,12 +106,49 @@ export interface Building {
 	turn: number;
 	/** Belts: what their parts were last made for (see `beltLook`), so they're only remade when it changes. */
 	look: string;
+	/** What it's linked to on the power network: a node's links, or the nodes linked to anything else (see `powerNetwork`). */
+	readonly links: Set<Building>;
+	/** What uses power: the share of its need its network last gave it, 0 to 1 (see `PowerService`). */
+	power: number;
+	/** Batteries: the power they hold. */
+	charge: number;
+	/** Generators that burn fuel: seconds left of the item burning, and that fuel's efficiency. */
+	burn: number;
+	efficiency: number;
+	/** Drills and crafters: how far to their next go, 0 to 1. Each machine tick adds their share of power (see `runMachines`). */
+	work: number;
+}
+
+/** Every building on `start`'s power network: what it links to, what those link to, and so on. */
+export function powerNetwork(start: Building): Set<Building> {
+	const network = new Set<Building>([start]);
+	const queue = [start];
+	while (!queue.isEmpty()) {
+		for (const other of queue.pop()!.links) {
+			if (network.has(other)) continue;
+			network.add(other);
+			queue.push(other);
+		}
+	}
+	return network;
+}
+
+/** Whether a building takes `resource` in to keep, burn or make something with (see `Building.input`). */
+function holds(def: BuildingDef, resource: ResourceId): boolean {
+	return (
+		def.store !== undefined ||
+		def.generator?.fuel?.[resource] !== undefined ||
+		def.craft?.inputs.some((stack) => stack.resource === resource) === true
+	);
 }
 
 /** A liberated planet's base while the team is away: everything but the Core, which left with them. */
 interface SavedBase {
 	readonly buildings: ReadonlyArray<
-		Pick<Building, "kind" | "cell" | "rotation" | "owner" | "health" | "stored" | "filter">
+		Pick<Building, "kind" | "cell" | "rotation" | "owner" | "health" | "stored" | "filter" | "input"> & {
+			/** The cells of what it's power-linked to. */
+			readonly linked: ReadonlyArray<number>;
+		}
 	>;
 	/** What stayed in storage: whatever wasn't loaded as cargo or burnt as fuel. */
 	readonly pool: Stock;
@@ -127,6 +173,9 @@ const isCellData = t.interface({ x: t.integer, z: t.integer });
 /** A cell, and an ore or none: a sorter's filter, or what to take off a belt. */
 const isCellOreData = t.interface({ x: t.integer, z: t.integer, resource: t.optional(t.keyOf(RESOURCES)) });
 const isDropData = t.interface({ resource: t.keyOf(RESOURCES) });
+const isLinkData = t.interface({ x: t.integer, z: t.integer, toX: t.integer, toZ: t.integer });
+/** What's lit in the ore picked for it: a Sorter's, a Source's or an Unloader's `filter`. */
+const FILTERED: ReadonlySet<BuildingKind> = new Set(["sorter", "source", "unloader"]);
 
 function makeFolder(name: string, parent: Instance): Folder {
 	const instance = new Instance("Folder");
@@ -156,7 +205,7 @@ function footprint(cell: number, size: number): Array<number> {
  * building takes in, and mining, collecting, loading and dropping by hand.
  * `WaveService` drives it: it calls {@link BaseService.reset} for each new
  * planet and attacks what is built here. `LogisticsService` moves ore between
- * the buildings.
+ * the buildings, and `PowerService` power along the links nodes make here.
  */
 @Service()
 export class BaseService implements OnStart {
@@ -220,6 +269,7 @@ export class BaseService implements OnStart {
 			const building = this.reachable(player, data);
 			if (building) this.load(player, building);
 		});
+		baseMessaging.server.on(BaseMessage.Link, (player, data) => this.toggleLink(player, data));
 
 		// Only tells the client to show the build bar.
 		const tool = new Instance("Tool");
@@ -305,6 +355,15 @@ export class BaseService implements OnStart {
 			setHealth(building.model, building.health, building.maxHealth);
 			if (building.resource !== undefined) building.model.SetAttribute("Stored", old.stored);
 			if (old.filter !== undefined) setFilter(building.model, old.filter);
+			for (const [resource, amount] of pairs(old.input)) this.hold(building, resource, amount);
+		}
+		// Links once everything's back, both ends of each.
+		for (const old of saved?.buildings ?? []) {
+			const building = this.cells.get(old.cell);
+			for (const cell of old.linked) {
+				const other = this.cells.get(cell);
+				if (building && other && !building.links.has(other)) this.link(building, other);
+			}
 		}
 	}
 
@@ -337,8 +396,11 @@ export class BaseService implements OnStart {
 	/** Keeps the active planet's base, all but the Core, for when the team comes back to `planet`. */
 	save(planet: number) {
 		const buildings = new Array<SavedBase["buildings"][number]>();
-		for (const { kind, cell, rotation, owner, health, stored, filter } of this.buildings) {
-			if (kind !== "core") buildings.push({ kind, cell, rotation, owner, health, stored, filter });
+		for (const { kind, cell, rotation, owner, health, stored, filter, input, links } of this.buildings) {
+			if (kind === "core") continue;
+			const linked = new Array<number>();
+			for (const other of links) linked.push(other.cell);
+			buildings.push({ kind, cell, rotation, owner, health, stored, filter, input: { ...input }, linked });
 		}
 		this.saved.set(planet, { buildings, pool: { ...this.poolAtom() } });
 	}
@@ -402,7 +464,8 @@ export class BaseService implements OnStart {
 
 	/**
 	 * Takes one `resource` into a building that keeps or uses ore: the Core's pool (up to its capacity),
-	 * a turret's ammo or a crafter's inputs. False when it won't take it; carriers are `LogisticsService`'s.
+	 * a turret's ammo, a crafter's inputs, a generator's fuel or storage. False when it won't take it;
+	 * carriers are `LogisticsService`'s.
 	 */
 	receive(building: Building, resource: ResourceId): boolean {
 		const def = BUILDINGS[building.kind];
@@ -410,33 +473,59 @@ export class BaseService implements OnStart {
 			if ((this.poolAtom()[resource] ?? 0) >= teamStat("coreCapacity")) return false;
 			this.pay([{ resource, amount: 1 }], 1);
 		} else if (def.turret) {
-			if (AMMO[resource] === undefined || building.ammo.size() >= def.turret.magazine) return false;
-			building.ammo.push(resource);
-			setAmmo(building.model, building.ammo.size());
-		} else if (def.craft) {
-			const held = building.input[resource] ?? 0;
-			const wanted = def.craft.inputs.some((stack) => stack.resource === resource);
-			if (!wanted || held >= def.craft.storage) return false;
-			building.input[resource] = held + 1;
-			building.model.SetAttribute(`Input_${resource}`, held + 1);
+			const shots = def.turret.ammo[resource]?.shots;
+			if (shots === undefined || building.totalAmmo + shots > def.turret.maxAmmo) return false;
+			// Mindustry's way: the ore loaded last goes to the back, to fire first.
+			const index = building.ammo.findIndex((entry) => entry.resource === resource);
+			const entry = index >= 0 ? building.ammo.remove(index)! : { resource, amount: 0 };
+			entry.amount += shots;
+			building.ammo.push(entry);
+			building.totalAmmo += shots;
+			setAmmo(building.model, building.totalAmmo, resource);
 		} else {
-			return false;
+			const held = building.input[resource] ?? 0;
+			const limit = def.craft?.storage ?? def.store ?? def.generator?.storage;
+			if (limit === undefined || !holds(def, resource) || held >= limit) return false;
+			this.hold(building, resource, held + 1);
 		}
 		return true;
 	}
 
-	/** Spends one of a turret's shots. Returns how hard it hits, times the turret's damage, or undefined with no ammo. */
-	shoot(turret: Building): number | undefined {
-		const def = BUILDINGS[turret.kind].turret;
-		const resource = turret.ammo[0];
-		if (!def || resource === undefined) return undefined;
+	/** Sets how much of `resource` a building holds (see `Building.input`), and its `Input_` attribute. */
+	hold(building: Building, resource: ResourceId, amount: number) {
+		building.input[resource] = amount;
+		building.model.SetAttribute(`Input_${resource}`, amount);
+	}
+
+	/** What the Core or a storage building holds, for an Unloader to take. */
+	stock(store: Building): Stock {
+		return store === this.core ? this.poolAtom() : store.input;
+	}
+
+	/** Takes one `resource` out of the Core or a storage building, for an Unloader. Check `stock` first. */
+	release(store: Building, resource: ResourceId) {
+		if (store === this.core) this.pay([{ resource, amount: 1 }], -1);
+		else this.hold(store, resource, (store.input[resource] ?? 0) - 1);
+	}
+
+	/** How a turret's next shot fires: the ore loaded last's, or a power turret's while it has power. Undefined when it can't. */
+	nextAmmo(turret: Building): EnergyDef | undefined {
+		const gun = BUILDINGS[turret.kind].turret;
+		if (gun?.energy) return turret.power > 0 ? gun.energy : undefined;
+		const entry = turret.ammo[turret.ammo.size() - 1];
+		return entry && gun?.ammo[entry.resource];
+	}
+
+	/** Spends one of a turret's shots, of the ore it fires next (see `nextAmmo`). */
+	shoot(turret: Building) {
+		const entry = turret.ammo[turret.ammo.size() - 1];
+		if (!entry) return;
 		turret.fired++;
-		if (turret.fired >= def.shots) {
-			turret.ammo.shift();
-			turret.fired = 0;
-			setAmmo(turret.model, turret.ammo.size());
-		}
-		return AMMO[resource];
+		turret.totalAmmo--;
+		entry.amount--;
+		if (entry.amount <= 0) turret.ammo.pop();
+		// ponytail: an attribute write per shot; write only when an item's worth is spent if fast turrets lag replication.
+		setAmmo(turret.model, turret.totalAmmo, turret.ammo[turret.ammo.size() - 1]?.resource);
 	}
 
 	/** The building on the cell next to `cell` toward `side` (see `DIRECTIONS`), if any. */
@@ -606,6 +695,7 @@ export class BaseService implements OnStart {
 		}
 		this.pay(def.cost, -1);
 		const built = this.build(map, kind, cell, rotation, player.UserId);
+		this.autoLink(built);
 		if (replaced && isBelt(replaced.kind) && isBelt(kind) && !replaced.items.isEmpty()) {
 			for (const item of replaced.items) built.items.push(item);
 			const items = built.items.map(({ resource, progress }) => ({ cell, resource, progress }));
@@ -629,14 +719,90 @@ export class BaseService implements OnStart {
 		this.refreshAround(map, building);
 	}
 
-	/** Sets the ore a Sorter lets straight through, or a Source hands out, or none. */
+	/** Sets the ore a Sorter lets straight through, a Source hands out or an Unloader takes, or none. */
 	private configure(player: Player, data: unknown) {
 		if (!isCellOreData(data) || this.phase() !== "active") return;
 		const building = this.buildingOn(data.x, data.z);
-		if (building?.kind !== "sorter" && building?.kind !== "source") return;
+		if (!building || !FILTERED.has(building.kind)) return;
 		if (!this.inReach(player, building.position)) return this.notify(player, "That's too far away to set.");
 		building.filter = data.resource;
 		setFilter(building.model, data.resource);
+	}
+
+	/** Links a power node to a building in its range, or unlinks them if they're linked. */
+	private toggleLink(player: Player, data: unknown) {
+		if (!isLinkData(data) || this.phase() !== "active") return;
+		const node = this.buildingOn(data.x, data.z);
+		const other = this.buildingOn(data.toX, data.toZ);
+		if (!node || !other || node === other || BUILDINGS[node.kind].node === undefined || !isPowered(other.kind))
+			return;
+		if (!this.inReach(player, node.position)) return this.notify(player, "That's too far away to link.");
+		if (node.links.has(other)) return this.unlink(node, other);
+		if (!linkReach(node.kind, node.cell, other.kind, other.cell)) {
+			return this.notify(player, "That's out of the node's range.");
+		}
+		if (this.full(node) || this.full(other)) return this.notify(player, "That node has no links to spare.");
+		this.link(node, other);
+	}
+
+	/**
+	 * Links a building just placed, Mindustry style. A node links what's in its range, nearest first,
+	 * skipping what's already on its network, until it has no links to spare. Anything else on the
+	 * power network links to the nearest node in range with one to spare.
+	 */
+	private autoLink(building: Building) {
+		if (!isPowered(building.kind)) return;
+		const near = new Array<Building>();
+		for (const other of this.buildings) {
+			if (other === building || !isPowered(other.kind)) continue;
+			if (linkReach(building.kind, building.cell, other.kind, other.cell)) near.push(other);
+		}
+		const distance = (other: Building) => other.position.sub(building.position).Magnitude;
+		near.sort((a, b) => distance(a) < distance(b));
+		if (BUILDINGS[building.kind].node === undefined) {
+			const node = near.find((other) => BUILDINGS[other.kind].node !== undefined && !this.full(other));
+			if (node) this.link(node, building);
+			return;
+		}
+		for (const other of near) {
+			if (this.full(building)) break;
+			if (!this.full(other) && !powerNetwork(building).has(other)) this.link(building, other);
+		}
+	}
+
+	/** Whether a node has made every link it can. Anything else takes any number. */
+	private full(building: Building): boolean {
+		const most = BUILDINGS[building.kind].node;
+		return most !== undefined && building.links.size() >= most;
+	}
+
+	private link(a: Building, b: Building) {
+		a.links.add(b);
+		b.links.add(a);
+		this.drawLinks(a);
+		this.drawLinks(b);
+	}
+
+	private unlink(a: Building, b: Building) {
+		a.links.delete(b);
+		b.links.delete(a);
+		this.drawLinks(a);
+		this.drawLinks(b);
+	}
+
+	/** Redraws a node's links (see `linkLines`) and writes their count. A link between two nodes is drawn by the one on the lower cell. */
+	private drawLinks(building: Building) {
+		if (BUILDINGS[building.kind].node === undefined) return;
+		const tip = (of: Building) => {
+			const part = of.model.FindFirstChild("Tip");
+			return part?.IsA("BasePart") ? part.Position : of.position;
+		};
+		const ends = new Array<Vector3>();
+		for (const other of building.links) {
+			if (BUILDINGS[other.kind].node === undefined || other.cell > building.cell) ends.push(tip(other));
+		}
+		linkLines(building.model, tip(building), ends);
+		building.model.SetAttribute("Links", building.links.size());
 	}
 
 	private remove(player: Player, data: unknown) {
@@ -692,10 +858,17 @@ export class BaseService implements OnStart {
 			entry: (rotation + 2) % 4,
 			items: [],
 			ammo: [],
+			totalAmmo: 0,
 			fired: 0,
 			input: {},
 			turn: 0,
 			look: "",
+			links: new Set(),
+			power: 0,
+			charge: 0,
+			burn: 0,
+			efficiency: 0,
+			work: 0,
 		};
 		if (building.resource !== undefined) {
 			model.SetAttribute("Resource", building.resource);
@@ -703,6 +876,7 @@ export class BaseService implements OnStart {
 		}
 		if (def.drill) model.SetAttribute("Yield", this.drillYield(building));
 		for (const { resource } of def.craft?.inputs ?? []) model.SetAttribute(`Input_${resource}`, 0);
+		for (const [resource] of pairs(def.generator?.fuel ?? {})) model.SetAttribute(`Input_${resource}`, 0);
 		this.buildings.add(building);
 		for (const covered of footprint(cell, def.size)) this.cells.set(covered, building);
 		this.revision++;
@@ -778,8 +952,12 @@ export class BaseService implements OnStart {
 		model.SetAttribute("Rotation", building.rotation);
 		building.position = body.Position;
 		setHealth(model, building.health, building.maxHealth);
-		if (def.turret) setAmmo(model, building.ammo.size());
-		if (kind === "sorter" || kind === "source") setFilter(model, building.filter);
+		if (def.turret && !def.turret.energy) {
+			setAmmo(model, building.totalAmmo, building.ammo[building.ammo.size() - 1]?.resource);
+		}
+		if (FILTERED.has(kind)) setFilter(model, building.filter);
+		if (def.power !== undefined) setPower(model, building.power);
+		this.drawLinks(building);
 	}
 
 	/** Whether the building beside a belt on `side` puts ore onto it. Never what's in front of it. */
@@ -903,6 +1081,11 @@ export class BaseService implements OnStart {
 	}
 
 	private demolish(building: Building) {
+		for (const other of building.links) {
+			other.links.delete(building);
+			this.drawLinks(other);
+		}
+		building.links.clear();
 		building.model.Destroy();
 		this.buildings.delete(building);
 		for (const covered of footprint(building.cell, BUILDINGS[building.kind].size)) this.cells.delete(covered);
@@ -957,15 +1140,35 @@ export class BaseService implements OnStart {
 		return building;
 	}
 
-	/** Moves what a drill or crafter has made, or the ore on a belt (just `only`, if given), into a player's pack, as much as fits. */
+	/**
+	 * Moves what a drill or crafter has made, what storage holds, or the ore on a belt (just `only`,
+	 * if given), into a player's pack, as much as fits.
+	 */
 	private collect(player: Player, building: Building, only?: ResourceId) {
 		if (!this.buildings.has(building)) return;
 		if (isBelt(building.kind)) return this.takeOff(player, building, only);
+		if (BUILDINGS[building.kind].store !== undefined) return this.empty(player, building);
 		if (building.resource === undefined) return;
 		if (building.stored === 0) return this.notify(player, "Nothing to collect yet.");
 		building.stored -= this.give(player, building.resource, building.stored);
 		building.model.SetAttribute("Stored", building.stored);
 		if (building.stored > 0) this.notify(player, FULL);
+	}
+
+	/** Moves everything a storage building holds into a player's pack, as much as fits. */
+	private empty(player: Player, store: Building) {
+		let found = false;
+		let full = false;
+		for (const resource of RESOURCE_ORDER) {
+			const held = store.input[resource] ?? 0;
+			if (held === 0) continue;
+			found = true;
+			const given = this.give(player, resource, held);
+			this.hold(store, resource, held - given);
+			full ||= given < held;
+		}
+		if (!found) this.notify(player, "Nothing to collect yet.");
+		else if (full) this.notify(player, FULL);
 	}
 
 	/** Moves the ore on a belt, or just the `only` ore, into a player's pack, front first, as much as fits. Clients redraw what's left. */
@@ -1001,29 +1204,38 @@ export class BaseService implements OnStart {
 
 	/**
 	 * Moves what a player carries into a building, as much as it takes: everything into the Core
-	 * (see `deposit`), ammo into a turret, its inputs into a crafter. The rest stays carried.
+	 * (see `deposit`) or storage, ammo into a turret, its inputs into a crafter, fuel into a
+	 * generator. The rest stays carried.
 	 */
 	private load(player: Player, building: Building) {
 		if (!this.buildings.has(building)) return;
 		if (building === this.core) return this.deposit(player);
 		const def = BUILDINGS[building.kind];
-		if (!def.turret && !def.craft) return;
+		if (def.turret?.energy) return this.notify(player, "It runs on power, not ammo.");
+		if (!def.turret && !def.craft && def.store === undefined && !def.generator?.fuel) return;
 		const left: Stock = {};
 		let loaded = 0;
+		let carried = 0;
 		for (const [resource, amount] of pairs(this.inventories.get(player) ?? {})) {
 			let kept = amount;
 			while (kept > 0 && this.receive(building, resource)) kept--;
 			loaded += amount - kept;
+			carried += amount;
 			if (kept > 0) left[resource] = kept;
 		}
 		if (loaded > 0) return this.setInventory(player, left);
-		const craft = def.craft;
-		const full = craft
-			? craft.inputs.every(({ resource }) => (building.input[resource] ?? 0) >= craft.storage)
-			: building.ammo.size() >= (def.turret?.magazine ?? 0);
-		const need = craft
-			? `Carry ${craft.inputs.map(({ resource }) => RESOURCES[resource].name).join(", ")} to load it.`
-			: "Carry ore to load it. Coal won't fire.";
+		if (def.store !== undefined)
+			return this.notify(player, carried > 0 ? "It's full." : "You have nothing to store.");
+		const turret = def.turret;
+		const room = (turret?.maxAmmo ?? 0) - building.totalAmmo;
+		const limit = def.craft?.storage ?? def.generator?.storage ?? 0;
+		const takes = RESOURCE_ORDER.filter((resource) =>
+			turret ? turret.ammo[resource] !== undefined : holds(def, resource),
+		);
+		const full = turret
+			? takes.every((resource) => turret.ammo[resource]!.shots > room)
+			: takes.every((resource) => (building.input[resource] ?? 0) >= limit);
+		const need = `Carry ${takes.map((resource) => RESOURCES[resource].name).join(", ")} to load it.`;
 		this.notify(player, full ? "It's fully loaded." : need);
 	}
 
@@ -1049,32 +1261,42 @@ export class BaseService implements OnStart {
 		if (kept > 0) this.notify(player, "The Core is full. Research Core Silos for more room.");
 	}
 
-	/** Drills mine, crafters craft, and menders repair every damaged building in their range. */
+	/**
+	 * Drills mine, crafters craft, and menders repair every damaged building in their range. What
+	 * needs power goes slower on less: a drill or crafter goes once it's had a full tick's worth, and
+	 * a mender repairs its share.
+	 */
 	private runMachines() {
 		for (const building of this.buildings) {
 			const def = BUILDINGS[building.kind];
+			const share = def.power !== undefined ? building.power : 1;
+			building.work = math.min(building.work + share, 1);
+			const ready = building.work >= 1;
 			if (def.drill && building.resource !== undefined) {
 				// Follows its owner's research as it comes in.
 				const mined = this.drillYield(building);
 				building.model.SetAttribute("Yield", mined);
-				if (building.stored < def.drill.storage) {
+				if (ready && building.stored < def.drill.storage) {
 					building.stored = math.min(building.stored + mined, def.drill.storage);
 					building.model.SetAttribute("Stored", building.stored);
+					building.work = 0;
 				}
 			}
 			const craft = def.craft;
-			const ready = craft?.inputs.every(({ resource, amount }) => (building.input[resource] ?? 0) >= amount);
-			if (craft && ready && building.stored < craft.storage) {
+			const stocked = craft?.inputs.every(({ resource, amount }) => (building.input[resource] ?? 0) >= amount);
+			if (craft && stocked && ready && building.stored < craft.storage) {
 				for (const { resource, amount } of craft.inputs) {
-					building.input[resource] = (building.input[resource] ?? 0) - amount;
-					building.model.SetAttribute(`Input_${resource}`, building.input[resource]);
+					this.hold(building, resource, (building.input[resource] ?? 0) - amount);
 				}
 				building.stored++;
 				building.model.SetAttribute("Stored", building.stored);
+				building.work = 0;
 			}
-			if (def.repair !== undefined && def.range !== undefined) {
+			if (def.repair !== undefined && def.range !== undefined && share > 0) {
 				for (const other of this.buildings) {
-					if (other.position.sub(building.position).Magnitude <= def.range) this.repair(other, def.repair);
+					if (other.position.sub(building.position).Magnitude <= def.range) {
+						this.repair(other, def.repair * share);
+					}
 				}
 			}
 		}
