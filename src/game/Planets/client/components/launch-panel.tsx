@@ -1,8 +1,11 @@
-import Vide, { Index, source } from "@rbxts/vide";
+import { RunService } from "@rbxts/services";
+import Vide, { cleanup, effect, Index, source } from "@rbxts/vide";
+import { useSpring } from "@rbxts/vide-ripple";
 
 import { Button } from "core/Interface/client/components/button";
+import { Spinner } from "core/Interface/client/components/spinner";
 import { useAppear, useScramble } from "core/Interface/client/motion";
-import { COLORS, FONT_DISPLAY } from "core/Interface/client/theme";
+import { COLORS, FONT_DISPLAY, FONT_LABEL, SPRINGS } from "core/Interface/client/theme";
 import type { Planet } from "core/Worlds/shared/star-system";
 import { amountOf, canAfford } from "game/Base/client/base-state";
 import { HudBox, Label, Swatch } from "game/Base/client/components/base-hud";
@@ -280,13 +283,29 @@ export function PlanPanel({ planets, plan, userId, onReady, onCancel, show }: Pl
 
 interface TravelOverlayProps {
 	readonly destination: () => string;
+	/** How much of the world is generated, 0 to 1. */
+	readonly progress: () => number;
 	readonly show: () => boolean;
 }
 
-/** Black over the screen while the next planet generates, with where the core is headed. Fades in and out. */
-export function TravelOverlay({ destination, show }: TravelOverlayProps) {
+/** How wide the overlay's progress bar is, in pixels. */
+const BAR_WIDTH = 420;
+
+/**
+ * Black over the screen while the next planet generates: where the core is headed, a spinner and a
+ * bar that fills as the world does, so the wait reads as loading, not as the game hanging. Fades in and out.
+ */
+export function TravelOverlay({ destination, progress, show }: TravelOverlayProps) {
 	const fade = useAppear(show);
 	const text = useScramble("banner", () => `EN ROUTE TO ${destination().upper()}`, 0.2, 0.6);
+	const [fill, fillSpring] = useSpring<number>(0, SPRINGS.smooth);
+	effect(() => fillSpring.setGoal(math.clamp(progress(), 0, 1)));
+	const now = source(os.clock());
+	cleanup(RunService.Heartbeat.Connect(() => now(os.clock())));
+	const status = () => {
+		if (progress() >= 1) return "WORLD READY";
+		return `GENERATING WORLD${string.rep(".", math.floor(now() * 3) % 4)}`;
+	};
 
 	return (
 		<frame
@@ -297,18 +316,66 @@ export function TravelOverlay({ destination, show }: TravelOverlayProps) {
 			Size={UDim2.fromScale(1, 1)}
 			ZIndex={20}
 		>
-			<textlabel
+			<canvasgroup
 				AnchorPoint={new Vector2(0.5, 0.5)}
 				BackgroundTransparency={1}
-				FontFace={FONT_DISPLAY}
+				GroupTransparency={() => 1 - math.clamp(fade(), 0, 1)}
 				Position={UDim2.fromScale(0.5, 0.5)}
-				Size={UDim2.fromOffset(700, 40)}
-				Text={text}
-				TextColor3={COLORS.text}
-				TextScaled={true}
-				TextTransparency={() => 1 - math.clamp(fade(), 0, 1)}
+				Size={UDim2.fromOffset(700, 220)}
 				ZIndex={21}
-			/>
+			>
+				<Spinner
+					anchorPoint={new Vector2(0.5, 0)}
+					position={UDim2.fromScale(0.5, 0)}
+					size={UDim2.fromOffset(56, 56)}
+					show={show}
+				/>
+				<textlabel
+					AnchorPoint={new Vector2(0.5, 0)}
+					BackgroundTransparency={1}
+					FontFace={FONT_DISPLAY}
+					Position={UDim2.fromOffset(350, 80)}
+					Size={UDim2.fromOffset(700, 40)}
+					Text={text}
+					TextColor3={COLORS.text}
+					TextScaled={true}
+				/>
+				<frame
+					AnchorPoint={new Vector2(0.5, 0)}
+					BackgroundColor3={COLORS.subtext}
+					BackgroundTransparency={0.7}
+					BorderSizePixel={0}
+					Position={UDim2.fromOffset(350, 140)}
+					Size={UDim2.fromOffset(BAR_WIDTH, 6)}
+				>
+					<uicorner CornerRadius={new UDim(0.5, 0)} />
+					<frame BackgroundColor3={COLORS.accent} BorderSizePixel={0} Size={() => UDim2.fromScale(fill(), 1)}>
+						<uicorner CornerRadius={new UDim(0.5, 0)} />
+					</frame>
+				</frame>
+				<textlabel
+					AnchorPoint={new Vector2(0.5, 0)}
+					BackgroundTransparency={1}
+					FontFace={FONT_LABEL}
+					Position={UDim2.fromOffset(350, 154)}
+					Size={UDim2.fromOffset(BAR_WIDTH, 18)}
+					Text={status}
+					TextColor3={COLORS.subtext}
+					TextScaled={true}
+					TextXAlignment={Enum.TextXAlignment.Left}
+				/>
+				<textlabel
+					AnchorPoint={new Vector2(0.5, 0)}
+					BackgroundTransparency={1}
+					FontFace={FONT_LABEL}
+					Position={UDim2.fromOffset(350, 154)}
+					Size={UDim2.fromOffset(BAR_WIDTH, 18)}
+					Text={() => `${math.floor(fill() * 100 + 0.5)}%`}
+					TextColor3={COLORS.text}
+					TextScaled={true}
+					TextXAlignment={Enum.TextXAlignment.Right}
+				/>
+			</canvasgroup>
 		</frame>
 	);
 }

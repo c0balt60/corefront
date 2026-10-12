@@ -24,6 +24,7 @@ import { PlanetsService } from "game/Planets/server/PlanetsService";
 import { TravelService } from "game/Planets/server/TravelService";
 import { statOf, teamStat } from "game/Research/server/research-store";
 import type { PlanetMap } from "game/Terrain/server/planet-map";
+import { TerrainService } from "game/Terrain/server/TerrainService";
 import { CELL_STUDS, cellAt, cellCenter, GRID_SIZE } from "game/Terrain/shared/map";
 
 export const isAlienKind = (value: unknown): value is AlienKind => ALIEN_KINDS.includes(value as AlienKind);
@@ -666,6 +667,7 @@ export class WaveService implements OnStart {
 				amount: pool[resource]!,
 			})),
 			dropZones: this.planetsService.currentMap()?.dropZones ?? [],
+			generated: this.terrainService.progressAtom(),
 		};
 	});
 
@@ -680,6 +682,7 @@ export class WaveService implements OnStart {
 	private field = new Array<number>(GRID_SIZE * GRID_SIZE, -1);
 	private fieldRevision = -1;
 	private fieldAt = 0;
+	private fieldBuilding = false;
 	private spawnTimer = 0;
 	private lastCall = -math.huge;
 	private readonly lastPing = new Map<Player, number>();
@@ -690,6 +693,7 @@ export class WaveService implements OnStart {
 		private readonly baseService: BaseService,
 		private readonly planetsService: PlanetsService,
 		private readonly travelService: TravelService,
+		private readonly terrainService: TerrainService,
 	) {}
 
 	onStart() {
@@ -830,7 +834,15 @@ export class WaveService implements OnStart {
 		const planet = map && !liberated ? this.planetsService.getPlanet(map.planet) : undefined;
 		this.liberated(liberated);
 		this.healthScale = planet ? 1 + 0.3 * planet.difficulty + 0.2 * planet.aliens : 1;
-		if (map && this.costs?.map !== map) this.costs = { map, costs: terrainCosts(map) };
+		if (map && this.costs?.map !== map) {
+			// Worked out a slice a frame. Till then there's no field: walkers head straight for the Core.
+			this.costs = undefined;
+			this.field = new Array<number>(GRID_SIZE * GRID_SIZE, -1);
+			task.spawn(() => {
+				const costs = terrainCosts(map);
+				if (this.planetsService.currentMap() === map) this.costs = { map, costs };
+			});
+		}
 		this.wave(0);
 		this.waves(planet ? 5 + 2 * planet.difficulty : 0);
 		this.nextWaveAt(planet ? Workspace.GetServerTimeNow() + GRACE_SECONDS : 0);
@@ -956,10 +968,20 @@ export class WaveService implements OnStart {
 		}
 	}
 
-	/** Rebuilds the flowfield after buildings change, at most every `FIELD_SECONDS`. */
+	/**
+	 * Rebuilds the flowfield after buildings change, at most every `FIELD_SECONDS`, a slice a frame
+	 * (see `buildFlowfield`). Aliens follow the last one until it's done.
+	 */
 	private refreshField() {
 		const revision = this.baseService.revision;
-		if (revision === this.fieldRevision || os.clock() - this.fieldAt < FIELD_SECONDS || !this.costs) return;
+		const costs = this.costs;
+		if (
+			this.fieldBuilding ||
+			revision === this.fieldRevision ||
+			os.clock() - this.fieldAt < FIELD_SECONDS ||
+			!costs
+		)
+			return;
 		this.fieldRevision = revision;
 		this.fieldAt = os.clock();
 		const targets = new Array<number>();
@@ -969,7 +991,13 @@ export class WaveService implements OnStart {
 			if (building.kind === "core") targets.push(cell);
 			if (!BUILDINGS[building.kind].walkable) solid.set(cell, building);
 		}
-		this.field = buildFlowfield(this.costs.costs, solid, targets);
+		this.fieldBuilding = true;
+		task.spawn(() => {
+			const field = buildFlowfield(costs.costs, solid, targets);
+			this.fieldBuilding = false;
+			// A new map meanwhile has costs of its own, and a field of its own to come.
+			if (this.costs === costs) this.field = field;
+		});
 	}
 
 	private moveAliens(map: PlanetMap, dt: number) {

@@ -4,7 +4,7 @@ import { RunService, Workspace } from "@rbxts/services";
 
 import { selectedAtom, selectedOreAtom } from "game/Base/client/base-state";
 import { BeltMessage, beltMessaging, type HeldItem, type ItemMove } from "game/Base/shared/base-network";
-import { alongPath, BELT_SPACING, modelPath } from "game/Base/shared/belts";
+import { alongPath, BELT_SPACING, type BeltPath, modelPath } from "game/Base/shared/belts";
 import { BUILDINGS, type BuildingKind } from "game/Base/shared/buildings";
 import { type ResourceId, RESOURCES } from "game/Base/shared/resources";
 
@@ -16,6 +16,8 @@ const CATCH_UP = 14;
 const SWALLOW_SECONDS = 0.35;
 /** How high over a router's middle the ore it holds sits. */
 const HELD_HEIGHT = 2;
+/** Ore on belts further than this from the camera isn't drawn: it only moves along, a number per ore. */
+const ORE_CULL_STUDS = 200;
 
 /** One ore, as drawn. */
 interface Ore {
@@ -26,6 +28,15 @@ interface Ore {
 	/** Where it's drawn: easing toward where `progress` puts it. */
 	position: Vector3;
 	heading: Vector3;
+	/** Whether its part is in the world (see `ORE_CULL_STUDS`), and whether it sat still where it's drawn last frame. */
+	shown: boolean;
+	still: boolean;
+}
+
+/** A belt as its model describes it, read once (see `LogisticsController.line`). */
+interface Line {
+	readonly path: BeltPath;
+	readonly speed: number;
 }
 
 /**
@@ -40,6 +51,8 @@ export class LogisticsController implements OnStart {
 	private readonly models = new Map<number, Model>();
 	/** The ore on each belt, back to front. */
 	private readonly belts = new Map<number, Array<Ore>>();
+	/** Each belt's path and speed, until its model's attributes change. */
+	private readonly lines = new Map<number, Line>();
 	/** The ore each router holds. */
 	private readonly held = new Map<number, Ore>();
 	/** Ore sinking into what took it in, until it's gone. */
@@ -77,12 +90,46 @@ export class LogisticsController implements OnStart {
 		const cell = child.GetAttribute("Cell");
 		if (!child.IsA("Model") || !typeIs(cell, "number")) return;
 		this.models.set(cell, child);
+		this.forget(cell);
+		// Reshaping a belt rewrites its path attributes.
+		child.AttributeChanged.Connect(() => {
+			if (this.models.get(cell) === child) this.forget(cell);
+		});
+	}
+
+	/** Drops a belt's cached path, to be read again, and wakes its ore to settle onto it. */
+	private forget(cell: number) {
+		this.lines.delete(cell);
+		this.belts.get(cell)?.forEach((ore) => (ore.still = false));
+	}
+
+	/** A belt's path and speed, from its model, read once until they change (see `forget`). */
+	private line(cell: number): Line | undefined {
+		const cached = this.lines.get(cell);
+		if (cached) return cached;
+		const model = this.models.get(cell);
+		const path = model && modelPath(model);
+		const speed = model && BUILDINGS[model.GetAttribute("Kind") as BuildingKind]?.belt;
+		if (!path || speed === undefined) return undefined;
+		const line = { path, speed };
+		this.lines.set(cell, line);
+		return line;
+	}
+
+	/** Puts an ore's part in the world, or takes it out, when that changes. Out of it, it costs nothing to draw. */
+	private show(ore: Ore, shown: boolean) {
+		if (ore.shown === shown) return;
+		ore.shown = shown;
+		// It may move unseen, so it's drawn again, not left where it was, once it's back.
+		ore.still = false;
+		ore.part.Parent = shown ? this.folder : undefined;
 	}
 
 	private removed(child: Instance) {
 		const cell = child.GetAttribute("Cell");
 		if (!typeIs(cell, "number") || this.models.get(cell) !== child) return;
 		this.models.delete(cell);
+		this.lines.delete(cell);
 		this.drop(cell);
 	}
 
@@ -122,6 +169,7 @@ export class LogisticsController implements OnStart {
 	private land(cell: number, ore: Ore, progress: number) {
 		const model = this.models.get(cell);
 		const kind = model?.GetAttribute("Kind") as BuildingKind | undefined;
+		ore.still = false;
 		if (!model) {
 			ore.part.Destroy();
 		} else if (kind !== undefined && BUILDINGS[kind]?.belt !== undefined) {
@@ -132,9 +180,11 @@ export class LogisticsController implements OnStart {
 			if (index < 0) ores.push(ore);
 			else ores.insert(index, ore);
 		} else if (kind === "router") {
+			this.show(ore, true);
 			this.held.get(cell)?.part.Destroy();
 			this.held.set(cell, ore);
 		} else {
+			this.show(ore, true);
 			this.swallowed.push({ ore, into: model.GetPivot().Position, gone: os.clock() + SWALLOW_SECONDS });
 		}
 	}
@@ -158,7 +208,15 @@ export class LogisticsController implements OnStart {
 		part.Color = RESOURCES[resource].color;
 		part.CFrame = new CFrame(at);
 		part.Parent = this.folder;
-		return { part, resource, progress: 0, position: at, heading: new Vector3(0, 0, -1) };
+		return {
+			part,
+			resource,
+			progress: 0,
+			position: at,
+			heading: new Vector3(0, 0, -1),
+			shown: true,
+			still: false,
+		};
 	}
 
 	/** Clears the ore drawn on the building on `cell`. */
@@ -182,18 +240,26 @@ export class LogisticsController implements OnStart {
 			frames.push(look.mul(new CFrame(0, ORE_SIZE / 2, 0)));
 		};
 
+		const eye = Workspace.CurrentCamera?.CFrame.Position;
 		for (const [cell, ores] of this.belts) {
-			// ponytail: reads four attributes per busy belt per frame; cache on AttributeChanged if bases get huge.
-			const model = !ores.isEmpty() ? this.models.get(cell) : undefined;
-			const path = model && modelPath(model);
-			const speed = model && BUILDINGS[model.GetAttribute("Kind") as BuildingKind]?.belt;
-			if (!path || speed === undefined) continue;
+			const line = !ores.isEmpty() ? this.line(cell) : undefined;
+			if (!line) continue;
+			const near = eye === undefined || line.path[1].sub(eye).Magnitude <= ORE_CULL_STUDS;
 			for (let i = ores.size() - 1; i >= 0; i--) {
 				const ore = ores[i];
 				const limit = i === ores.size() - 1 ? 1 : ores[i + 1].progress - BELT_SPACING;
-				ore.progress = math.max(ore.progress, math.min(ore.progress + speed * dt, limit));
-				const [goal, heading] = alongPath(path, ore.progress);
+				const progress = math.max(ore.progress, math.min(ore.progress + line.speed * dt, limit));
+				const moved = progress !== ore.progress;
+				ore.progress = progress;
+				// Far off, it only moves along. Backed up and settled, it's already drawn where it sits.
+				const appearing = near && !ore.shown;
+				this.show(ore, near);
+				if (!near || (ore.still && !moved)) continue;
+				const [goal, heading] = alongPath(line.path, progress);
+				// Coming into range, it's put straight where it is, not slid there from where it was last drawn.
+				if (appearing) ore.position = goal;
 				draw(ore, goal, heading);
+				ore.still = !moved && ore.position.sub(goal).Magnitude < 0.01;
 			}
 		}
 		for (const [cell, ore] of this.held) {

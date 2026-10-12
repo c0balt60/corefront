@@ -8,6 +8,7 @@ import { generateStarSystem, type Planet } from "core/Worlds/shared/star-system"
 import { ArrivalService } from "game/Arrival/server/ArrivalService";
 import {
 	type LaunchPlan,
+	MIN_GENERATING_SECONDS,
 	PlanetsMessage,
 	planetsMessaging,
 	type Travel,
@@ -167,7 +168,11 @@ export class PlanetsService implements OnStart {
 		this.deployed.add(player);
 		this.broadcast();
 		this.logger.Info("{Player} deployed to planet {Planet}", player.Name, data.planet);
-		task.spawn(() => this.spawn(player));
+		task.spawn(() => {
+			// Onto a planet still generating: the client's overlay stays up a while however quick that is.
+			if (!this.currentMap()) task.wait(MIN_GENERATING_SECONDS);
+			this.spawn(player);
+		});
 	}
 
 	/** Waits for the map, then loads the player's character at the landing. They respawn there after dying. */

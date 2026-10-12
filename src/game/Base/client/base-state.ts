@@ -21,6 +21,9 @@ export type BuildMode = BuildableKind | "remove";
 /** The mission as the server last described it. `undefined` until it first answers. */
 export const baseStateAtom = atom<BaseState>();
 
+/** Whether a ping is showing every alien (see `PingController`), so none is hidden for being far off. */
+export const pingedAtom = atom(false);
+
 /** Whether the Core has taken a hit in the last few seconds (`BaseController` sets it), while the local player is deployed. */
 export const coreAttackedAtom = atom(false);
 

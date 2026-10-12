@@ -50,73 +50,124 @@ const RAY_LENGTH = 1000;
 /** How far above and below a point to look for the ground under it. */
 const GROUND_SEARCH = 500;
 const GHOST_TRANSPARENCY = 0.55;
-/** Points round a range ring, each set on the ground, and how far above and below one to look for it. */
-const RING_POINTS = 64;
+/**
+ * A range ring's points: about one every `RING_SPACING` studs round it, within these bounds, each set
+ * on the ground, and how far above and below one to look for it.
+ */
+const RING_SPACING = 6;
+const RING_MIN_POINTS = 24;
+const RING_MAX_POINTS = 96;
 const RING_SEARCH = 200;
 const CHEVRON = new Vector3(0.35, 0.15, 1);
 
+/** A glowing outline round a point, made once and moved as often as needed (see `rangeRing`). */
+export interface Ring {
+	/** Puts it round `center`, following the ground there, and shows it. */
+	readonly moveTo: (center: Vector3) => void;
+	/** Hides it until it's next moved. */
+	readonly hide: () => void;
+	readonly destroy: () => void;
+}
+
 /**
- * A glowing outline `radius` round `center`, following the ground, until the returned cleanup runs.
- * With a `wall`, a glow also rises that many studs off it, fading as it goes up.
+ * A glowing outline `radius` round a point, following the ground. Moving it only sets where its
+ * points are, one raycast each: its attachments and beams are made once, never again per move.
+ * With a `wall`, a glow also rises that many studs off it, fading as it goes up. Hidden till first moved.
  */
-export function groundRing(center: Vector3, radius: number, color: Color3, wall = 0): () => void {
+export function rangeRing(radius: number, color: Color3, wall = 0): Ring {
+	const count = math.clamp(math.round((2 * math.pi * radius) / RING_SPACING), RING_MIN_POINTS, RING_MAX_POINTS);
 	const params = new RaycastParams();
 	params.FilterType = Enum.RaycastFilterType.Include;
 	params.FilterDescendantsInstances = [Workspace.Terrain];
 	const down = new Vector3(0, -2 * RING_SEARCH, 0);
-	const points = new Array<Attachment>();
-	for (let i = 0; i < RING_POINTS; i++) {
-		const angle = (i / RING_POINTS) * 2 * math.pi;
-		const x = center.X + radius * math.cos(angle);
-		const z = center.Z + radius * math.sin(angle);
-		const ground = Workspace.Raycast(new Vector3(x, center.Y + RING_SEARCH, z), down, params);
-		// On Terrain, which sits at the origin, so its position is where it is in the world.
+	// On Terrain, which sits at the origin, so their positions are where they are in the world.
+	const attachment = () => {
 		const point = new Instance("Attachment");
-		point.Position = new Vector3(x, (ground?.Position.Y ?? center.Y) + 0.3, z);
 		point.Parent = Workspace.Terrain;
-		points.push(point);
-	}
-	points.forEach((point, i) => {
-		const beam = new Instance("Beam");
-		beam.Attachment0 = point;
-		beam.Attachment1 = points[(i + 1) % RING_POINTS];
-		beam.Color = new ColorSequence(color);
-		beam.FaceCamera = true;
-		beam.LightEmission = 1;
-		beam.Segments = 1;
-		beam.Transparency = new NumberSequence(0.35);
-		beam.Width0 = 0.5;
-		beam.Width1 = 0.5;
-		beam.Parent = point;
-	});
+		return point;
+	};
+	const beams = new Array<Beam>();
+	const beam = (from: Attachment, to: Attachment, transparency: NumberSequence, width: number) => {
+		const made = new Instance("Beam");
+		made.Attachment0 = from;
+		made.Attachment1 = to;
+		made.Color = new ColorSequence(color);
+		made.Enabled = false;
+		made.FaceCamera = true;
+		made.LightEmission = 1;
+		made.Segments = 1;
+		made.Transparency = transparency;
+		made.Width0 = width;
+		made.Width1 = width;
+		made.Parent = from;
+		beams.push(made);
+	};
+
+	const points = new Array<Attachment>();
+	const tops = new Array<Attachment>();
+	for (let i = 0; i < count; i++) points.push(attachment());
+	points.forEach((point, i) => beam(point, points[(i + 1) % count], new NumberSequence(0.35), 0.5));
 	if (wall > 0) {
 		// A strip up from each point, a little wider than the gap to the next so they meet in a curtain.
-		const width = ((2 * math.pi * radius) / RING_POINTS) * 1.15;
-		for (const point of [...points]) {
-			const top = new Instance("Attachment");
-			top.Position = point.Position.add(new Vector3(0, wall, 0));
-			top.Parent = Workspace.Terrain;
-			points.push(top);
-			const beam = new Instance("Beam");
-			beam.Attachment0 = point;
-			beam.Attachment1 = top;
-			beam.Color = new ColorSequence(color);
-			beam.FaceCamera = true;
-			beam.LightEmission = 1;
-			beam.Segments = 1;
-			beam.Transparency = new NumberSequence(0.55, 1);
-			beam.Width0 = width;
-			beam.Width1 = width;
-			beam.Parent = point;
+		const width = ((2 * math.pi * radius) / count) * 1.15;
+		for (const point of points) {
+			const top = attachment();
+			tops.push(top);
+			beam(point, top, new NumberSequence(0.55, 1), width);
 		}
 	}
-	return () => points.forEach((point) => point.Destroy());
+
+	let shown = false;
+	const show = (visible: boolean) => {
+		if (shown === visible) return;
+		shown = visible;
+		for (const each of beams) each.Enabled = visible;
+	};
+	return {
+		moveTo: (center) => {
+			for (let i = 0; i < count; i++) {
+				const angle = (i / count) * 2 * math.pi;
+				const x = center.X + radius * math.cos(angle);
+				const z = center.Z + radius * math.sin(angle);
+				const ground = Workspace.Raycast(new Vector3(x, center.Y + RING_SEARCH, z), down, params);
+				const at = new Vector3(x, (ground?.Position.Y ?? center.Y) + 0.3, z);
+				points[i].Position = at;
+				if (wall > 0) tops[i].Position = at.add(new Vector3(0, wall, 0));
+			}
+			show(true);
+		},
+		hide: () => show(false),
+		destroy: () => {
+			for (const point of points) point.Destroy();
+			for (const top of tops) top.Destroy();
+		},
+	};
 }
 
-/** Every building's model, by each cell it covers. */
-function occupancy(): Map<number, Model> {
-	const taken = new Map<number, Model>();
+/** A `rangeRing` round `center` that stays put, until the returned cleanup runs. */
+export function groundRing(center: Vector3, radius: number, color: Color3, wall = 0): () => void {
+	const ring = rangeRing(radius, color, wall);
+	ring.moveTo(center);
+	return ring.destroy;
+}
+
+/** The last `occupancy`, until a building comes or goes, and the folder watched for that. */
+let occupied: ReadonlyMap<number, Model> | undefined;
+let watched: Instance | undefined;
+
+/** Every building's model, by each cell it covers. Read every frame, so it's only worked out again once buildings change. */
+function occupancy(): ReadonlyMap<number, Model> {
 	const buildings = Workspace.FindFirstChild("Base")?.FindFirstChild("Buildings");
+	if (buildings !== watched) {
+		watched = buildings;
+		occupied = undefined;
+		const forget = () => (occupied = undefined);
+		buildings?.ChildAdded.Connect(forget);
+		buildings?.ChildRemoved.Connect(forget);
+	}
+	if (occupied) return occupied;
+	const taken = new Map<number, Model>();
+	occupied = taken;
 	for (const model of buildings?.GetChildren() ?? []) {
 		const cell = model.GetAttribute("Cell");
 		const kind = model.GetAttribute("Kind");
@@ -386,8 +437,10 @@ export class BuildController implements OnStart {
 		const def = kind ? BUILDINGS[kind] : undefined;
 		const size = def ? def.size : 1;
 		const belt = kind !== undefined && isBelt(kind);
-		// Ore never moves, so where it is can be read once.
-		const ores = new Set(CollectionService.GetTagged("Ore").map((ore) => ore.GetAttribute("Cell")));
+		// Ore never moves, so where it is can be read once, and only drills need it: it's every ore model on the map.
+		const ores = new Set(
+			def?.drill ? CollectionService.GetTagged("Ore").map((ore) => ore.GetAttribute("Cell")) : [],
+		);
 
 		const folder = new Instance("Folder");
 		folder.Name = "BuildGhost";
@@ -402,9 +455,9 @@ export class BuildController implements OnStart {
 			});
 			return parts;
 		};
-		// The range ring round where it would go, made again only when that moves.
+		// The range ring round where it would go: made once for the tool, moved only when that cell changes.
+		const ring = def?.range !== undefined ? rangeRing(def.range, COLORS.text) : undefined;
 		let ringed: number | undefined;
-		let clearRing = () => {};
 		const highlight = new Instance("Highlight");
 		highlight.Enabled = false;
 		highlight.FillColor = COLORS.danger;
@@ -555,19 +608,15 @@ export class BuildController implements OnStart {
 			});
 			for (let index = line.size(); index < ghosts.size(); index++) partsFor(index, 0);
 
-			const at = def?.range !== undefined && hover ? cellIndex(hover[0], hover[1]) : undefined;
-			if (at !== ringed) {
-				clearRing();
+			const at = hover ? cellIndex(hover[0], hover[1]) : undefined;
+			if (ring && at !== ringed) {
 				ringed = at;
-				const centre = at !== undefined ? cellCenter(at, size) : undefined;
-				clearRing =
-					centre && def?.range !== undefined
-						? groundRing(
-								new Vector3(centre.X, groundAt(centre.X, centre.Z), centre.Z),
-								def.range,
-								COLORS.text,
-							)
-						: () => {};
+				if (at === undefined) {
+					ring.hide();
+				} else {
+					const centre = cellCenter(at, size);
+					ring.moveTo(new Vector3(centre.X, groundAt(centre.X, centre.Z), centre.Z));
+				}
 			}
 		});
 
@@ -588,7 +637,7 @@ export class BuildController implements OnStart {
 			press.Disconnect();
 			release.Disconnect();
 			folder.Destroy();
-			clearRing();
+			ring?.destroy();
 		};
 	}
 }

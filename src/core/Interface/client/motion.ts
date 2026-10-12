@@ -44,11 +44,16 @@ export function useAppear(show: () => boolean = () => true, delay = 0, options =
 /**
  * An angle in degrees that turns every frame at `speed()` degrees per second.
  * The speed can change at any time without the angle jumping. Drives the
- * rotation of energy borders.
+ * rotation of energy borders. While `active()` is false it holds still, so
+ * nothing bound to it updates.
  */
-export function useSpin(speed: () => number): () => number {
+export function useSpin(speed: () => number, active: () => boolean = () => true): () => number {
 	const angle = source(math.random(0, 359));
-	cleanup(RunService.RenderStepped.Connect((dt) => angle((angle() + dt * speed()) % 360)));
+	cleanup(
+		RunService.RenderStepped.Connect((dt) => {
+			if (active()) angle((angle() + dt * speed()) % 360);
+		}),
+	);
 	return angle;
 }
 

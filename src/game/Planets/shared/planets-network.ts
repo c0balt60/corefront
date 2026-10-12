@@ -21,6 +21,8 @@ export const enum PlanetsMessage {
 /** Seconds each half of the travel cutscene lasts: the core lifting off, and the core coming down. */
 export const LAUNCH_SECONDS = 4;
 export const LAND_SECONDS = 4;
+/** The least time the black "generating world" overlay stays up, so it never just flickers (see `TravelOverlay`). */
+export const MIN_GENERATING_SECONDS = 5;
 
 /**
  * The team on its way between planets. `launch`: the core lifts off the old one.

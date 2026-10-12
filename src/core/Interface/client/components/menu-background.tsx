@@ -25,22 +25,27 @@ const ROW_MARKS = lineMarks(ROWS);
 
 /**
  * The red low-poly backdrop of the loading screen and menus. It drifts against the mouse, eased by a spring, with a
- * faint grid sliding over it at a different depth, and a slow scan line sweeping down every few seconds.
+ * faint grid sliding over it at a different depth, and a slow scan line sweeping down every few seconds. `still` holds
+ * it all in place, for behind busy screens where the motion isn't worth a redraw every frame.
  */
-export function MenuBackground() {
+export function MenuBackground({ still = false }: { readonly still?: boolean } = {}) {
 	const [drift, driftSpring] = useSpring<Vector2>(Vector2.zero, SPRINGS.smooth);
 	const now = source(0);
 
-	cleanup(
-		RunService.Heartbeat.Connect(() => {
-			now(os.clock());
+	if (!still) {
+		cleanup(
+			RunService.Heartbeat.Connect(() => {
+				now(os.clock());
 
-			const camera = Workspace.CurrentCamera;
-			if (!camera) return;
-			const fromCenter = camera.ViewportSize.div(2).sub(UserInputService.GetMouseLocation()).mul(0.1);
-			driftSpring.setGoal(new Vector2(math.clamp(fromCenter.X, -120, 120), math.clamp(fromCenter.Y, -100, 100)));
-		}),
-	);
+				const camera = Workspace.CurrentCamera;
+				if (!camera) return;
+				const fromCenter = camera.ViewportSize.div(2).sub(UserInputService.GetMouseLocation()).mul(0.1);
+				driftSpring.setGoal(
+					new Vector2(math.clamp(fromCenter.X, -120, 120), math.clamp(fromCenter.Y, -100, 100)),
+				);
+			}),
+		);
+	}
 
 	return (
 		<frame BackgroundColor3={COLORS.backdrop} ClipsDescendants={true} Size={UDim2.fromScale(1, 1)} ZIndex={0}>
@@ -99,7 +104,7 @@ export function MenuBackground() {
 				Size={UDim2.fromScale(1, 1)}
 				ZIndex={2}
 			/>
-			<ScanSweep kind="background" every={SCAN_EVERY} duration={2.4} zIndex={3} />
+			{still ? undefined : <ScanSweep kind="background" every={SCAN_EVERY} duration={2.4} zIndex={3} />}
 		</frame>
 	);
 }

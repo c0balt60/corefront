@@ -56,6 +56,8 @@ export interface BaseState {
 	readonly capacity: number;
 	/** Where aliens land: the centre of each drop zone, on the ground (see `DROP_ZONE_RADIUS`). None without a map. */
 	readonly dropZones: ReadonlyArray<Vector3>;
+	/** How much of `planet`'s terrain is generated, 0 to 1: the loading overlay's bar while it generates. */
+	readonly generated: number;
 }
 
 export interface BaseMessageData {

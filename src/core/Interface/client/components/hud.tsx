@@ -22,6 +22,8 @@ interface EnergyGradientProps {
 	readonly energy?: Color3 | (() => Color3);
 	/** 0-1: speeds the energy up and widens it. Drive it from a hover spring. */
 	readonly charge?: () => number;
+	/** Whether it runs. Stop it where it can't be seen, as when `energy` is `base`: it costs a redraw every frame. */
+	readonly spin?: () => boolean;
 }
 
 /**
@@ -30,10 +32,16 @@ interface EnergyGradientProps {
  * multiplies the stroke's colour. Without `energy` for its kind, it holds the
  * outline at `base` and nothing moves.
  */
-export function EnergyGradient({ kind, base, energy = COLORS.accent, charge = () => 0 }: EnergyGradientProps) {
+export function EnergyGradient({
+	kind,
+	base,
+	energy = COLORS.accent,
+	charge = () => 0,
+	spin = () => true,
+}: EnergyGradientProps) {
 	if (!hasEffect(kind, "energy")) return <uigradient Color={() => new ColorSequence(clampColor(base()))} />;
 
-	const angle = useSpin(() => 50 + 250 * clamp01(charge()));
+	const angle = useSpin(() => 50 + 250 * clamp01(charge()), spin);
 
 	return (
 		<uigradient
@@ -96,6 +104,8 @@ export function Brackets({
 				BackgroundTransparency={1}
 				Position={() => new UDim2(corner.X, out.X * gap(), corner.Y, out.Y * gap())}
 				Size={() => UDim2.fromOffset(arm(), arm())}
+				// Hidden while see-through, as they rest on most tiles and buttons, so they cost nothing to draw.
+				Visible={() => transparency() < 0.99}
 				ZIndex={zIndex}
 			>
 				<frame

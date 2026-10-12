@@ -1,6 +1,7 @@
 import { Controller, OnStart } from "@flamework/core";
 import { RunService, Workspace } from "@rbxts/services";
 
+import { pingedAtom } from "game/Base/client/base-state";
 import { ALIEN_GAITS, type Gait, type Leg } from "game/Base/shared/alien-legs";
 import type { AlienKind } from "game/Base/shared/base-network";
 
@@ -12,8 +13,16 @@ const DUST = Color3.fromRGB(150, 130, 105);
 const TURRET_TURN = 6;
 const LOWEST = math.rad(-85);
 const HIGHEST = math.rad(70);
-/** Beyond this far from the camera, legs and turrets stand still: nobody can see them move. */
-const CULL_STUDS = 500;
+/**
+ * Culling, by distance from the camera. Beyond `HIDE_STUDS` an alien isn't drawn at all, unless a
+ * ping shows it. Beyond `THROTTLE_STUDS` its legs and turrets move every `THROTTLE_FRAMES` frames.
+ * Off screen, by more than `SCREEN_MARGIN` of its width, they stand still, unless within `NEAR_STUDS`.
+ */
+const HIDE_STUDS = 250;
+const THROTTLE_STUDS = 120;
+const THROTTLE_FRAMES = 3;
+const SCREEN_MARGIN = 0.2;
+const NEAR_STUDS = 30;
 /**
  * Slower than this, in studs per second, a walker is standing, and its feet settle back under it
  * once this share of a stride out.
@@ -59,11 +68,23 @@ interface Rig {
 	/** Where the hull was last frame, and how fast it goes across the ground, smoothed. */
 	last: Vector3;
 	velocity: Vector3;
+	/** Whether it's hidden (see `HIDE_STUDS`), seconds since its legs last moved, and its turn among throttled frames. */
+	hidden: boolean;
+	idle: number;
+	readonly slot: number;
 }
 
 /** A bone from `from` to `to`, its sides squared to `up`. */
 function bone(from: Vector3, to: Vector3, up: Vector3): CFrame {
 	return CFrame.lookAt(from.Lerp(to, 0.5), to, up);
+}
+
+/** Whether `point` is in front of the camera and on screen, or off its edge by no more than `SCREEN_MARGIN`. */
+function onScreen(camera: Camera, point: Vector3): boolean {
+	const [at] = camera.WorldToViewportPoint(point);
+	const size = camera.ViewportSize;
+	const margin = size.X * SCREEN_MARGIN;
+	return at.Z > 0 && at.X > -margin && at.X < size.X + margin && at.Y > -margin && at.Y < size.Y + margin;
 }
 
 function flatDistance(a: Vector3, b: Vector3): number {
@@ -85,6 +106,7 @@ export class AlienController implements OnStart {
 	private readonly ground = new RaycastParams();
 	private readonly dust = new Instance("Attachment");
 	private readonly dustCloud = new Instance("ParticleEmitter");
+	private frame = 0;
 
 	onStart() {
 		this.ground.FilterType = Enum.RaycastFilterType.Include;
@@ -124,7 +146,11 @@ export class AlienController implements OnStart {
 			if (root) this.rigs.set(model, this.rig(model, root));
 		}
 
-		const eye = Workspace.CurrentCamera?.CFrame.Position;
+		const camera = Workspace.CurrentCamera;
+		if (!camera) return;
+		const eye = camera.CFrame.Position;
+		const pinged = pingedAtom();
+		this.frame++;
 		const parts = new Array<BasePart>();
 		const cframes = new Array<CFrame>();
 		for (const [model, rig] of this.rigs) {
@@ -133,9 +159,16 @@ export class AlienController implements OnStart {
 				continue;
 			}
 			const body = rig.root.CFrame;
-			if (eye && body.Position.sub(eye).Magnitude > CULL_STUDS) continue;
-			for (const swivel of rig.swivels) this.turn(swivel, model, body, dt);
-			if (rig.gait) this.walk(rig, rig.gait, body, dt, parts, cframes);
+			const distance = body.Position.sub(eye).Magnitude;
+			this.hide(model, rig, distance > HIDE_STUDS && !pinged);
+			rig.idle += dt;
+			if (rig.hidden || (distance > NEAR_STUDS && !onScreen(camera, body.Position))) continue;
+			if (distance > THROTTLE_STUDS && (this.frame + rig.slot) % THROTTLE_FRAMES !== 0) continue;
+			// By the time since they last moved, so throttled legs keep up.
+			const elapsed = rig.idle;
+			rig.idle = 0;
+			for (const swivel of rig.swivels) this.turn(swivel, model, body, elapsed);
+			if (rig.gait) this.walk(rig, rig.gait, body, elapsed, parts, cframes);
 		}
 		Workspace.BulkMoveTo(parts, cframes, Enum.BulkMoveMode.FireCFrameChanged);
 	}
@@ -173,7 +206,26 @@ export class AlienController implements OnStart {
 				});
 			}
 		}
-		return { root, gait, stances, swivels, last: body.Position, velocity: Vector3.zero };
+		return {
+			root,
+			gait,
+			stances,
+			swivels,
+			last: body.Position,
+			velocity: Vector3.zero,
+			hidden: false,
+			idle: 0,
+			slot: math.random(0, THROTTLE_FRAMES - 1),
+		};
+	}
+
+	/** Hides an alien, legs and all, or shows it again, when that changes. A hidden part isn't drawn. */
+	private hide(model: Model, rig: Rig, hidden: boolean) {
+		if (rig.hidden === hidden) return;
+		rig.hidden = hidden;
+		for (const part of model.GetDescendants()) {
+			if (part.IsA("BasePart")) part.LocalTransparencyModifier = hidden ? 1 : 0;
+		}
 	}
 
 	/** Turns a turret toward what it aims at, or back to rest with nothing, at most `TURRET_TURN` a second. */

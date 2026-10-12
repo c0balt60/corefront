@@ -248,6 +248,8 @@ export class BaseService implements OnStart {
 	private readonly saved = new Map<number, SavedBase>();
 	/** The cargo on its way, and where to. */
 	private arrival?: { readonly planet: number; readonly cargo: Stock };
+	/** The belts and walls this frame's builds, turns and removals touched, remade together once it's done (see `refreshAround`). */
+	private pending?: { readonly belts: Set<Building>; readonly walls: Set<Building> };
 
 	constructor(
 		private readonly logger: Logger,
@@ -716,7 +718,7 @@ export class BaseService implements OnStart {
 		building.rotation = (building.rotation + 1) % 4;
 		// A belt is remade with its neighbours, which its new way can change.
 		if (!isBelt(building.kind)) this.dress(map, building);
-		this.refreshAround(map, building);
+		this.refreshAround(building);
 	}
 
 	/** Sets the ore a Sorter lets straight through, a Source hands out or an Unloader takes, or none. */
@@ -888,7 +890,7 @@ export class BaseService implements OnStart {
 		if (isBelt(kind)) building.entry = this.beltEntry(building);
 		else this.dress(map, building);
 		model.Parent = this.buildingsFolder;
-		this.refreshAround(map, building);
+		this.refreshAround(building);
 		return building;
 	}
 
@@ -1055,10 +1057,13 @@ export class BaseService implements OnStart {
 	 * Remakes the belts near `building`, just built, turned or removed, whose look that changed:
 	 * those beside it may have gained or lost a feeder. Their runs are laid out again whole, as a
 	 * belt anywhere in one can raise the rest. A wall's neighbouring walls reach to it, or stop.
+	 * Deferred: whatever else is built or taken down this frame (a dragged line, a blast) joins in, and
+	 * it all runs once, after.
 	 */
-	private refreshAround(map: PlanetMap, building: Building) {
+	private refreshAround(building: Building) {
+		const walls = new Set<Building>();
 		if (BUILDINGS[building.kind].wall) {
-			for (const [other] of this.around(building)) if (BUILDINGS[other.kind].wall) this.dress(map, other);
+			for (const [other] of this.around(building)) if (BUILDINGS[other.kind].wall) walls.add(other);
 		}
 		const [gx, gz] = cellCoords(building.cell);
 		const size = BUILDINGS[building.kind].size;
@@ -1069,9 +1074,24 @@ export class BaseService implements OnStart {
 				if (belt && isBelt(belt.kind)) near.add(belt);
 			}
 		}
-		// Every shape first: which belts make a run depends on them.
+		// Every shape first: which belts make a run depends on them. Cheap, so done now, current for the next build this frame.
 		for (const belt of near) belt.entry = this.beltEntry(belt);
-		this.reshape(map, near);
+		if (!this.pending) {
+			const pending = { belts: new Set<Building>(), walls: new Set<Building>() };
+			this.pending = pending;
+			task.defer(() => {
+				this.pending = undefined;
+				if (this.map) this.remake(this.map, pending.belts, pending.walls);
+			});
+		}
+		for (const belt of near) this.pending.belts.add(belt);
+		for (const wall of walls) this.pending.walls.add(wall);
+	}
+
+	/** Redresses `walls` and lays out again the runs `belts` are in (see `reshape`): those still standing. */
+	private remake(map: PlanetMap, belts: ReadonlySet<Building>, walls: ReadonlySet<Building>) {
+		for (const wall of walls) if (this.buildings.has(wall)) this.dress(map, wall);
+		this.reshape(map, belts);
 	}
 
 	/** The building covering cell (x, z), if any. */
@@ -1091,7 +1111,7 @@ export class BaseService implements OnStart {
 		for (const covered of footprint(building.cell, BUILDINGS[building.kind].size)) this.cells.delete(covered);
 		if (building === this.core) this.core = undefined;
 		this.revision++;
-		if (this.map) this.refreshAround(this.map, building);
+		this.refreshAround(building);
 	}
 
 	/**

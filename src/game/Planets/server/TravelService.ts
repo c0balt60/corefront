@@ -9,6 +9,7 @@ import { PlanetsService } from "game/Planets/server/PlanetsService";
 import {
 	LAND_SECONDS,
 	LAUNCH_SECONDS,
+	MIN_GENERATING_SECONDS,
 	PlanetsMessage,
 	planetsMessaging,
 	retreatTarget,
@@ -129,9 +130,10 @@ export class TravelService implements OnStart {
 			planetsService.activate(to);
 
 			// Waits first: retreating to the planet it's on, the old map lingers until the deferred generate drops it.
+			// And clients' overlay stays up a while however quick the generating is.
+			task.wait(MIN_GENERATING_SECONDS);
 			// ponytail: polls for the map, like PlanetsService.spawn.
-			do task.wait(0.25);
-			while (!planetsService.currentMap());
+			while (!planetsService.currentMap()) task.wait(0.25);
 			planetsService.travelAtom({ from, to, stage: "land" });
 			task.wait(LAND_SECONDS);
 			planetsService.travelAtom(undefined);

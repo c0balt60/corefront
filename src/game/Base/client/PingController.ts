@@ -1,6 +1,7 @@
 import { Controller, OnStart } from "@flamework/core";
 import { ContextActionService, Workspace } from "@rbxts/services";
 
+import { pingedAtom } from "game/Base/client/base-state";
 import { BaseMessage, baseMessaging } from "game/Base/shared/base-network";
 
 /** Seconds a ping shows the aliens. */
@@ -44,8 +45,11 @@ export class PingController implements OnStart {
 		baseMessaging.client.on(BaseMessage.Pinged, () => {
 			const ping = ++pings;
 			highlight.Enabled = true;
+			pingedAtom(true);
 			task.delay(PING_SECONDS, () => {
-				if (ping === pings) highlight.Enabled = false;
+				if (ping !== pings) return;
+				highlight.Enabled = false;
+				pingedAtom(false);
 			});
 		});
 	}

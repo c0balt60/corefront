@@ -5,6 +5,7 @@ import {
 	CollectionService,
 	HttpService,
 	Lighting,
+	RunService,
 	ServerScriptService,
 	ServerStorage,
 	Workspace,
@@ -35,6 +36,17 @@ const GROUND_STEP = 4;
 const GROUND_POINTS = MAP_STUDS / GROUND_STEP + 1;
 /** Rows of ground raycasts per frame while baking, so it never hitches the server. */
 const BAKE_ROWS = 16;
+/**
+ * Chunks handed to workers a second, at most one a frame, so their terrain writes, and what
+ * clients receive of them, are spread out: 256 chunks take at least ~8.5 seconds.
+ */
+const CHUNKS_PER_SECOND = 30;
+/** The old planet's prop folders destroyed a frame, and the new one's props settled onto the ground a frame. */
+const CLEAR_PER_FRAME = 8;
+const SETTLE_PER_FRAME = 300;
+/** The share of `progressAtom` the chunks make up, then the ground bake; settling the props is the rest. */
+const CHUNK_SHARE = 0.85;
+const BAKE_SHARE = 0.1;
 
 /** Chunk indexes (`cz * MAP_CHUNKS + cx`), farthest from the centre first: popping the end takes the nearest. */
 const CHUNK_ORDER = new Array<number>();
@@ -76,6 +88,8 @@ interface Job {
 export class TerrainService implements OnStart {
 	/** The generated active planet. `undefined` before the first generation and while one runs. */
 	readonly mapAtom = atom<PlanetMap>();
+	/** How much of the planet generating (or generated) is done, 0 to 1, for the players waiting on it. */
+	readonly progressAtom = atom(0);
 
 	private epoch = 0;
 	private planet = 0;
@@ -89,6 +103,8 @@ export class TerrainService implements OnStart {
 	private readonly idle = new Array<Actor>();
 	private readonly jobs = new Map<number, Job>();
 	private nextJobId = 0;
+	/** Builds up by `CHUNKS_PER_SECOND`; each chunk handed out spends one. */
+	private credit = 0;
 	/** Chunks of the current epoch still to dispatch, nearest last. */
 	private queue = new Array<number>();
 	private readonly attempts = new Map<number, number>();
@@ -122,6 +138,7 @@ export class TerrainService implements OnStart {
 			this.finishJob(id, ok, buildTime, writeTime),
 		);
 		this.spawnWorkers();
+		RunService.Heartbeat.Connect((dt) => this.pump(dt));
 
 		task.spawn(() => {
 			while (true) {
@@ -168,9 +185,17 @@ export class TerrainService implements OnStart {
 		this.planet = index;
 		this.runtime.SetAttribute("Epoch", this.epoch);
 		this.mapAtom(undefined);
+		this.progressAtom(0);
 		this.queue = [];
 		Workspace.Terrain.Clear();
-		this.props.ClearAllChildren();
+		// A few chunks' props a frame, not thousands of models at once. Long gone before the new ones settle.
+		const old = this.props.GetChildren();
+		task.spawn(() => {
+			for (let i = 0; i < old.size(); i++) {
+				old[i].Destroy();
+				if (i % CLEAR_PER_FRAME === CLEAR_PER_FRAME - 1) task.wait();
+			}
+		});
 		return this.epoch;
 	}
 
@@ -195,7 +220,6 @@ export class TerrainService implements OnStart {
 		}
 
 		this.statusAtom(this.status(true));
-		this.pump();
 	}
 
 	private spawnWorkers() {
@@ -206,19 +230,18 @@ export class TerrainService implements OnStart {
 			const actor = new Instance("Actor");
 			actor.Name = `Worker${i}`;
 			// The worker flags itself ready once its handler is bound.
-			actor.GetAttributeChangedSignal("Ready").Once(() => {
-				this.idle.push(actor);
-				this.pump();
-			});
+			actor.GetAttributeChangedSignal("Ready").Once(() => this.idle.push(actor));
 			template.Clone().Parent = actor;
 			actor.Parent = folder;
 		}
 		folder.Parent = ServerScriptService;
 	}
 
-	/** Hands queued chunks to idle workers. */
-	private pump() {
-		while (this.idle.size() > 0 && this.queue.size() > 0) {
+	/** Hands a queued chunk to an idle worker, each frame there's credit for one (see `CHUNKS_PER_SECOND`). */
+	private pump(dt: number) {
+		this.credit = math.min(this.credit + dt * CHUNKS_PER_SECOND, 1);
+		if (this.credit >= 1 && this.idle.size() > 0 && this.queue.size() > 0) {
+			this.credit -= 1;
 			const chunk = this.queue.pop()!;
 			const actor = this.idle.pop()!;
 			this.nextJobId += 1;
@@ -257,7 +280,6 @@ export class TerrainService implements OnStart {
 				}
 			}
 		}
-		this.pump();
 	}
 
 	/** Gives up on jobs that never reported, so their workers aren't lost for good. */
@@ -280,6 +302,7 @@ export class TerrainService implements OnStart {
 
 	private chunkDone() {
 		this.remaining -= 1;
+		this.progressAtom((CHUNK_SHARE * (CHUNK_COUNT - this.remaining)) / CHUNK_COUNT);
 		if (this.remaining > 0) {
 			this.statusAtom(this.status(true));
 			return;
@@ -289,9 +312,12 @@ export class TerrainService implements OnStart {
 		task.spawn(() => {
 			const ground = this.bakeGround(epoch);
 			if (!ground) return; // A newer generation took over.
+			const map = this.buildMap(ground, epoch);
+			if (!map) return;
 			this.lastSeconds = os.clock() - this.startedAt;
 			this.statusAtom(this.status(false));
-			this.mapAtom(this.buildMap(ground));
+			this.progressAtom(1);
+			this.mapAtom(map);
 			this.logger.Info(
 				"Generated planet {Planet} ({Kind}, seed {Seed}) in {Seconds}s",
 				this.planet,
@@ -314,6 +340,7 @@ export class TerrainService implements OnStart {
 		const ground = new Array<number>(GROUND_POINTS * GROUND_POINTS);
 		for (let row = 0; row < GROUND_POINTS; row++) {
 			if (row > 0 && row % BAKE_ROWS === 0) {
+				this.progressAtom(CHUNK_SHARE + (BAKE_SHARE * row) / GROUND_POINTS);
 				task.wait();
 				if (epoch !== this.epoch) return undefined;
 			}
@@ -328,7 +355,8 @@ export class TerrainService implements OnStart {
 		return ground;
 	}
 
-	private buildMap(ground: ReadonlyArray<number>): PlanetMap {
+	/** The map, once its props are settled, a slice a frame. Undefined if epoch `epoch` was dropped meanwhile. */
+	private buildMap(ground: ReadonlyArray<number>, epoch: number): PlanetMap | undefined {
 		const sampler = this.sampler!;
 		const last = GROUND_POINTS - 1;
 		const heightAt = (x: number, z: number) => {
@@ -361,9 +389,18 @@ export class TerrainService implements OnStart {
 		// Props and ores were placed on the heightmap: settle them onto the real ground.
 		// Ores sit on their cell's highest point, like a drill would, and skirt down the slope.
 		const ores = new Array<OreDeposit>();
-		for (const folder of this.props.GetChildren()) {
-			for (const model of folder.GetChildren()) {
+		let settled = 0;
+		const folders = this.props.GetChildren();
+		for (let index = 0; index < folders.size(); index++) {
+			for (const model of folders[index].GetChildren()) {
 				if (!model.IsA("Model")) continue;
+				settled++;
+				if (settled % SETTLE_PER_FRAME === 0) {
+					const settling = 1 - CHUNK_SHARE - BAKE_SHARE;
+					this.progressAtom(CHUNK_SHARE + BAKE_SHARE + (settling * index) / folders.size());
+					task.wait();
+					if (epoch !== this.epoch) return undefined;
+				}
 				const pivot = model.GetPivot();
 				const cell = model.GetAttribute("Cell");
 				const y = typeIs(cell, "number") ? groundRange(cell, 1)[1] : heightAt(pivot.X, pivot.Z);

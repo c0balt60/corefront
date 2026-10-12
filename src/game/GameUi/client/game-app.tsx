@@ -97,6 +97,8 @@ export function GameApp() {
 
 	// The team between planets, for the local player once they're down there.
 	const travel = () => (deployed() ? world()?.travel : undefined);
+	// Deployed while the planet was generating: the overlay covers the wait till the character spawns.
+	const awaiting = source(false);
 	// The world while the star map is up: before deploying, or opened from the ground, and never while travelling.
 	const browsing = () => ((!deployed() || mapOpen()) && !travel() ? world() : undefined);
 	// The base while the local player is down on its planet with the map closed.
@@ -179,6 +181,7 @@ export function GameApp() {
 									onDeploy={() => {
 										if (!deployed()) {
 											deploying(true);
+											if (base()?.phase === "generating") awaiting(true);
 											planetsMessaging.server.emit(PlanetsMessage.Deploy, { planet: selected() });
 										} else if (occupied()) {
 											planetsMessaging.server.emit(PlanetsMessage.Propose, {
@@ -344,10 +347,22 @@ export function GameApp() {
 
 			{/* Over everything, the HUD toggle included: it hides the next planet generating. */}
 			<screengui Name="TravelOverlay" DisplayOrder={20} IgnoreGuiInset={true} ResetOnSpawn={false}>
-				<Show when={() => (travel()?.stage === "transit" ? travel() : undefined)}>
-					{(current, show) =>
+				<Show
+					when={() =>
+						travel()?.stage === "transit" ? travel()?.to : awaiting() && !deployed() ? active() : undefined
+					}
+				>
+					{(to, show) =>
 						$tuple(
-							<TravelOverlay destination={() => planets()[current().to]?.name ?? ""} show={show} />,
+							<TravelOverlay
+								destination={() => planets()[to()]?.name ?? ""}
+								// Until the base state has caught up with where the core's headed, nothing of it is built.
+								progress={() => {
+									const state = base();
+									return state?.planet === to() ? state.generated : 0;
+								}}
+								show={show}
+							/>,
 							EXIT_TIME,
 						)
 					}

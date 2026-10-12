@@ -241,11 +241,11 @@ function TraceLine({ trace, state, grown, pulse }: TraceLineProps) {
 	effect(() => tintSpring.setGoal(LINE_COLORS[state()]));
 	const width = () => LINE_WIDTHS[state()];
 	const drawn = () => math.clamp(grown() - trace.start, 0, trace.length);
-	/** How far along it the pulse is, while it's on it. */
-	const packet = () => {
+	/** How far along it the pulse is, while it's on it. Derived, so it only redraws while the pulse is on it. */
+	const packet = derive(() => {
 		const at = pulse() - trace.start;
 		return state() !== "locked" && drawn() >= trace.length && at >= 0 && at <= trace.length ? at : undefined;
-	};
+	});
 
 	const segments = new Array<{ a: Vector2; b: Vector2; start: number; length: number }>();
 	let distance = 0;
@@ -309,6 +309,8 @@ interface TileProps {
 	readonly color: () => Color3;
 	/** The light running round its outline. `color` hides it. */
 	readonly energy: () => Color3;
+	/** Whether that light runs. Keep it still where it can't be seen: it redraws the outline every frame. */
+	readonly spin: () => boolean;
 	/** 0-1: how far it has popped in. Past 1 swells it. */
 	readonly pop: () => number;
 	/** 0-1: a glow on top of hovering's, as a pulse passes through. */
@@ -323,7 +325,7 @@ interface TileProps {
  * A square tile on the canvas, like a build card: outlined, shadowed and
  * bracketed in `color`. Hovering lifts it and picking it grows it.
  */
-function Tile({ at, size, color, energy, pop, glow, selected, onClick, content }: TileProps) {
+function Tile({ at, size, color, energy, spin, pop, glow, selected, onClick, content }: TileProps) {
 	const hovered = source(false);
 	const [lift, liftSpring] = useSpring(0, SPRINGS.responsive);
 	const [scale, scaleSpring] = useSpring(1, SPRINGS.bouncy);
@@ -367,7 +369,7 @@ function Tile({ at, size, color, energy, pop, glow, selected, onClick, content }
 					LineJoinMode={Enum.LineJoinMode.Miter}
 					Thickness={STROKE}
 				>
-					<EnergyGradient kind="research" base={color} energy={energy} charge={lift} />
+					<EnergyGradient kind="research" base={color} energy={energy} charge={lift} spin={spin} />
 				</uistroke>
 				{content(fill, lift)}
 			</textbutton>
@@ -400,6 +402,8 @@ interface NodeButtonProps {
 	readonly pop: () => number;
 	/** 0-1: the Core's pulse passing through. */
 	readonly pulse: () => number;
+	/** Whether the tree is on screen and out of its fade: its energy only runs then. */
+	readonly live: () => boolean;
 	readonly onClick: () => void;
 }
 
@@ -410,7 +414,7 @@ interface NodeButtonProps {
  * levels show as pips underneath, and its name decodes in while it's hovered.
  * Researching it sends a shockwave out from it.
  */
-function NodeButton({ id, level, state, selected, pop, pulse, onClick }: NodeButtonProps) {
+function NodeButton({ id, level, state, selected, pop, pulse, live, onClick }: NodeButtonProps) {
 	const node = RESEARCH[id];
 	const [tint, tintSpring] = useSpring(STATE_COLORS[state()], SPRINGS.responsive);
 	const [lock, lockSpring] = useSpring(state() === "locked" ? 1 : 0, SPRINGS.responsive);
@@ -431,6 +435,8 @@ function NodeButton({ id, level, state, selected, pop, pulse, onClick }: NodeBut
 		last = current;
 	});
 	const flash = () => 1 - clamp01(burst());
+	// Derived, so its shadow only redraws while the pulse passes, not every frame.
+	const glow = derive(() => math.max(pulse(), flash()));
 	const pips = new Array<number>();
 	for (let index = 0; index < maxLevel(id); index++) pips.push(index);
 
@@ -440,8 +446,9 @@ function NodeButton({ id, level, state, selected, pop, pulse, onClick }: NodeBut
 			size={NODE}
 			color={tint}
 			energy={() => (state() === "open" ? tint().Lerp(COLORS.text, 0.45) : tint())}
+			spin={() => live() && state() === "open"}
 			pop={() => pop() * (1 + 0.15 * flash())}
-			glow={() => math.max(pulse(), flash())}
+			glow={glow}
 			selected={selected}
 			onClick={onClick}
 			content={(fill, lift) => {
@@ -459,6 +466,7 @@ function NodeButton({ id, level, state, selected, pop, pulse, onClick }: NodeBut
 							BackgroundTransparency={() => 1 - lock()}
 							BorderSizePixel={0}
 							Size={UDim2.fromScale(1, 1)}
+							Visible={() => lock() > 0.01}
 							ZIndex={1}
 						>
 							<uigradient Rotation={45} Transparency={STRIPES} />
@@ -544,8 +552,17 @@ function NodeButton({ id, level, state, selected, pop, pulse, onClick }: NodeBut
  * Targeting brackets round the picked tile in its colour, like the star map's: they turn slowly, and every pick snaps
  * them in from wide.
  */
-function Reticle({ target }: { readonly target: () => { at: Vector2; size: number; color: Color3 } | undefined }) {
-	const angle = useSpin(() => 35);
+function Reticle({
+	target,
+	live,
+}: {
+	readonly target: () => { at: Vector2; size: number; color: Color3 } | undefined;
+	readonly live: () => boolean;
+}) {
+	const angle = useSpin(
+		() => 35,
+		() => live() && target() !== undefined,
+	);
 	const [lock, lockSpring] = useSpring(1, SPRINGS.bouncy);
 	effect(() => {
 		target();
@@ -583,7 +600,15 @@ function Reticle({ target }: { readonly target: () => { at: Vector2; size: numbe
 }
 
 /** The tree's title, top centre, like the loading screen's logo: it glitches in over an accent ghost as brackets lock on. */
-function TreeTitle({ now, top }: { readonly now: () => number; readonly top: number }) {
+function TreeTitle({ top }: { readonly top: number }) {
+	/** Seconds since it mounted, until the glitch below is over: then nothing in it moves. */
+	const now = source(0);
+	const mounted = os.clock();
+	const clock = RunService.RenderStepped.Connect(() => {
+		now(os.clock() - mounted);
+		if (now() > 0.8) clock.Disconnect();
+	});
+	cleanup(() => clock.Disconnect());
 	const intro = useAppear(undefined, 0.1, SPRINGS.bouncy);
 	const fade = () => 1 - clamp01(intro());
 	// Two decodes of the same word, so while it settles the letters ghost against each other.
@@ -827,6 +852,7 @@ function ResearchPanel({ picked, levels, stateOf, reasonOf, pool, onResearch, sh
 					BackgroundTransparency={() => 1 - lock()}
 					BorderSizePixel={0}
 					Size={UDim2.fromScale(1, 1)}
+					Visible={() => lock() > 0.01}
 				>
 					<uigradient Rotation={45} Transparency={STRIPES} />
 				</frame>
@@ -1058,15 +1084,32 @@ interface ResearchTreeProps {
  */
 export function ResearchTree({ levels, gates, pool, onResearch, onClose, show }: ResearchTreeProps) {
 	const appear = useAppear(show);
-	const slideIn = useAppear(show, 0.15);
-	const hintIn = useAppear(show, 1.2);
-	const opened = os.clock();
-	/** Seconds since it opened. Every pulse and glitch below runs off it. */
+	/** Whether it's fading in or out, and so in the canvas group (see the end), where anything moving redraws it all. */
+	const fading = derive(() => appear() < 0.99);
+	/** Whether it's on screen and out of the group: everything that runs every frame runs only then. */
+	const live = derive(() => show() && !fading());
+	/**
+	 * Turns true the first time it's live, and stays: the tree grows and the HUD comes in then. So it fades in as just
+	 * the Core's backdrop, and fades out held as it was.
+	 */
+	const started = source(false);
+	const slideIn = useAppear(started, 0.15);
+	const hintIn = useAppear(started, 1.2);
+	/** Seconds since it started. The pulse runs off it. */
 	const now = source(0);
-	cleanup(RunService.RenderStepped.Connect(() => now(os.clock() - opened)));
+	let startedAt = 0;
 	/** Pixels along the traces from the Core that the tree has grown. */
 	const [grown, growTween] = useTween(0, { duration: GROW_SECONDS, easing: "sineOut" });
-	growTween.setGoal(FURTHEST);
+	effect(() => {
+		if (!live()) return;
+		if (!untrack(started)) {
+			started(true);
+			startedAt = os.clock();
+			growTween.setGoal(FURTHEST);
+		}
+		const clock = RunService.RenderStepped.Connect(() => now(os.clock() - startedAt));
+		cleanup(() => clock.Disconnect());
+	});
 	/** Pixels along the traces the Core's latest pulse has run, or -1 before the tree has grown. */
 	const pulse = () => {
 		const since = now() - GROW_SECONDS;
@@ -1077,10 +1120,10 @@ export function ResearchTree({ levels, gates, pool, onResearch, onClose, show }:
 		const behind = pulse() - at;
 		return behind >= 0 ? PULSE_SHINE * math.max(0, 1 - behind / (PULSE_SPEED * PULSE_GLOW)) : 0;
 	};
-	/** A spring that pops in once the tree has grown `at` pixels from the Core, and out as it closes. */
+	/** A spring that pops in once the tree has grown `at` pixels from the Core. */
 	const popAt = (at: number) => {
 		const [value, spring] = useSpring(0, SPRINGS.bouncy);
-		effect(() => spring.setGoal(show() && grown() >= at ? 1 : 0));
+		effect(() => spring.setGoal(started() && grown() >= at ? 1 : 0));
 		return value;
 	};
 
@@ -1094,10 +1137,17 @@ export function ResearchTree({ levels, gates, pool, onResearch, onClose, show }:
 	const top = inset.Y + EDGE;
 
 	const reasonOf = (id: ResearchId) => lockReason(id, levels(), gates());
-	const stateOf = (id: ResearchId): NodeState => {
-		if ((levels()[id] ?? 0) > 0) return "done";
-		return reasonOf(id) === undefined ? "open" : "locked";
-	};
+	/** Every node's state, worked out again only when research or the gates change, not each time the pulse reads it. */
+	const states = derive(() => {
+		const [current, open] = [levels(), gates()];
+		const result = new Map<ResearchId, NodeState>();
+		for (const id of RESEARCH_ORDER) {
+			if ((current[id] ?? 0) > 0) result.set(id, "done");
+			else result.set(id, lockReason(id, current, open) === undefined ? "open" : "locked");
+		}
+		return result;
+	});
+	const stateOf = (id: ResearchId) => states().get(id)!;
 
 	// The Core can't leave the screen, nor any node get further from the middle than the furthest one is from the Core.
 	const clampPan = (value: Vector2) => {
@@ -1145,14 +1195,9 @@ export function ResearchTree({ levels, gates, pool, onResearch, onClose, show }:
 		0.7,
 	);
 
-	return (
-		<canvasgroup
-			Name="ResearchTree"
-			BackgroundTransparency={1}
-			GroupTransparency={() => 1 - appear()}
-			Size={UDim2.fromScale(1, 1)}
-		>
-			<MenuBackground />
+	const tree = (
+		<frame BackgroundTransparency={1} Size={UDim2.fromScale(1, 1)}>
+			<MenuBackground still={true} />
 			{/* Empty space: press and drag to pan, click to close the panel. It darkens the backdrop under the tree. */}
 			<textbutton
 				AutoButtonColor={false}
@@ -1175,7 +1220,7 @@ export function ResearchTree({ levels, gates, pool, onResearch, onClose, show }:
 				Size={UDim2.fromOffset(0, 0)}
 				ZIndex={2}
 			>
-				<uiscale Scale={() => zoom() * (0.92 + 0.08 * appear())} />
+				<uiscale Scale={zoom} />
 				{TRACES.map((trace) => (
 					<TraceLine trace={trace} state={() => stateOf(trace.to)} grown={grown} pulse={pulse} />
 				))}
@@ -1184,8 +1229,9 @@ export function ResearchTree({ levels, gates, pool, onResearch, onClose, show }:
 					size={CORE_NODE}
 					color={() => AMBER}
 					energy={() => AMBER.Lerp(COLORS.text, 0.45)}
+					spin={live}
 					pop={popAt(0)}
-					glow={() => glowAt(0)}
+					glow={derive(() => glowAt(0))}
 					selected={() => selected() === "core"}
 					onClick={() => pick("core")}
 					content={(fill) => (
@@ -1215,10 +1261,12 @@ export function ResearchTree({ levels, gates, pool, onResearch, onClose, show }:
 						selected={() => selected() === id}
 						pop={popAt(reachOf(id))}
 						pulse={() => (stateOf(id) === "locked" ? 0 : glowAt(reachOf(id)))}
+						live={live}
 						onClick={() => pick(id)}
 					/>
 				))}
 				<Reticle
+					live={live}
 					target={() => {
 						const picked = selected();
 						if (picked === undefined) return undefined;
@@ -1228,112 +1276,143 @@ export function ResearchTree({ levels, gates, pool, onResearch, onClose, show }:
 				/>
 			</frame>
 
-			{/* The HUD over the tree. Not Active, so the empty space in it still pans. */}
-			<frame BackgroundTransparency={1} Size={UDim2.fromScale(1, 1)} ZIndex={3}>
-				<TreeTitle now={now} top={top} />
+			{/* The HUD over the tree, once it's started. Not Active, so the empty space in it still pans. */}
+			<Show when={started}>
+				{() => (
+					<frame BackgroundTransparency={1} Size={UDim2.fromScale(1, 1)} ZIndex={3}>
+						<TreeTitle top={top} />
 
-				<HudBox
-					name="CoreStorage"
-					anchorPoint={Vector2.zero}
-					position={() => UDim2.fromOffset(EDGE - 260 * (1 - slideIn()), top)}
-					size={() => UDim2.fromOffset(210, 40 + 20 * pool().size())}
-				>
-					<Label text={useScramble("hud", () => "CORE STORAGE", 0.2)} size={new UDim2(1, 0, 0, 14)} />
-					<frame BackgroundTransparency={1} Position={UDim2.fromOffset(0, 22)} Size={new UDim2(1, 0, 1, -22)}>
-						<uilistlayout Padding={new UDim(0, 4)} SortOrder={Enum.SortOrder.LayoutOrder} />
-						<Index each={pool}>
-							{(stack, index) => (
+						<HudBox
+							name="CoreStorage"
+							anchorPoint={Vector2.zero}
+							position={() => UDim2.fromOffset(EDGE - 260 * (1 - slideIn()), top)}
+							size={() => UDim2.fromOffset(210, 40 + 20 * pool().size())}
+						>
+							<Label text={useScramble("hud", () => "CORE STORAGE", 0.2)} size={new UDim2(1, 0, 0, 14)} />
+							<frame
+								BackgroundTransparency={1}
+								Position={UDim2.fromOffset(0, 22)}
+								Size={new UDim2(1, 0, 1, -22)}
+							>
+								<uilistlayout Padding={new UDim(0, 4)} SortOrder={Enum.SortOrder.LayoutOrder} />
+								<Index each={pool}>
+									{(stack, index) => (
+										<frame
+											BackgroundTransparency={1}
+											LayoutOrder={index}
+											Size={new UDim2(1, 0, 0, 16)}
+										>
+											<Swatch resource={() => stack().resource} />
+											<Label
+												position={UDim2.fromOffset(16, 0)}
+												size={new UDim2(0.6, -16, 1, 0)}
+												text={() => RESOURCES[stack().resource].name.upper()}
+											/>
+											{/* Decodes again whenever it changes, as research spends it. */}
+											<Label
+												alignX={Enum.TextXAlignment.Right}
+												anchorPoint={new Vector2(1, 0)}
+												color={COLORS.text}
+												font={FONT_DISPLAY}
+												position={UDim2.fromScale(1, 0)}
+												size={UDim2.fromScale(0.4, 1)}
+												// Derived: every base update sends a new pool, and only a new amount should decode.
+												text={useScramble(
+													"hud",
+													derive(() => tostring(stack().amount)),
+													0,
+													0.25,
+												)}
+												textSize={14}
+											/>
+										</frame>
+									)}
+								</Index>
+							</frame>
+						</HudBox>
+
+						<HudBox
+							name="Legend"
+							anchorPoint={new Vector2(0, 1)}
+							position={() => new UDim2(0, EDGE - 220 * (1 - slideIn()), 1, -EDGE)}
+							size={UDim2.fromOffset(170, 74)}
+						>
+							<uilistlayout Padding={new UDim(0, 4)} SortOrder={Enum.SortOrder.LayoutOrder} />
+							{(["done", "open", "locked"] as const).map((state, index) => (
 								<frame BackgroundTransparency={1} LayoutOrder={index} Size={new UDim2(1, 0, 0, 16)}>
-									<Swatch resource={() => stack().resource} />
-									<Label
-										position={UDim2.fromOffset(16, 0)}
-										size={new UDim2(0.6, -16, 1, 0)}
-										text={() => RESOURCES[stack().resource].name.upper()}
+									<frame
+										AnchorPoint={new Vector2(0, 0.5)}
+										BackgroundColor3={STATE_COLORS[state]}
+										BorderSizePixel={0}
+										Position={UDim2.fromScale(0, 0.5)}
+										Size={UDim2.fromOffset(10, 10)}
 									/>
-									{/* Decodes again whenever it changes, as research spends it. */}
 									<Label
-										alignX={Enum.TextXAlignment.Right}
-										anchorPoint={new Vector2(1, 0)}
-										color={COLORS.text}
-										font={FONT_DISPLAY}
-										position={UDim2.fromScale(1, 0)}
-										size={UDim2.fromScale(0.4, 1)}
-										text={useScramble("hud", () => tostring(stack().amount), 0, 0.25)}
-										textSize={14}
+										position={UDim2.fromOffset(18, 0)}
+										size={new UDim2(1, -18, 1, 0)}
+										text={STATE_NAMES[state]}
+										textSize={12}
 									/>
 								</frame>
-							)}
-						</Index>
+							))}
+						</HudBox>
+
+						<textlabel
+							AnchorPoint={new Vector2(1, 1)}
+							BackgroundTransparency={1}
+							FontFace={FONT_LABEL}
+							Position={() => new UDim2(0.98, 0, 0.97, 12 * (1 - hintIn()))}
+							Size={UDim2.fromScale(0.6, 0.025)}
+							Text={hint}
+							TextColor3={COLORS.muted}
+							TextScaled={true}
+							TextTransparency={() => 1 - 0.8 * hintIn()}
+							TextXAlignment={Enum.TextXAlignment.Right}
+						>
+							<uitextsizeconstraint MaxTextSize={14} />
+						</textlabel>
+
+						<Button
+							anchorPoint={new Vector2(0.5, 1)}
+							color={COLORS.stroke}
+							onClick={onClose}
+							position={new UDim2(0.5, 0, 1, -EDGE)}
+							size={UDim2.fromOffset(200, 42)}
+							text="BACK"
+						/>
+
+						<Show when={selected}>
+							{(picked, shown) =>
+								$tuple(
+									<ResearchPanel
+										picked={picked}
+										levels={levels}
+										stateOf={stateOf}
+										reasonOf={reasonOf}
+										pool={pool}
+										onResearch={onResearch}
+										show={shown}
+									/>,
+									EXIT_TIME,
+								)
+							}
+						</Show>
 					</frame>
-				</HudBox>
+				)}
+			</Show>
+		</frame>
+	) as Frame;
 
-				<HudBox
-					name="Legend"
-					anchorPoint={new Vector2(0, 1)}
-					position={() => new UDim2(0, EDGE - 220 * (1 - slideIn()), 1, -EDGE)}
-					size={UDim2.fromOffset(170, 74)}
-				>
-					<uilistlayout Padding={new UDim(0, 4)} SortOrder={Enum.SortOrder.LayoutOrder} />
-					{(["done", "open", "locked"] as const).map((state, index) => (
-						<frame BackgroundTransparency={1} LayoutOrder={index} Size={new UDim2(1, 0, 0, 16)}>
-							<frame
-								AnchorPoint={new Vector2(0, 0.5)}
-								BackgroundColor3={STATE_COLORS[state]}
-								BorderSizePixel={0}
-								Position={UDim2.fromScale(0, 0.5)}
-								Size={UDim2.fromOffset(10, 10)}
-							/>
-							<Label
-								position={UDim2.fromOffset(18, 0)}
-								size={new UDim2(1, -18, 1, 0)}
-								text={STATE_NAMES[state]}
-								textSize={12}
-							/>
-						</frame>
-					))}
-				</HudBox>
-
-				<textlabel
-					AnchorPoint={new Vector2(1, 1)}
-					BackgroundTransparency={1}
-					FontFace={FONT_LABEL}
-					Position={() => new UDim2(0.98, 0, 0.97, 12 * (1 - hintIn()))}
-					Size={UDim2.fromScale(0.6, 0.025)}
-					Text={hint}
-					TextColor3={COLORS.muted}
-					TextScaled={true}
-					TextTransparency={() => 1 - 0.8 * hintIn()}
-					TextXAlignment={Enum.TextXAlignment.Right}
-				>
-					<uitextsizeconstraint MaxTextSize={14} />
-				</textlabel>
-
-				<Button
-					anchorPoint={new Vector2(0.5, 1)}
-					color={COLORS.stroke}
-					onClick={onClose}
-					position={new UDim2(0.5, 0, 1, -EDGE)}
-					size={UDim2.fromOffset(200, 42)}
-					text="BACK"
-				/>
-
-				<Show when={selected}>
-					{(picked, shown) =>
-						$tuple(
-							<ResearchPanel
-								picked={picked}
-								levels={levels}
-								stateOf={stateOf}
-								reasonOf={reasonOf}
-								pool={pool}
-								onResearch={onResearch}
-								show={shown}
-							/>,
-							EXIT_TIME,
-						)
-					}
-				</Show>
-			</frame>
-		</canvasgroup>
-	);
+	// A canvas group redraws all of itself whenever anything in it changes, which the tree does every frame once live (the
+	// pulse, the spinning outlines). So the tree only sits in one while it fades, and holds still while it does.
+	const group = (
+		<canvasgroup BackgroundTransparency={1} GroupTransparency={() => 1 - appear()} Size={UDim2.fromScale(1, 1)} />
+	) as CanvasGroup;
+	const root = (
+		<frame Name="ResearchTree" BackgroundTransparency={1} Size={UDim2.fromScale(1, 1)}>
+			{group}
+		</frame>
+	) as Frame;
+	effect(() => (tree.Parent = fading() ? group : root));
+	return root;
 }
