@@ -4,7 +4,7 @@ import { useSpring } from "@rbxts/vide-ripple";
 import { Button } from "core/Interface/client/components/button";
 import { Brackets, ScanSweep } from "core/Interface/client/components/hud";
 import { Shadow } from "core/Interface/client/components/shadow";
-import { EXIT_TIME, useAppear, useScramble } from "core/Interface/client/motion";
+import { EXIT_TIME, useAppear, useScramble, useSpin } from "core/Interface/client/motion";
 import { CARD_TRANSPARENCY, COLORS, FONT, FONT_DISPLAY, FONT_LABEL, SPRINGS } from "core/Interface/client/theme";
 import { useServerTime } from "core/Interface/client/use-server-time";
 import { type Inventory, NOTICE_SECONDS, type Notice } from "game/Base/client/base-state";
@@ -483,8 +483,54 @@ function Toast({ text, layoutOrder }: { readonly text: string; readonly layoutOr
 	);
 }
 
-/** The server's toasts, stacked top centre, newest at the bottom. */
-export function Notices({ notices }: { readonly notices: () => ReadonlyArray<Notice> }) {
+/**
+ * Over the toasts while the Core is being hit: CORE UNDER ATTACK, its text and outline beating
+ * between white and red. Pops in and fades out.
+ */
+export function CoreWarning({ show }: { readonly show: () => boolean }) {
+	const appear = useAppear(show, 0, SPRINGS.bouncy);
+	const shown = () => clamp01(appear());
+	const spin = useSpin(() => 360);
+	const beat = () => 0.5 + 0.5 * math.sin(math.rad(spin()));
+
+	return (
+		<frame
+			Name="CoreWarning"
+			BackgroundColor3={COLORS.card}
+			BackgroundTransparency={() => 1 - 0.6 * shown()}
+			BorderSizePixel={0}
+			// Above the toasts, which count up from 0.
+			LayoutOrder={-1}
+			Size={UDim2.fromOffset(420, 40)}
+		>
+			<uiscale Scale={() => 0.9 + 0.1 * appear()} />
+			<uistroke
+				Color={COLORS.danger}
+				LineJoinMode={Enum.LineJoinMode.Miter}
+				Thickness={1.5}
+				Transparency={() => 1 - shown() * (0.3 + 0.7 * beat())}
+			/>
+			<textlabel
+				BackgroundTransparency={1}
+				FontFace={FONT_DISPLAY}
+				Size={UDim2.fromScale(1, 1)}
+				Text={useScramble("hud", () => "CORE UNDER ATTACK", 0, 0.3)}
+				TextColor3={() => COLORS.text.Lerp(COLORS.danger, beat())}
+				TextSize={20}
+				TextTransparency={() => 1 - shown()}
+			/>
+		</frame>
+	);
+}
+
+/** The server's toasts, stacked top centre, newest at the bottom, under `children`: warnings that outrank them. */
+export function Notices({
+	notices,
+	children,
+}: {
+	readonly notices: () => ReadonlyArray<Notice>;
+	readonly children?: Vide.Node;
+}) {
 	return (
 		<frame
 			Name="Notices"
@@ -498,6 +544,7 @@ export function Notices({ notices }: { readonly notices: () => ReadonlyArray<Not
 				Padding={new UDim(0, 6)}
 				SortOrder={Enum.SortOrder.LayoutOrder}
 			/>
+			{children}
 			<For each={notices}>{(notice, index) => <Toast text={notice.text} layoutOrder={index} />}</For>
 		</frame>
 	);

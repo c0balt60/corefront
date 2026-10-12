@@ -8,6 +8,8 @@ export const IMAGES = {
 	/** The red low-poly backdrop behind the loading screen and menus. */
 	background: "rbxassetid://347818442",
 	vignette: "rbxassetid://6221578518",
+	/** One edge of a vignette, a plain white gradient, drawn on all four sides by `ScreenEffect`. */
+	edge: "rbxassetid://131708002708097",
 	/** A soft 9-slice drop shadow (a widely used public asset). Swap for your own upload if it disappears. */
 	shadow: "rbxassetid://6014261993",
 };

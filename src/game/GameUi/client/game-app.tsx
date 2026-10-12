@@ -2,12 +2,14 @@ import { Players } from "@rbxts/services";
 import Vide, { derive, For, Show, source } from "@rbxts/vide";
 import { useAtom } from "@rbxts/vide-charm";
 
+import { ScreenEffect } from "core/Interface/client/components/screen-effect";
 import { EXIT_TIME } from "core/Interface/client/motion";
 import { hudVisibleAtom } from "core/Interface/client/ui-state";
 import { generateStarSystem } from "core/Worlds/shared/star-system";
 import {
 	baseStateAtom,
 	buildModeAtom,
+	coreAttackedAtom,
 	equippedAtom,
 	inventoryAtom,
 	nearSelectedAtom,
@@ -18,7 +20,14 @@ import {
 	toggleTool,
 	toolsAtom,
 } from "game/Base/client/base-state";
-import { CargoPanel, Notices, ResultBanner, SandboxPanel, WavePanel } from "game/Base/client/components/base-hud";
+import {
+	CargoPanel,
+	CoreWarning,
+	Notices,
+	ResultBanner,
+	SandboxPanel,
+	WavePanel,
+} from "game/Base/client/components/base-hud";
 import { BuildBar } from "game/Base/client/components/build-bar";
 import { BuildingPanel } from "game/Base/client/components/building-panel";
 import { Hotbar } from "game/Base/client/components/hotbar";
@@ -70,6 +79,7 @@ export function GameApp() {
 	const base = useAtom(baseStateAtom);
 	const inventory = useAtom(inventoryAtom);
 	const notices = useAtom(noticesAtom);
+	const coreAttacked = useAtom(coreAttackedAtom);
 	const buildMode = useAtom(buildModeAtom);
 	const clicked = useAtom(selectedAtom);
 	const nearClicked = useAtom(nearSelectedAtom);
@@ -313,7 +323,14 @@ export function GameApp() {
 
 			{/* Over the research tree, so its refusals show. */}
 			<screengui Name="Notices" DisplayOrder={6} Enabled={visible} ResetOnSpawn={false}>
-				<Notices notices={notices} />
+				<Notices notices={notices}>
+					<Show when={coreAttacked}>{(_, show) => $tuple(<CoreWarning show={show} />, EXIT_TIME)}</Show>
+				</Notices>
+			</screengui>
+
+			{/* Over the HUD, and left be by its toggle: it reports on the world, not the interface. */}
+			<screengui Name="ScreenEffect" DisplayOrder={7} IgnoreGuiInset={true} ResetOnSpawn={false}>
+				<ScreenEffect />
 			</screengui>
 
 			{/* Over everything, the HUD toggle included: it hides the next planet generating. */}
