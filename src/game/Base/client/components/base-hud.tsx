@@ -237,6 +237,14 @@ const SANDBOX_ROWS =
 	ROW_GAP * (KIND_SECTIONS.size() + 1);
 /** Its padding, the rows, and the buttons. */
 const SANDBOX_HEIGHT = 18 + SANDBOX_ROWS + ROW_GAP + 28;
+/** Its padding and title alone, folded. */
+const SANDBOX_FOLDED = 18 + 16;
+/** The fold button's width and height, in pixels. */
+const FOLD = 16;
+
+/** How far the sandbox panel's been dragged from its spot, and whether it's folded to its title. Kept across missions. */
+const sandboxDrag = source(Vector2.zero);
+const sandboxFolded = source(false);
 
 interface ChipProps {
 	readonly text: string;
@@ -286,20 +294,24 @@ interface SandboxPanelProps extends MissionProps {
 /**
  * A sandbox's stand-in for the wave panel, on the right: how many aliens are alive, a kind to pick
  * from the ground and air sections and a count, and buttons to send them from the drop zones or
- * clear them all. Slides in from the right.
+ * clear them all. Slides in from the right. Its title drags it about and its button folds it away.
  */
 export function SandboxPanel({ state, show, onSpawn, onClear }: SandboxPanelProps) {
 	const slide = useAppear(show, 0.1);
 	const kind = source<AlienKind>("crawler");
 	const count = source(SPAWN_COUNTS[1]);
 	const idle = () => state().phase !== "active";
+	const open = () => !sandboxFolded();
+	const foldHovered = source(false);
+	// Where the pointer and the panel were as the drag began.
+	let grab: { readonly from: Vector2; readonly drag: Vector2 } | undefined;
 
 	return (
 		<HudBox
 			name="SandboxPanel"
 			anchorPoint={new Vector2(1, 0)}
-			position={() => new UDim2(1, -EDGE + 340 * (1 - slide()), 0.3, 0)}
-			size={UDim2.fromOffset(300, SANDBOX_HEIGHT)}
+			position={() => new UDim2(1, -EDGE + 340 * (1 - slide()) + sandboxDrag().X, 0.3, sandboxDrag().Y)}
+			size={() => UDim2.fromOffset(300, open() ? SANDBOX_HEIGHT : SANDBOX_FOLDED)}
 		>
 			<frame BackgroundTransparency={1} Size={new UDim2(1, 0, 0, SANDBOX_ROWS)}>
 				<uilistlayout Padding={new UDim(0, ROW_GAP)} SortOrder={Enum.SortOrder.LayoutOrder} />
@@ -308,7 +320,7 @@ export function SandboxPanel({ state, show, onSpawn, onClear }: SandboxPanelProp
 					<Label
 						alignX={Enum.TextXAlignment.Right}
 						anchorPoint={new Vector2(1, 0)}
-						position={new UDim2(1, -40, 0, 0)}
+						position={new UDim2(1, -46 - FOLD, 0, 0)}
 						size={UDim2.fromScale(0.4, 1)}
 						text="ALIENS"
 					/>
@@ -317,10 +329,39 @@ export function SandboxPanel({ state, show, onSpawn, onClear }: SandboxPanelProp
 						anchorPoint={new Vector2(1, 0)}
 						color={() => (state().aliens > 0 ? COLORS.danger : COLORS.text)}
 						font={FONT_DISPLAY}
-						position={UDim2.fromScale(1, 0)}
+						position={new UDim2(1, -FOLD - 6, 0, 0)}
 						size={new UDim2(0, 36, 1, 0)}
 						text={() => tostring(state().aliens)}
 						textSize={16}
+					/>
+					{/* The grip: the title and the padding above it, up to the fold button. The detector moves nothing itself. */}
+					<frame
+						BackgroundTransparency={1}
+						Position={UDim2.fromOffset(0, -8)}
+						Size={new UDim2(1, -FOLD, 1, 12)}
+					>
+						<uidragdetector
+							ResponseStyle={Enum.UIDragDetectorResponseStyle.CustomOffset}
+							DragStart={(at) => {
+								grab = { from: at, drag: sandboxDrag() };
+							}}
+							DragContinue={(at) => {
+								if (grab) sandboxDrag(grab.drag.add(at.sub(grab.from)));
+							}}
+						/>
+					</frame>
+					<textbutton
+						AnchorPoint={new Vector2(1, 0.5)}
+						BackgroundTransparency={1}
+						FontFace={FONT_DISPLAY}
+						Position={UDim2.fromScale(1, 0.5)}
+						Size={UDim2.fromOffset(FOLD, FOLD)}
+						Text={() => (open() ? "-" : "+")}
+						TextColor3={() => (foldHovered() ? COLORS.text : COLORS.subtext)}
+						TextSize={16}
+						Activated={() => sandboxFolded(open())}
+						MouseEnter={() => foldHovered(true)}
+						MouseLeave={() => foldHovered(false)}
 					/>
 				</frame>
 				{KIND_SECTIONS.map(({ name, kinds }, index) => (
@@ -328,6 +369,7 @@ export function SandboxPanel({ state, show, onSpawn, onClear }: SandboxPanelProp
 						BackgroundTransparency={1}
 						LayoutOrder={index + 1}
 						Size={new UDim2(1, 0, 0, sectionHeight(kinds.size()))}
+						Visible={open}
 					>
 						<Label size={new UDim2(1, 0, 0, 12)} text={name} textSize={11} />
 						<frame
@@ -362,6 +404,7 @@ export function SandboxPanel({ state, show, onSpawn, onClear }: SandboxPanelProp
 					BackgroundTransparency={1}
 					LayoutOrder={KIND_SECTIONS.size() + 1}
 					Size={new UDim2(1, 0, 0, CHIP_HEIGHT)}
+					Visible={open}
 				>
 					<Label size={new UDim2(0, COUNT_LABEL, 1, 0)} text="COUNT" />
 					<frame
@@ -386,24 +429,26 @@ export function SandboxPanel({ state, show, onSpawn, onClear }: SandboxPanelProp
 					</frame>
 				</frame>
 			</frame>
-			<Button
-				anchorPoint={new Vector2(0, 1)}
-				color={COLORS.danger}
-				disabled={idle}
-				onClick={() => onSpawn(kind(), count())}
-				position={UDim2.fromScale(0, 1)}
-				size={new UDim2(0.6, -CHIP_GAP / 2, 0, 28)}
-				text="SPAWN"
-			/>
-			<Button
-				anchorPoint={new Vector2(1, 1)}
-				color={COLORS.stroke}
-				disabled={idle}
-				onClick={onClear}
-				position={UDim2.fromScale(1, 1)}
-				size={new UDim2(0.4, -CHIP_GAP / 2, 0, 28)}
-				text="CLEAR"
-			/>
+			<frame BackgroundTransparency={1} Size={UDim2.fromScale(1, 1)} Visible={open}>
+				<Button
+					anchorPoint={new Vector2(0, 1)}
+					color={COLORS.danger}
+					disabled={idle}
+					onClick={() => onSpawn(kind(), count())}
+					position={UDim2.fromScale(0, 1)}
+					size={new UDim2(0.6, -CHIP_GAP / 2, 0, 28)}
+					text="SPAWN"
+				/>
+				<Button
+					anchorPoint={new Vector2(1, 1)}
+					color={COLORS.stroke}
+					disabled={idle}
+					onClick={onClear}
+					position={UDim2.fromScale(1, 1)}
+					size={new UDim2(0.4, -CHIP_GAP / 2, 0, 28)}
+					text="CLEAR"
+				/>
+			</frame>
 		</HudBox>
 	);
 }
