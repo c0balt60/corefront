@@ -16,9 +16,10 @@ for (const [place, placeId] of Object.entries(environment.places)) {
 		);
 	}
 	console.log(`Publishing ${place} to ${name} (universe ${environment.universeId}, place ${placeId})`);
-	// Roblox intermittently answers 409 "Server is busy, try again in a couple minutes".
+	// Roblox answers 409 "Server is busy" while a Team Create session is open on the place,
+	// including for a few minutes after the last editor leaves Studio.
 	for (let attempt = 1; ; attempt++) {
-		const { status } = spawnSync(
+		const { status, stdout, stderr } = spawnSync(
 			"rbxcloud",
 			[
 				"experience",
@@ -32,10 +33,19 @@ for (const [place, placeId] of Object.entries(environment.places)) {
 				"--version-type",
 				"published",
 			],
-			{ stdio: "inherit" },
+			{ encoding: "utf8" },
 		);
+		process.stdout.write(stdout);
+		process.stderr.write(stderr);
 		if (status === 0) break;
-		if (attempt === 3) process.exit(status ?? 1);
+		if (attempt === 3) {
+			if (`${stdout}${stderr}`.includes("409")) {
+				console.log(
+					`::error::${place} (place ${placeId}) is locked by a Team Create session. Close it in Studio (or disable Collaborative Editing on this place) and re-run the job.`,
+				);
+			}
+			process.exit(status ?? 1);
+		}
 		console.log(`Publish failed, retrying in 60s (attempt ${attempt + 1}/3)`);
 		await setTimeout(60_000);
 	}
