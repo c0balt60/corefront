@@ -16,8 +16,8 @@ This page takes you from a fresh computer to a running lobby in Studio.
 ## 2. Set up the repo
 
 ```console
-git clone https://github.com/c0balt60/rogen-multiplace.git
-cd rogen-multiplace
+git clone https://github.com/c0balt60/corefront.git
+cd corefront
 git lfs pull
 rokit install
 pnpm install
@@ -32,7 +32,7 @@ Check that everything works:
 pnpm build
 ```
 
-The build should finish with `places/lobby/lobby.rbxl` and `places/match/match.rbxl`.
+The build should finish with `places/lobby/lobby.rbxl` and `places/game/game.rbxl`.
 
 ## 3. Run a place
 
@@ -54,11 +54,11 @@ In Studio:
 
 The Studio session stays in sync with the code: when you save a `.ts` file, it recompiles and syncs automatically.
 
-To work on the match instead, stop the lobby with `Ctrl+C` and run `pnpm dev match`. Only run one place's `dev` or `watch` at a time. Both places share `flamework.build`, and two compilers running at once can overwrite each other's changes to it.
+To work on the game place instead, stop the lobby with `Ctrl+C` and run `pnpm dev game`. Only run one place's `dev` or `watch` at a time. Both places share `flamework.build`, and two compilers running at once can overwrite each other's changes to it.
 
 ## Commands
 
-`<place>` is any folder in `places/`: `lobby` or `match`.
+`<place>` is any folder in `places/`: `lobby` or `game`.
 
 | Command                                            | What it does                                                                                         |
 | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
@@ -100,9 +100,9 @@ Rojo can't read Argon's `syncback` rules, so when Rojo runs, `scripts/place.mjs`
 
 ## In-game helpers
 
-- **F2** opens the Cmdr admin console. Try `coins . 100`.
+- **F2** opens the Cmdr admin console. Try `coins . 100`, or `giveresource copper 500` in the game place. See [gameplay.md](gameplay.md#admin-commands).
 - In Studio, player data uses a mock store, so playtests never touch live data.
-- Teleports don't run in Studio. A lobby playtest logs what it would have sent. A match playtest runs a Practice round on its own.
+- Teleports don't run in Studio. The lobby refuses to create or join worlds. A game playtest runs world `STUDIO` with a random seed.
 
 ## Troubleshooting
 
@@ -116,5 +116,6 @@ Rojo can't read Argon's `syncback` rules, so when Rojo runs, `scripts/place.mjs`
 
 ## Next
 
+- [Gameplay](gameplay.md) and [architecture](architecture.md)
 - [Create a feature](features/create-new.md)
 - [Syncback rules](syncback/rules.md) and [syncback workflow](syncback/workflow.md)
