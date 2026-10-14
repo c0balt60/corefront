@@ -108,6 +108,11 @@ export function GameApp() {
 		return phase === "won" || phase === "lost" ? phase : undefined;
 	};
 	const plan = () => (deployed() ? world()?.plan : undefined);
+	// Derived from research and the sandbox flag alone, not the whole base state, which changes several times a second.
+	const sandbox = derive(() => base()?.sandbox === true);
+	const buildable = derive(() => BUILDABLE.filter((kind) => canBuild(levels(), kind, sandbox())));
+	const building = derive(() => mission()?.phase === "active" && equipped()?.Name === BUILD_TOOL);
+	const researching = derive(() => mission() !== undefined && researchOpen());
 	const star = derive(() => {
 		const state = world();
 		return state ? generateStarSystem(state.seed, state.sandbox).star : "";
@@ -281,22 +286,16 @@ export function GameApp() {
 						)
 					}
 				</Show>
-				<Show when={() => mission()?.phase === "active" && equipped()?.Name === BUILD_TOOL}>
-					{(_, show) =>
-						$tuple(
-							<BuildBar
-								kinds={() => BUILDABLE.filter((kind) => canBuild(levels(), kind, base()?.sandbox))}
-								pool={() => base()?.pool ?? []}
-								held={() => inventory().items}
-								mode={buildMode}
-								onSelect={toggleBuildMode}
-								onInfo={(kind) => infoAtom(kind)}
-								show={show}
-							/>,
-							EXIT_TIME,
-						)
-					}
-				</Show>
+				{/* Mounted once and hidden while the Build tool is away: remaking it on every draw hitched. */}
+				<BuildBar
+					kinds={buildable}
+					pool={() => base()?.pool ?? []}
+					held={() => inventory().items}
+					mode={buildMode}
+					onSelect={toggleBuildMode}
+					onInfo={(kind) => infoAtom(kind)}
+					show={building}
+				/>
 				<Show when={result}>
 					{(phase, show) => $tuple(<ResultBanner result={phase} show={show} />, EXIT_TIME)}
 				</Show>
@@ -311,21 +310,15 @@ export function GameApp() {
 				ResetOnSpawn={false}
 				ZIndexBehavior={Enum.ZIndexBehavior.Sibling}
 			>
-				<Show when={() => mission() !== undefined && researchOpen()}>
-					{(_, show) =>
-						$tuple(
-							<ResearchTree
-								levels={levels}
-								gates={() => ({ conquered: world()?.conquered.size() ?? 0, discovered: discovered() })}
-								pool={() => base()?.pool ?? []}
-								onResearch={(id) => researchMessaging.server.emit(ResearchMessage.Research, { id })}
-								onClose={() => researchOpenAtom(false)}
-								show={show}
-							/>,
-							EXIT_TIME,
-						)
-					}
-				</Show>
+				{/* Mounted once and hidden while closed: it's thousands of instances, too many to make on every open. */}
+				<ResearchTree
+					levels={levels}
+					gates={() => ({ conquered: world()?.conquered.size() ?? 0, discovered: discovered() })}
+					pool={() => base()?.pool ?? []}
+					onResearch={(id) => researchMessaging.server.emit(ResearchMessage.Research, { id })}
+					onClose={() => researchOpenAtom(false)}
+					show={researching}
+				/>
 				<Show when={() => (mission() !== undefined ? info() : undefined)}>
 					{(kind, show) =>
 						$tuple(<TurretInfo kind={kind()} onClose={() => infoAtom(undefined)} show={show} />, EXIT_TIME)

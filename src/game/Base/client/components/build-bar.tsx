@@ -1,5 +1,5 @@
 import { GuiService, Workspace } from "@rbxts/services";
-import Vide, { cleanup, effect, For, Index, source } from "@rbxts/vide";
+import Vide, { cleanup, derive, effect, For, Index, source } from "@rbxts/vide";
 import { useSpring } from "@rbxts/vide-ripple";
 
 import { Brackets } from "core/Interface/client/components/hud";
@@ -13,6 +13,7 @@ import {
 	BUILD_CATEGORIES,
 	type BuildableKind,
 	type BuildCategory,
+	BUILDABLE,
 	BUILDINGS,
 	REFUND,
 } from "game/Base/shared/buildings";
@@ -58,6 +59,8 @@ interface TileProps {
 	/** The key that picks it, if any. */
 	readonly hotkey?: string;
 	readonly layoutOrder: number;
+	/** Hidden, and skipped by its layout, while false. */
+	readonly visible?: () => boolean;
 	readonly onClick: () => void;
 	readonly onHover: (entered: boolean) => void;
 }
@@ -66,7 +69,7 @@ interface TileProps {
  * One square tile: a glyph, and its hotkey (if it has one) in the corner. Hovering lifts it; picking
  * it grows it, lights its outline and locks brackets onto its corners.
  */
-function Tile({ glyph, size, color, selected, dim, hotkey, layoutOrder, onClick, onHover }: TileProps) {
+function Tile({ glyph, size, color, selected, dim, hotkey, layoutOrder, visible, onClick, onHover }: TileProps) {
 	const hovered = source(false);
 	const [lift, liftSpring] = useSpring(0, SPRINGS.responsive);
 	const [scale, scaleSpring] = useSpring(1, SPRINGS.bouncy);
@@ -81,7 +84,12 @@ function Tile({ glyph, size, color, selected, dim, hotkey, layoutOrder, onClick,
 	const icon = math.floor((size - 12) / 12) * 12;
 
 	return (
-		<frame BackgroundTransparency={1} LayoutOrder={layoutOrder} Size={UDim2.fromOffset(size, size)}>
+		<frame
+			BackgroundTransparency={1}
+			LayoutOrder={layoutOrder}
+			Size={UDim2.fromOffset(size, size)}
+			Visible={visible}
+		>
 			<frame
 				AnchorPoint={new Vector2(0.5, 0.5)}
 				BackgroundTransparency={1}
@@ -171,7 +179,7 @@ function infoOf(subject: Subject): Info {
 }
 
 interface BuildBarProps {
-	/** The buildings the local player can place, in `BUILDABLE` order. */
+	/** The buildings the local player can place, in `BUILDABLE` order. Derive it: everything here reads it often. */
 	readonly kinds: () => ReadonlyArray<BuildableKind>;
 	readonly pool: () => ReadonlyArray<ResourceStack>;
 	/** The local player's backpack, counted with the pool in each cost's total. */
@@ -180,7 +188,7 @@ interface BuildBarProps {
 	readonly onSelect: (mode: BuildMode) => void;
 	/** Opens a turret's info page (see `TurretInfo`). */
 	readonly onInfo: (kind: BuildableKind) => void;
-	/** Turns false to put it away. Return `$tuple(node, EXIT_TIME)` from the Show that renders it. */
+	/** Turns false to put it away. Mount it once: it hides rather than unmounts, so drawing the Build tool makes nothing. */
 	readonly show: () => boolean;
 }
 
@@ -206,10 +214,16 @@ export function BuildBar({ kinds, pool, held, mode, onSelect, onInfo, show }: Bu
 		0.3,
 	);
 
-	const categories = () =>
-		BUILD_CATEGORIES.filter((category) => category.kinds.some((kind) => kinds().includes(kind)));
-	const open = () => (categories().includes(picked()) ? picked() : categories()[0]);
-	const tiles = () => open().kinds.filter((kind) => kinds().includes(kind));
+	// Derived: hovering and picking read these through every tile, and working them out each time stalled for frames.
+	const categories = derive(() => {
+		const available = kinds();
+		return BUILD_CATEGORIES.filter((category) => category.kinds.some((kind) => available.includes(kind)));
+	});
+	const open = derive(() => (categories().includes(picked()) ? picked() : categories()[0]));
+	const tiles = derive(() => {
+		const available = kinds();
+		return open().kinds.filter((kind) => available.includes(kind));
+	});
 	effect(() => {
 		const current = mode();
 		if (current === undefined || current === "remove") return;
@@ -222,6 +236,10 @@ export function BuildBar({ kinds, pool, held, mode, onSelect, onInfo, show }: Bu
 		if (entered) hovered(subject);
 		else if (hovered() === subject) hovered(undefined);
 	};
+	// Hiding a tile under the mouse doesn't fire its MouseLeave, so the header would open on it next time.
+	effect(() => {
+		if (!show()) hovered(undefined);
+	});
 	const info = () => {
 		const subject = hovered() ?? mode();
 		return subject !== undefined ? infoOf(subject) : undefined;
@@ -253,7 +271,7 @@ export function BuildBar({ kinds, pool, held, mode, onSelect, onInfo, show }: Bu
 	const measure = (frame: Frame) => {
 		const update = () => content(frame.AbsoluteSize.Y / scale());
 		update();
-		frame.GetPropertyChangedSignal("AbsoluteSize").Connect(update);
+		cleanup(frame.GetPropertyChangedSignal("AbsoluteSize").Connect(update));
 	};
 
 	return (
@@ -264,6 +282,7 @@ export function BuildBar({ kinds, pool, held, mode, onSelect, onInfo, show }: Bu
 				BackgroundTransparency={1}
 				Position={() => new UDim2(0.5, 0, 1, -HINT_BOTTOM + 240 * (1 - appear()))}
 				Size={UDim2.fromOffset(640, 16)}
+				Visible={() => appear() > 0.01}
 			>
 				<Label alignX={Enum.TextXAlignment.Center} size={UDim2.fromScale(1, 1)} text={hint} />
 			</frame>
@@ -273,6 +292,7 @@ export function BuildBar({ kinds, pool, held, mode, onSelect, onInfo, show }: Bu
 				BackgroundTransparency={1}
 				Position={() => new UDim2(1, -EDGE + (WIDTH + 2 * EDGE) * (1 - appear()), 1, -EDGE)}
 				Size={() => UDim2.fromOffset(WIDTH, height())}
+				Visible={() => appear() > 0.01}
 			>
 				<uiscale Scale={scale} />
 				<frame
@@ -378,17 +398,19 @@ export function BuildBar({ kinds, pool, held, mode, onSelect, onInfo, show }: Bu
 							FillDirectionMaxCells={COLUMNS}
 							SortOrder={Enum.SortOrder.LayoutOrder}
 						/>
-						<For each={tiles}>
+						{/* Every category's tiles, only the open one's shown, so switching categories makes none. */}
+						<For each={kinds}>
 							{(kind) => (
 								<Tile
 									color={COLORS.accent}
 									dim={() => !canAfford(pool(), BUILDINGS[kind].cost)}
 									glyph={kind}
-									layoutOrder={open().kinds.indexOf(kind)}
+									layoutOrder={BUILDABLE.indexOf(kind)}
 									onClick={() => onSelect(kind)}
 									onHover={hover(kind)}
 									selected={() => mode() === kind}
 									size={TILE}
+									visible={() => open().kinds.includes(kind)}
 								/>
 							)}
 						</For>

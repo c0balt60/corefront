@@ -7,7 +7,7 @@ import { Brackets, EnergyGradient } from "core/Interface/client/components/hud";
 import { MenuBackground } from "core/Interface/client/components/menu-background";
 import { Panel } from "core/Interface/client/components/panel";
 import { Shadow } from "core/Interface/client/components/shadow";
-import { EXIT_TIME, useAppear, useScramble, useSpin } from "core/Interface/client/motion";
+import { useAppear, useScramble, useSpin } from "core/Interface/client/motion";
 import { COLORS, FONT, FONT_DISPLAY, FONT_LABEL, hasEffect, SPRINGS } from "core/Interface/client/theme";
 import { amountOf, canAfford } from "game/Base/client/base-state";
 import { HudBox, Label, Swatch } from "game/Base/client/components/base-hud";
@@ -747,7 +747,7 @@ interface ResearchPanelProps {
 	readonly reasonOf: (id: ResearchId) => string | undefined;
 	readonly pool: () => ReadonlyArray<ResourceStack>;
 	readonly onResearch: (id: ResearchId) => void;
-	/** Turns false to slide it out. Return `$tuple(node, EXIT_TIME)` from the Show that renders it. */
+	/** Turns false to slide it out. It stays mounted, hidden, so picking a node makes nothing. */
 	readonly show: () => boolean;
 }
 
@@ -768,6 +768,8 @@ function ResearchPanel({ picked, levels, stateOf, reasonOf, pool, onResearch, sh
 	effect(() => liftSpring.setGoal(hovered() ? 0.5 : 0));
 	effect(() => {
 		picked();
+		// Every pick, and every time it slides back in.
+		if (!show()) return;
 		swapSpring.setPosition(0);
 		swapSpring.halt();
 		swapSpring.setGoal(1);
@@ -834,6 +836,7 @@ function ResearchPanel({ picked, levels, stateOf, reasonOf, pool, onResearch, sh
 			BackgroundTransparency={1}
 			Position={() => UDim2.fromScale(0.98 + 0.3 * (1 - slide()), 0.18)}
 			Size={UDim2.fromScale(0.22, 0.62)}
+			Visible={() => slide() > 0.01}
 			MouseEnter={() => hovered(true)}
 			MouseLeave={() => hovered(false)}
 		>
@@ -1067,7 +1070,7 @@ interface ResearchTreeProps {
 	readonly pool: () => ReadonlyArray<ResourceStack>;
 	readonly onResearch: (id: ResearchId) => void;
 	readonly onClose: () => void;
-	/** Turns false to fade it away. Return `$tuple(node, EXIT_TIME)` from the Show that renders it. */
+	/** Turns false to fade it away. Mount it once: it hides rather than unmounts, so opening it makes nothing. */
 	readonly show: () => boolean;
 }
 
@@ -1089,8 +1092,8 @@ export function ResearchTree({ levels, gates, pool, onResearch, onClose, show }:
 	/** Whether it's on screen and out of the group: everything that runs every frame runs only then. */
 	const live = derive(() => show() && !fading());
 	/**
-	 * Turns true the first time it's live, and stays: the tree grows and the HUD comes in then. So it fades in as just
-	 * the Core's backdrop, and fades out held as it was.
+	 * Turns true the first time it's live, and stays: the HUD comes in then. The tree grows each time it's live (see
+	 * the reset below), so it fades in as just the Core's backdrop, and fades out held as it was.
 	 */
 	const started = source(false);
 	const slideIn = useAppear(started, 0.15);
@@ -1102,11 +1105,9 @@ export function ResearchTree({ levels, gates, pool, onResearch, onClose, show }:
 	const [grown, growTween] = useTween(0, { duration: GROW_SECONDS, easing: "sineOut" });
 	effect(() => {
 		if (!live()) return;
-		if (!untrack(started)) {
-			started(true);
-			startedAt = os.clock();
-			growTween.setGoal(FURTHEST);
-		}
+		started(true);
+		startedAt = os.clock();
+		growTween.setGoal(FURTHEST);
 		const clock = RunService.RenderStepped.Connect(() => now(os.clock() - startedAt));
 		cleanup(() => clock.Disconnect());
 	});
@@ -1132,6 +1133,27 @@ export function ResearchTree({ levels, gates, pool, onResearch, onClose, show }:
 	/** The node whose panel is open, or the Core's. */
 	const selected = source<ResearchId | "core">();
 	const pick = (picked: ResearchId | "core") => selected(selected() === picked ? undefined : picked);
+	/** The last one picked, which its panel keeps showing as it slides out. */
+	const inspected = source<ResearchId | "core">("core");
+	effect(() => {
+		const picked = selected();
+		if (picked !== undefined) inspected(picked);
+	});
+	const inspecting = derive(() => selected() !== undefined);
+	// Once it has faded out: back to just the Core, centred, with nothing picked, to open as it first did.
+	effect(() => {
+		if (show() || appear() > 0.01) return;
+		growTween.setGoal(0);
+		growTween.setPosition(0);
+		selected(undefined);
+		pan(Vector2.zero);
+		zoom(1);
+	});
+	// Held while it's closed, so a hidden tree doesn't redraw (and decode) the Core's storage on every base update.
+	const stock = source(untrack(pool));
+	effect(() => {
+		if (show()) stock(pool());
+	});
 	// Roblox's topbar covers the top of the screen, which this ScreenGui ignores the inset of.
 	const [inset] = GuiService.GetGuiInset();
 	const top = inset.Y + EDGE;
@@ -1168,6 +1190,7 @@ export function ResearchTree({ levels, gates, pool, onResearch, onClose, show }:
 		input.UserInputType === Enum.UserInputType.MouseButton1 || input.UserInputType === Enum.UserInputType.Touch;
 	const connections = [
 		UserInputService.InputChanged.Connect((input) => {
+			if (!show()) return;
 			if (input.UserInputType === Enum.UserInputType.MouseWheel) {
 				zoomAt(UserInputService.GetMouseLocation(), input.Position.Z > 0 ? ZOOM_STEP : 1 / ZOOM_STEP);
 				return;
@@ -1286,7 +1309,7 @@ export function ResearchTree({ levels, gates, pool, onResearch, onClose, show }:
 							name="CoreStorage"
 							anchorPoint={Vector2.zero}
 							position={() => UDim2.fromOffset(EDGE - 260 * (1 - slideIn()), top)}
-							size={() => UDim2.fromOffset(210, 40 + 20 * pool().size())}
+							size={() => UDim2.fromOffset(210, 40 + 20 * stock().size())}
 						>
 							<Label text={useScramble("hud", () => "CORE STORAGE", 0.2)} size={new UDim2(1, 0, 0, 14)} />
 							<frame
@@ -1295,7 +1318,7 @@ export function ResearchTree({ levels, gates, pool, onResearch, onClose, show }:
 								Size={new UDim2(1, 0, 1, -22)}
 							>
 								<uilistlayout Padding={new UDim(0, 4)} SortOrder={Enum.SortOrder.LayoutOrder} />
-								<Index each={pool}>
+								<Index each={stock}>
 									{(stack, index) => (
 										<frame
 											BackgroundTransparency={1}
@@ -1381,22 +1404,15 @@ export function ResearchTree({ levels, gates, pool, onResearch, onClose, show }:
 							text="BACK"
 						/>
 
-						<Show when={selected}>
-							{(picked, shown) =>
-								$tuple(
-									<ResearchPanel
-										picked={picked}
-										levels={levels}
-										stateOf={stateOf}
-										reasonOf={reasonOf}
-										pool={pool}
-										onResearch={onResearch}
-										show={shown}
-									/>,
-									EXIT_TIME,
-								)
-							}
-						</Show>
+						<ResearchPanel
+							picked={inspected}
+							levels={levels}
+							stateOf={stateOf}
+							reasonOf={reasonOf}
+							pool={stock}
+							onResearch={onResearch}
+							show={inspecting}
+						/>
 					</frame>
 				)}
 			</Show>
@@ -1409,7 +1425,12 @@ export function ResearchTree({ levels, gates, pool, onResearch, onClose, show }:
 		<canvasgroup BackgroundTransparency={1} GroupTransparency={() => 1 - appear()} Size={UDim2.fromScale(1, 1)} />
 	) as CanvasGroup;
 	const root = (
-		<frame Name="ResearchTree" BackgroundTransparency={1} Size={UDim2.fromScale(1, 1)}>
+		<frame
+			Name="ResearchTree"
+			BackgroundTransparency={1}
+			Size={UDim2.fromScale(1, 1)}
+			Visible={() => appear() > 0.01}
+		>
 			{group}
 		</frame>
 	) as Frame;
