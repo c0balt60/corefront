@@ -302,7 +302,7 @@ export function StarMap({
 	retreat = () => false,
 	show,
 }: StarMapProps) {
-	const { planets } = generateStarSystem(world().seed, world().sandbox);
+	const { planets } = generateStarSystem(world());
 
 	// Every drift, spin and pulse below is driven by this one source.
 	const now = source(os.clock() - EPOCH);

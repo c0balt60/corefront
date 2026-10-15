@@ -1,5 +1,5 @@
 import { OnStart, Service } from "@flamework/core";
-import { atom, computed, listen, subscribe } from "@rbxts/charm";
+import { atom, computed, subscribe } from "@rbxts/charm";
 import type { Logger } from "@rbxts/log";
 import { Players } from "@rbxts/services";
 import { t } from "@rbxts/t";
@@ -60,10 +60,7 @@ export class PlanetsService implements OnStart {
 		});
 		planetsMessaging.server.on(PlanetsMessage.Deploy, (player, data) => this.deploy(player, data));
 
-		// Every world starts on its first planet, generated as soon as the world is known.
-		listen(this.arrivalService.worldAtom, (world) => {
-			if (world) this.activate(0);
-		});
+		// `SaveService` starts the campaign once the world is known: on its first planet, or where its save left off.
 
 		// A regenerated map moves the landing: bring everyone standing on the old one to the new.
 		subscribe(this.currentMap, (map) => {
@@ -98,7 +95,7 @@ export class PlanetsService implements OnStart {
 
 	getPlanets(): ReadonlyArray<Planet> {
 		const world = this.arrivalService.getWorld();
-		return world ? generateStarSystem(world.seed, world.sandbox).planets : [];
+		return world ? generateStarSystem(world).planets : [];
 	}
 
 	isConquered(planet: number): boolean {
@@ -111,6 +108,19 @@ export class PlanetsService implements OnStart {
 
 	isUnlocked(planet: number): boolean {
 		return this.unlocked.includes(planet);
+	}
+
+	getUnlocked(): ReadonlyArray<number> {
+		return this.unlocked;
+	}
+
+	/** Puts a saved campaign's planets back. Call it before the first `activate`. */
+	restore(unlocked: ReadonlyArray<number>, conquered: ReadonlyArray<number>) {
+		this.unlocked.clear();
+		this.conquered.clear();
+		for (const planet of unlocked) if (this.getPlanet(planet)) this.unlocked.push(planet);
+		for (const planet of conquered) if (this.getPlanet(planet)) this.conquered.push(planet);
+		if (!this.unlocked.includes(0)) this.unlocked.push(0);
 	}
 
 	isDeployed(player: Player): boolean {

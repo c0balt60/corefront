@@ -7,7 +7,7 @@ import { type Levels, type StatId, statValue } from "game/Research/shared/resear
  * What has been researched in this world, for the life of the server. A module
  * rather than part of `ResearchService`, so the services the stats apply to
  * (Base, Wave, Blaster) can read them without depending on it. Only
- * `ResearchService` writes here.
+ * `ResearchService` writes here, and `SaveService` as a save loads.
  */
 
 /** Each player's own research, by UserId. Kept after they leave, for if they come back. */

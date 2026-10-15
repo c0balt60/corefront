@@ -1,4 +1,4 @@
-import type { PlanetKind } from "core/Worlds/shared/star-system";
+import type { PlanetKind, StarSettings } from "core/Worlds/shared/star-system";
 
 /** Most players one world server takes. Set the game place's Max Players to the same in Creator Hub. */
 export const MAX_PLAYERS = 4;
@@ -18,6 +18,30 @@ export interface WorldSummary {
 	readonly players: number;
 	/** A sandbox world's one planet's kind (see `generateStarSystem`). Undefined for a campaign. */
 	readonly sandbox?: PlanetKind;
+}
+
+/** Save slots each player has. Slots are numbered from 1. */
+export const SLOT_COUNT = 3;
+
+/** Which of whose slots a world saves to. */
+export interface SaveRef {
+	readonly owner: number;
+	readonly slot: number;
+}
+
+/** A filled save slot as the lobby's Saves page shows it. */
+export interface SaveSummary {
+	readonly slot: number;
+	readonly settings: StarSettings;
+	readonly isPrivate: boolean;
+	/** How many planets are liberated. */
+	readonly conquered: number;
+	/** `os.time()` of the last save. */
+	readonly savedAt: number;
+}
+
+export function isValidSlot(slot: unknown): slot is number {
+	return typeIs(slot, "number") && slot % 1 === 0 && slot >= 1 && slot <= SLOT_COUNT;
 }
 
 export function isValidSeed(seed: unknown): seed is number {

@@ -1,17 +1,20 @@
 import Log from "@rbxts/log";
 import { MemoryStoreService } from "@rbxts/services";
 
-import { MAX_PLAYERS, type WorldSummary } from "core/Worlds/shared/worlds";
+import type { StarSettings } from "core/Worlds/shared/star-system";
+import { MAX_PLAYERS, type SaveRef, type WorldSummary } from "core/Worlds/shared/worlds";
 
 /** Seconds an entry outlives its last write. World servers refresh theirs well inside this. */
 const ENTRY_TTL = 90;
 
 /** What the registry holds about one world. Server-only: the access code lets anyone into the world. */
-export interface WorldEntry extends WorldSummary {
+export interface WorldEntry extends WorldSummary, StarSettings {
 	readonly accessCode: string;
 	/** `game.PrivateServerId` of the reserved server, so it can check that an entry is its own. */
 	readonly privateServerId: string;
 	readonly isPrivate: boolean;
+	/** The save slot the world loads from and saves to. */
+	readonly save: SaveRef;
 }
 
 const worlds = MemoryStoreService.GetSortedMap("Worlds");

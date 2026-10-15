@@ -159,7 +159,7 @@ export class TerrainService implements OnStart {
 			}
 			if (epoch !== this.epoch) return;
 
-			const planet = generateStarSystem(world.seed, world.sandbox).planets[index];
+			const planet = generateStarSystem(world).planets[index];
 			if (!planet) {
 				this.logger.Warn("World {Code} has no planet {Index}", world.code, index);
 				return;

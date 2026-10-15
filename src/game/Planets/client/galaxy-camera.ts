@@ -68,7 +68,7 @@ function planets() {
 	const seed = world?.seed;
 	if (seed !== cachedSeed) {
 		cachedSeed = seed;
-		cachedPlanets = world ? generateStarSystem(world.seed, world.sandbox).planets : [];
+		cachedPlanets = world ? generateStarSystem(world).planets : [];
 	}
 	return cachedPlanets;
 }

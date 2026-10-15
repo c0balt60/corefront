@@ -24,7 +24,7 @@ export function HomePage({ onPage, show }: NavigatingProps) {
 			<MenuCard
 				title="DEPLOY"
 				tag="01"
-				subtitle="Create or join a world"
+				subtitle="Load a save or join a world"
 				titleHeight={0.075}
 				size={UDim2.fromScale(0.4, 1)}
 				onClick={() => onPage("deploy")}
@@ -69,17 +69,17 @@ export function HomePage({ onPage, show }: NavigatingProps) {
 	);
 }
 
-/** Two tall cards: make a new world or join one. */
+/** Two tall cards: your saved worlds (where new ones are made too), or join someone else's. */
 export function DeployPage({ onPage, show }: NavigatingProps) {
 	return (
 		<>
 			<MenuCard
-				title="CREATE"
+				title="SAVES"
 				tag="01"
-				subtitle="Create your own world"
+				subtitle="Load a saved world or create a new one"
 				titleHeight={0.085}
 				size={UDim2.fromScale(0.49, 0.88)}
-				onClick={() => onPage("create")}
+				onClick={() => onPage("saves")}
 				show={show}
 			/>
 			<MenuCard

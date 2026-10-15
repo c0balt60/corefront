@@ -151,8 +151,8 @@ function holds(def: BuildingDef, resource: ResourceId): boolean {
 	);
 }
 
-/** A liberated planet's base while the team is away: everything but the Core, which left with them. */
-interface SavedBase {
+/** A liberated planet's base while the team is away: everything but the Core, which left with them. JSON-safe, so saves keep it. */
+export interface SavedBase {
 	readonly buildings: ReadonlyArray<
 		Pick<Building, "kind" | "cell" | "rotation" | "owner" | "health" | "stored" | "filter" | "input"> & {
 			/** The cells of what it's power-linked to. */
@@ -408,6 +408,24 @@ export class BaseService implements OnStart {
 
 	/** Keeps the active planet's base, all but the Core, for when the team comes back to `planet`. */
 	save(planet: number) {
+		this.saved.set(planet, this.capture());
+	}
+
+	/** Every base a world save keeps: those kept for liberated planets and, while the team holds it, the active one. */
+	getBases(): ReadonlyMap<number, SavedBase> {
+		const bases = new Map<number, SavedBase>();
+		for (const [planet, base] of this.saved) bases.set(planet, base);
+		const phase = this.phase();
+		if (this.map && (phase === "active" || phase === "won")) bases.set(this.map.planet, this.capture());
+		return bases;
+	}
+
+	/** Puts a world save's bases back. Each is rebuilt when the team next lands on its planet. */
+	restore(bases: ReadonlyMap<number, SavedBase>) {
+		for (const [planet, base] of bases) this.saved.set(planet, base);
+	}
+
+	private capture(): SavedBase {
 		const buildings = new Array<SavedBase["buildings"][number]>();
 		for (const { kind, cell, rotation, owner, health, stored, filter, input, links } of this.buildings) {
 			if (kind === "core") continue;
@@ -415,7 +433,7 @@ export class BaseService implements OnStart {
 			for (const other of links) linked.push(other.cell);
 			buildings.push({ kind, cell, rotation, owner, health, stored, filter, input: { ...input }, linked });
 		}
-		this.saved.set(planet, { buildings, pool: { ...this.poolAtom() } });
+		return { buildings, pool: { ...this.poolAtom() } };
 	}
 
 	/** Cargo to add to the pool when `planet`'s base next starts. */

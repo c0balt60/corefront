@@ -118,11 +118,11 @@ export function GameApp() {
 	const researching = derive(() => mission() !== undefined && researchOpen());
 	const star = derive(() => {
 		const state = world();
-		return state ? generateStarSystem(state.seed, state.sandbox).star : "";
+		return state ? generateStarSystem(state).star : "";
 	});
 	const planets = derive(() => {
 		const state = world();
-		return state ? generateStarSystem(state.seed, state.sandbox).planets : [];
+		return state ? generateStarSystem(state).planets : [];
 	});
 	const active = () => world()?.active;
 	// On a planet enemies hold, the only way off is a retreat.

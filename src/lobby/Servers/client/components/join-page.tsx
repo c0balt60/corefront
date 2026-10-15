@@ -223,7 +223,7 @@ interface WorldRowProps {
  */
 function WorldRow({ world, order, delay, show, onJoin }: WorldRowProps) {
 	// A sandbox shows as one, in place of its star.
-	const star = derive(() => (world().sandbox ? "SANDBOX" : generateStarSystem(world().seed).star.upper()));
+	const star = derive(() => (world().sandbox ? "SANDBOX" : generateStarSystem(world()).star.upper()));
 	const host = derive(() => world().hostName);
 	const players = derive(() => `${world().players}/${MAX_PLAYERS}`);
 	const hostText = useScramble("row", host, delay + 0.1, 0.4);

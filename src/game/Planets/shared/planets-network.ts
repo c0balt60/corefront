@@ -1,6 +1,6 @@
 import { MessageEmitter } from "@rbxts/tether";
 
-import type { PlanetKind } from "core/Worlds/shared/star-system";
+import type { StarSettings } from "core/Worlds/shared/star-system";
 import type { ResourceStack } from "game/Base/shared/resources";
 
 /**
@@ -59,13 +59,11 @@ export interface LaunchPlan {
 	readonly needed: ReadonlyArray<number>;
 }
 
-export interface WorldState {
+/** The world's settings, so clients generate its star system (see `generateStarSystem`), and its campaign. */
+export interface WorldState extends StarSettings {
 	readonly code: string;
-	readonly seed: number;
 	readonly isPrivate: boolean;
-	/** A sandbox world's one planet's kind (see `generateStarSystem`). Undefined for a campaign. */
-	readonly sandbox?: PlanetKind;
-	/** Indexes into `generateStarSystem(seed).planets` that players may travel to. */
+	/** Indexes into `generateStarSystem(state).planets` that players may travel to. */
 	readonly unlocked: Array<number>;
 	/** Planets the world has liberated. */
 	readonly conquered: Array<number>;

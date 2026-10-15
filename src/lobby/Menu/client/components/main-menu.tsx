@@ -111,7 +111,7 @@ interface NavBarProps {
 function NavBar({ page, onPage, show }: NavBarProps) {
 	const rise = useAppear(show, 0.1);
 	const hovered = source<number | undefined>(undefined);
-	// Create, Join and the rest of Deploy belong to Home, which is the first item.
+	// Saves, Create, Join and the rest of Deploy belong to Home, which is the first item.
 	const active = derive(() =>
 		math.max(
 			NAV_ITEMS.findIndex((item) => item.page === page()),
