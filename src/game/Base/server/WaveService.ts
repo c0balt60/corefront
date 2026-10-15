@@ -1,7 +1,7 @@
 import { OnStart, Service } from "@flamework/core";
 import { atom, computed, listen, subscribe } from "@rbxts/charm";
 import type { Logger } from "@rbxts/log";
-import { Players, RunService, Workspace } from "@rbxts/services";
+import { Debris, Players, RunService, Workspace } from "@rbxts/services";
 
 import { BaseService, type Building } from "game/Base/server/BaseService";
 import { buildFlowfield, terrainCosts } from "game/Base/server/flowfield";
@@ -393,8 +393,21 @@ interface Mark {
 	readonly building?: Building;
 }
 
-const GRACE_SECONDS = 90;
-const WAVE_SECONDS = 60;
+/** Seconds to build before a planet's first wave, and between a wave being cleared and the next. */
+const GRACE_SECONDS = 180;
+const WAVE_SECONDS = 45;
+/** Waves on a planet: this many, plus `WAVES_PER_DIFFICULTY` for each level of its difficulty. */
+const BASE_WAVES = 8;
+const WAVES_PER_DIFFICULTY = 3;
+/**
+ * The furthest `composition` stage a planet's waves reach, by its difficulty (0 to 4): what kinds of
+ * alien it sends at all. Its waves climb from stage 1 to this one evenly.
+ */
+const MAX_STAGES = [3, 6, 8, 10, 13];
+/** Extra health a planet's last wave has over its first, as a share: the waves in between climb evenly. */
+const HEALTH_RAMP = 0.6;
+/** How long a dead alien's wreck lasts before it's gone: long enough for clients to drop and sink it (see `DamageController`). */
+const WRECK_SECONDS = 8;
 const CALL_DEBOUNCE = 2;
 const MAX_ALIENS = 80;
 const SPAWN_SECONDS = 0.1;
@@ -468,36 +481,42 @@ const PING_DEBOUNCE = 0.25;
 
 const random = new Random();
 
+/** The `composition` stage wave `wave` (from 1) of `waves` reaches on a planet whose waves top out at `maxStage`. */
+function stageOf(wave: number, waves: number, maxStage: number): number {
+	return 1 + math.floor(((wave - 1) * (maxStage - 1)) / math.max(waves - 1, 1));
+}
+
 /**
- * Which aliens wave `wave` (from 1) sends: a growing swarm, sappers from wave 2, brutes, drones and
- * striders from wave 3, spitters, shielders and wasps from wave 4, aegises and hornets from wave 5,
- * mortars from wave 6, bombers and hydras from wave 7, gunships and fortresses from wave 8, and
- * carriers and frigates from wave 9. The `final` wave brings a Titan and a Dreadnought.
+ * Which aliens wave `wave` (from 1) sends at `stage` (see `stageOf`): a swarm growing with each wave,
+ * and by stage, sappers from 2, brutes, drones and striders from 3, spitters, shielders and wasps
+ * from 4, aegises and hornets from 5, mortars from 6, bombers and hydras from 7, gunships and
+ * fortresses from 8, and carriers and frigates from 9. The `final` wave brings a Titan from stage 6
+ * and a Dreadnought from stage 8.
  */
-function composition(wave: number, final: boolean): Array<AlienKind> {
+function composition(wave: number, stage: number, final: boolean): Array<AlienKind> {
 	const kinds = new Array<AlienKind>();
 	const add = (kind: AlienKind, count: number) => {
 		for (let i = 0; i < count; i++) kinds.push(kind);
 	};
-	add("crawler", 4 + 2 * wave);
-	add("sapper", math.floor(wave / 2));
-	add("brute", math.floor((wave - 1) / 2));
-	add("drone", wave - 2);
-	add("strider", math.floor((wave - 1) / 2));
-	add("spitter", wave - 3);
-	add("shielder", math.floor((wave - 2) / 2));
-	add("wasp", math.floor((wave - 2) / 2));
-	add("aegis", math.floor((wave - 3) / 2));
-	add("hornet", math.floor((wave - 3) / 2));
-	add("mortar", math.floor((wave - 4) / 2));
-	add("bomber", math.floor((wave - 5) / 2));
-	add("hydra", math.floor((wave - 5) / 2));
-	add("gunship", math.floor((wave - 6) / 2));
-	add("fortress", math.floor((wave - 6) / 2));
-	add("carrier", math.floor((wave - 7) / 2));
-	add("frigate", math.floor((wave - 7) / 2));
-	add("titan", final ? 1 : 0);
-	add("dreadnought", final ? 1 : 0);
+	add("crawler", 4 + wave + stage);
+	add("sapper", math.floor(stage / 2));
+	add("brute", math.floor((stage - 1) / 2));
+	add("drone", stage - 2);
+	add("strider", math.floor((stage - 1) / 2));
+	add("spitter", stage - 3);
+	add("shielder", math.floor((stage - 2) / 2));
+	add("wasp", math.floor((stage - 2) / 2));
+	add("aegis", math.floor((stage - 3) / 2));
+	add("hornet", math.floor((stage - 3) / 2));
+	add("mortar", math.floor((stage - 4) / 2));
+	add("bomber", math.floor((stage - 5) / 2));
+	add("hydra", math.floor((stage - 5) / 2));
+	add("gunship", math.floor((stage - 6) / 2));
+	add("fortress", math.floor((stage - 6) / 2));
+	add("carrier", math.floor((stage - 7) / 2));
+	add("frigate", math.floor((stage - 7) / 2));
+	add("titan", final && stage >= 6 ? 1 : 0);
+	add("dreadnought", final && stage >= 8 ? 1 : 0);
 	return kinds;
 }
 
@@ -692,6 +711,7 @@ export class WaveService implements OnStart {
 	/** Aliens waiting to spawn: in the drop zones, or `at` a spot of their own. */
 	private pending = new Array<{ readonly kind: AlienKind; readonly at?: Vector3 }>();
 	private healthScale = 1;
+	private maxStage = 1;
 	private spawnIndex = 0;
 	private costs?: { readonly map: PlanetMap; readonly costs: Array<number> };
 	private field = new Array<number>(GRID_SIZE * GRID_SIZE, -1);
@@ -740,13 +760,15 @@ export class WaveService implements OnStart {
 		baseMessaging.client.emitAll(BaseMessage.Pinged);
 	}
 
-	/** Launches the next wave now. False when no mission is running or every wave is out. */
+	/** Launches the next wave now. False when no mission is running or every wave is out. Its countdown stops till it's cleared. */
 	launch(): boolean {
 		const wave = this.wave() + 1;
-		if (this.baseService.phase() !== "active" || wave > this.waves()) return false;
+		const waves = this.waves();
+		if (this.baseService.phase() !== "active" || wave > waves) return false;
 		this.wave(wave);
-		this.nextWaveAt(wave < this.waves() ? Workspace.GetServerTimeNow() + WAVE_SECONDS : 0);
-		for (const kind of composition(wave, wave === this.waves())) this.pending.push({ kind });
+		this.nextWaveAt(0);
+		const stage = stageOf(wave, waves, this.maxStage);
+		for (const kind of composition(wave, stage, wave === waves)) this.pending.push({ kind });
 		this.logger.Info("Wave {Wave} of {Waves} launched", wave, this.waves());
 		return true;
 	}
@@ -779,6 +801,7 @@ export class WaveService implements OnStart {
 	clearAliens() {
 		for (const [model] of this.aliens) model.Destroy();
 		this.aliens.clear();
+		this.baseService.wrecksFolder.ClearAllChildren();
 		this.alienCount(0);
 		this.projectiles = [];
 		this.pending = [];
@@ -793,7 +816,18 @@ export class WaveService implements OnStart {
 		if (!alien) return;
 		alien.health = math.max(alien.health - this.absorb(alien, amount), 0);
 		setHealth(model, alien.health, alien.maxHealth);
-		if (alien.health <= 0) this.remove(alien);
+		if (alien.health <= 0) this.kill(alien);
+	}
+
+	/** Takes a dead alien out of the fight, with a blast, and leaves its wreck to clients to sink (see `DamageController`). */
+	private kill(alien: Alien) {
+		this.aliens.delete(alien.model);
+		this.alienCount(this.aliens.size());
+		alien.shield?.bubble.Destroy();
+		const splash = math.clamp(alien.model.GetExtentsSize().Magnitude / 2, 4, 16);
+		shotMessaging.client.emitAll(ShotMessage.Blast, { at: alien.root.Position, splash });
+		alien.model.Parent = this.baseService.wrecksFolder;
+		Debris.AddItem(alien.model, WRECK_SECONDS);
 	}
 
 	/** Takes an alien out at once, model and all. */
@@ -849,6 +883,7 @@ export class WaveService implements OnStart {
 		const planet = map && !liberated ? this.planetsService.getPlanet(map.planet) : undefined;
 		this.liberated(liberated);
 		this.healthScale = planet ? 1 + 0.3 * planet.difficulty + 0.2 * planet.aliens : 1;
+		this.maxStage = planet ? MAX_STAGES[math.clamp(planet.difficulty, 0, MAX_STAGES.size() - 1)] : 1;
 		if (map && this.costs?.map !== map) {
 			// Worked out a slice a frame. Till then there's no field: walkers head straight for the Core.
 			this.costs = undefined;
@@ -859,7 +894,7 @@ export class WaveService implements OnStart {
 			});
 		}
 		this.wave(0);
-		this.waves(planet ? 5 + 2 * planet.difficulty : 0);
+		this.waves(planet ? BASE_WAVES + WAVES_PER_DIFFICULTY * planet.difficulty : 0);
 		this.nextWaveAt(planet ? Workspace.GetServerTimeNow() + GRACE_SECONDS : 0);
 	}
 
@@ -892,7 +927,12 @@ export class WaveService implements OnStart {
 		const map = this.planetsService.currentMap();
 		if (!map || this.baseService.phase() !== "active") return;
 
-		if (this.wave() < this.waves() && Workspace.GetServerTimeNow() >= this.nextWaveAt()) this.launch();
+		const cleared = this.pending.isEmpty() && this.aliens.isEmpty();
+		if (this.wave() < this.waves()) {
+			// The countdown runs once the last wave is cleared (the first's from the start, see `begin`).
+			if (this.nextWaveAt() === 0 && cleared) this.nextWaveAt(Workspace.GetServerTimeNow() + WAVE_SECONDS);
+			else if (this.nextWaveAt() > 0 && Workspace.GetServerTimeNow() >= this.nextWaveAt()) this.launch();
+		}
 		this.spawnPending(map, dt);
 		this.refreshField();
 		this.moveAliens(map, dt);
@@ -902,6 +942,12 @@ export class WaveService implements OnStart {
 		if (!this.liberated() && this.wave() >= this.waves() && this.pending.isEmpty() && this.aliens.isEmpty()) {
 			this.baseService.end("won");
 		}
+	}
+
+	/** How much tougher than the planet's first wave its current one is (see `HEALTH_RAMP`). */
+	private waveScale(): number {
+		const waves = this.waves();
+		return waves > 1 ? 1 + (HEALTH_RAMP * math.max(this.wave() - 1, 0)) / (waves - 1) : 1;
 	}
 
 	/** Spawns queued aliens one at a time, taking turns between the drop zones, while under the cap. */
@@ -923,7 +969,7 @@ export class WaveService implements OnStart {
 	/** Brings a `kind` of alien in at (x, z): on the ground there, or flying its height over it. */
 	private spawn(map: PlanetMap, kind: AlienKind, x: number, z: number) {
 		const def = ALIENS[kind];
-		const maxHealth = math.round(def.health * this.healthScale);
+		const maxHealth = math.round(def.health * this.healthScale * this.waveScale());
 		const y = map.heightAt(x, z) + def.hover;
 		// Landing facing the Core, so it doesn't start by turning round.
 		const toCore = new Vector3(map.landing.X - x, 0, map.landing.Z - z);
@@ -937,7 +983,7 @@ export class WaveService implements OnStart {
 		setHealth(model, maxHealth, maxHealth);
 		let shield: Shield | undefined;
 		if (def.shield) {
-			const max = math.round(def.shield.health * this.healthScale);
+			const max = math.round(def.shield.health * this.healthScale * this.waveScale());
 			shield = {
 				health: max,
 				broken: false,

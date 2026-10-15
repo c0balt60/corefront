@@ -235,6 +235,8 @@ export class BaseService implements OnStart {
 	readonly buildingsFolder = makeFolder("Buildings", this.folder);
 	/** A Model, not a Folder, so one Highlight can show every alien in it (see `PingController`). */
 	readonly aliensFolder = makeModel("Aliens", this.folder);
+	/** Dead aliens, out of the fight, while clients blow them up and sink them (see `DamageController`). */
+	readonly wrecksFolder = makeFolder("Wrecks", this.folder);
 
 	readonly buildings = new Set<Building>();
 	/** The building covering each cell. */

@@ -545,45 +545,10 @@ export function buildToolHandle(tool: Tool) {
 	weld(handle, block(tool, new Vector3(0.5, 0.5, 0.15), new CFrame(0, 0.1, -1.15), GLOW, Enum.Material.Neon));
 }
 
-/** What gets a long health bar: the Core and the bosses. */
-const WIDE_BARS = new Set<unknown>(["core", "titan", "fortress", "dreadnought"]);
-
-/** Writes `Health` and `MaxHealth`, and shows a bar over the model while it is damaged: a small one, or a wide one over the Core or a Titan. */
+/** Writes `Health` and `MaxHealth`. Clients show the damage on the model itself (see `DamageController`). */
 export function setHealth(model: Model, health: number, maxHealth: number) {
 	model.SetAttribute("Health", health);
 	model.SetAttribute("MaxHealth", maxHealth);
-	const root = model.PrimaryPart;
-	let bar = model.FindFirstChild("HealthBar") as BillboardGui | undefined;
-	if (health >= maxHealth || !root) {
-		bar?.Destroy();
-		return;
-	}
-
-	if (!bar) {
-		bar = new Instance("BillboardGui");
-		bar.Name = "HealthBar";
-		bar.Adornee = root;
-		const wide = WIDE_BARS.has(model.GetAttribute("Kind"));
-		bar.Size = wide ? UDim2.fromOffset(140, 12) : UDim2.fromOffset(44, 6);
-		bar.StudsOffsetWorldSpace = new Vector3(0, root.Size.Y / 2 + 3, 0);
-		bar.MaxDistance = 160;
-		const back = new Instance("Frame");
-		back.Size = UDim2.fromScale(1, 1);
-		back.BackgroundColor3 = Color3.fromRGB(20, 20, 24);
-		back.BorderSizePixel = 0;
-		back.Parent = bar;
-		const fill = new Instance("Frame");
-		fill.Name = "Fill";
-		fill.BorderSizePixel = 0;
-		fill.ZIndex = 2;
-		fill.Parent = bar;
-		bar.Parent = model;
-	}
-
-	const fraction = math.clamp(health / maxHealth, 0, 1);
-	const fill = bar.FindFirstChild("Fill") as Frame;
-	fill.Size = UDim2.fromScale(fraction, 1);
-	fill.BackgroundColor3 = Color3.fromRGB(255, 80, 80).Lerp(Color3.fromRGB(110, 230, 120), fraction);
 }
 
 /** Writes a turret's `Ammo` (shots loaded) and `AmmoType` (the ore it fires next), and shows NO AMMO over it while it has none. */

@@ -84,9 +84,13 @@ export function useScramble(kind: UiKind, text: () => string, delay = 0, duratio
 
 	const output = source(delay > 0 ? "" : scramble(untrack(text), 0));
 	let thread: thread | undefined;
+	let last: string | undefined;
 
 	effect(() => {
 		const target = text();
+		// Its sources can fire with the same text (a fresh state object, say): only new text decodes again.
+		if (target === last) return;
+		last = target;
 		if (thread) task.cancel(thread);
 
 		thread = task.defer(() => {

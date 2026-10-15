@@ -154,7 +154,8 @@ export class AlienController implements OnStart {
 		const parts = new Array<BasePart>();
 		const cframes = new Array<CFrame>();
 		for (const [model, rig] of this.rigs) {
-			if (!model.Parent) {
+			// Gone, or dead: a wreck's legs freeze as they were (see `DamageController`).
+			if (model.Parent?.Name !== "Aliens") {
 				this.rigs.delete(model);
 				continue;
 			}

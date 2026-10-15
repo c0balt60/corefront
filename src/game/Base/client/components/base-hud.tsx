@@ -7,7 +7,7 @@ import { Shadow } from "core/Interface/client/components/shadow";
 import { EXIT_TIME, useAppear, useScramble, useSpin } from "core/Interface/client/motion";
 import { CARD_TRANSPARENCY, COLORS, FONT, FONT_DISPLAY, FONT_LABEL, SPRINGS } from "core/Interface/client/theme";
 import { useServerTime } from "core/Interface/client/use-server-time";
-import { type Inventory, NOTICE_SECONDS, type Notice } from "game/Base/client/base-state";
+import { type Inventory, NOTICE_SECONDS, type Notice, type NoticeKind } from "game/Base/client/base-state";
 import { AIR_ALIENS, type AlienKind, type BaseState, GROUND_ALIENS } from "game/Base/shared/base-network";
 import { type ResourceId, RESOURCES } from "game/Base/shared/resources";
 
@@ -556,8 +556,16 @@ export function CargoPanel({ inventory, show, onDrop }: CargoPanelProps) {
 	);
 }
 
-/** One toast. It pops in, decodes, and fades out just before `NOTICE_SECONDS` are up and the controller drops it. */
-function Toast({ text, layoutOrder }: { readonly text: string; readonly layoutOrder: () => number }) {
+/** A toast's band, by kind: the accent for alerts, amber for waves, the research tree's blue for research. */
+const NOTICE_COLORS: Record<NoticeKind, Color3> = {
+	alert: COLORS.accent,
+	wave: Color3.fromRGB(255, 176, 60),
+	research: Color3.fromRGB(70, 150, 255),
+};
+
+/** One toast. It pops in, decodes, and fades out just before `NOTICE_SECONDS` are up and `notify` drops it. */
+function Toast({ notice, layoutOrder }: { readonly notice: Notice; readonly layoutOrder: () => number }) {
+	const { text, kind } = notice;
 	const shown = source(true);
 	cleanup(task.delay(NOTICE_SECONDS - EXIT_TIME, () => shown(false)));
 	const appear = useAppear(shown, 0, SPRINGS.responsive);
@@ -573,7 +581,7 @@ function Toast({ text, layoutOrder }: { readonly text: string; readonly layoutOr
 		>
 			<uiscale Scale={() => 0.92 + 0.08 * appear()} />
 			<frame
-				BackgroundColor3={COLORS.accent}
+				BackgroundColor3={NOTICE_COLORS[kind]}
 				BackgroundTransparency={fade}
 				BorderSizePixel={0}
 				Size={new UDim2(0, 3, 1, 0)}
@@ -655,7 +663,69 @@ export function Notices({
 				SortOrder={Enum.SortOrder.LayoutOrder}
 			/>
 			{children}
-			<For each={notices}>{(notice, index) => <Toast text={notice.text} layoutOrder={index} />}</For>
+			<For each={notices}>{(notice, index) => <Toast notice={notice} layoutOrder={index} />}</For>
+		</frame>
+	);
+}
+
+interface WaveBannerProps {
+	readonly wave: () => number;
+	readonly waves: () => number;
+	/** Turns false to close the band. Return `$tuple(node, EXIT_TIME)` from the Show that renders it. */
+	readonly show: () => boolean;
+}
+
+/** A wave launching: a band opens high across the screen with WAVE 3 / 8 (or FINAL WAVE) decoding under INCOMING. */
+export function WaveBanner({ wave, waves, show }: WaveBannerProps) {
+	const open = useAppear(show);
+	const pop = useAppear(show, 0.1, SPRINGS.bouncy);
+	const shown = () => clamp01(open());
+	const title = () => (wave() >= waves() ? "FINAL WAVE" : `WAVE ${wave()} / ${waves()}`);
+
+	return (
+		<frame
+			Name="WaveBanner"
+			AnchorPoint={new Vector2(0.5, 0.5)}
+			BackgroundColor3={COLORS.card}
+			BackgroundTransparency={() => 1 - 0.5 * shown()}
+			BorderSizePixel={0}
+			ClipsDescendants={true}
+			Position={UDim2.fromScale(0.5, 0.25)}
+			Size={() => new UDim2(1, 0, 0, 100 * shown())}
+			ZIndex={5}
+		>
+			<frame BackgroundColor3={COLORS.danger} BorderSizePixel={0} Size={new UDim2(1, 0, 0, 2)} />
+			<frame
+				AnchorPoint={new Vector2(0, 1)}
+				BackgroundColor3={COLORS.danger}
+				BorderSizePixel={0}
+				Position={UDim2.fromScale(0, 1)}
+				Size={new UDim2(1, 0, 0, 2)}
+			/>
+			<frame
+				AnchorPoint={new Vector2(0.5, 0.5)}
+				BackgroundTransparency={1}
+				Position={UDim2.fromScale(0.5, 0.5)}
+				Size={UDim2.fromOffset(560, 76)}
+			>
+				<uiscale Scale={() => 0.85 + 0.15 * pop()} />
+				<Label
+					alignX={Enum.TextXAlignment.Center}
+					color={COLORS.danger}
+					size={new UDim2(1, 0, 0, 20)}
+					text={useScramble("banner", () => "INCOMING", 0.05, 0.4)}
+					textSize={16}
+				/>
+				<textlabel
+					BackgroundTransparency={1}
+					FontFace={FONT_DISPLAY}
+					Position={UDim2.fromOffset(0, 24)}
+					Size={new UDim2(1, 0, 0, 52)}
+					Text={useScramble("banner", title, 0.15, 0.5)}
+					TextColor3={COLORS.text}
+					TextScaled={true}
+				/>
+			</frame>
 		</frame>
 	);
 }

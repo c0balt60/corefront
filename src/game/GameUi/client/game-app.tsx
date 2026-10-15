@@ -20,6 +20,7 @@ import {
 	toggleBuildMode,
 	toggleTool,
 	toolsAtom,
+	waveBannerAtom,
 } from "game/Base/client/base-state";
 import {
 	CargoPanel,
@@ -27,6 +28,7 @@ import {
 	Notices,
 	ResultBanner,
 	SandboxPanel,
+	WaveBanner,
 	WavePanel,
 } from "game/Base/client/components/base-hud";
 import { BuildBar } from "game/Base/client/components/build-bar";
@@ -82,6 +84,7 @@ export function GameApp() {
 	const inventory = useAtom(inventoryAtom);
 	const notices = useAtom(noticesAtom);
 	const coreAttacked = useAtom(coreAttackedAtom);
+	const waveBanner = useAtom(waveBannerAtom);
 	const buildMode = useAtom(buildModeAtom);
 	const clicked = useAtom(selectedAtom);
 	const nearClicked = useAtom(nearSelectedAtom);
@@ -296,6 +299,11 @@ export function GameApp() {
 					onInfo={(kind) => infoAtom(kind)}
 					show={building}
 				/>
+				<Show when={() => (mission() !== undefined ? waveBanner() : undefined)}>
+					{(wave, show) =>
+						$tuple(<WaveBanner wave={wave} waves={() => mission()?.waves ?? 0} show={show} />, EXIT_TIME)
+					}
+				</Show>
 				<Show when={result}>
 					{(phase, show) => $tuple(<ResultBanner result={phase} show={show} />, EXIT_TIME)}
 				</Show>

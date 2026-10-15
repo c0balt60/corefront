@@ -1,34 +1,48 @@
 import { Controller, OnStart } from "@flamework/core";
 import { effect } from "@rbxts/charm";
+import { Workspace } from "@rbxts/services";
 
 import { screenEffectIntensityAtom, screenEffectPulseAtom } from "core/Interface/client/ui-state";
-import {
-	baseStateAtom,
-	coreAttackedAtom,
-	inventoryAtom,
-	NOTICE_SECONDS,
-	type Notice,
-	noticesAtom,
-} from "game/Base/client/base-state";
+import { baseStateAtom, coreAttackedAtom, inventoryAtom, notify, waveBannerAtom } from "game/Base/client/base-state";
 import { BaseMessage, baseMessaging } from "game/Base/shared/base-network";
 import { deployedAtom } from "game/Planets/client/planets-state";
 
-/** The most toasts on screen at once. A new one pushes the oldest out. */
-const MAX_NOTICES = 4;
 /** Seconds after the Core's last hit that it still counts as under attack. */
 const ATTACK_SECONDS = 3;
 /** The red vignette while the Core is under attack: how strong, and how far it throbs. */
 const ATTACK_INTENSITY = 0.5;
 const ATTACK_PULSE = 0.6;
+/** Seconds a wave's banner stays up, and how long before a wave a toast warns of it. */
+const BANNER_SECONDS = 3;
+const WARN_SECONDS = 10;
 
-/** Keeps the mission atoms in sync with the server, and the vignette red while the Core is hit. `GameApp` draws them. */
+/**
+ * Keeps the mission atoms in sync with the server, the vignette red while the Core is hit, and
+ * announces each wave: a toast `WARN_SECONDS` before, and a banner as it launches. `GameApp` draws them.
+ */
 @Controller()
 export class BaseController implements OnStart {
 	onStart() {
 		let calm: thread | undefined;
+		let warn: thread | undefined;
+		let unbanner: thread | undefined;
 		baseMessaging.client.on(BaseMessage.State, (state) => {
 			const old = baseStateAtom();
 			baseStateAtom(state);
+			if (state.nextWaveAt !== old?.nextWaveAt) {
+				if (warn) task.cancel(warn);
+				const wait = state.nextWaveAt - Workspace.GetServerTimeNow() - WARN_SECONDS;
+				const coming = state.wave + 1;
+				warn =
+					wait > 0
+						? task.delay(wait, () => notify(`Wave ${coming} incoming in ${WARN_SECONDS} seconds.`, "wave"))
+						: undefined;
+			}
+			if (state.phase === "active" && state.planet === old?.planet && state.wave > old.wave) {
+				waveBannerAtom(state.wave);
+				if (unbanner) task.cancel(unbanner);
+				unbanner = task.delay(BANNER_SECONDS, () => waveBannerAtom(undefined));
+			}
 			// Health falling on the same planet is a hit; a new planet's Core or a finished mission isn't.
 			if (state.phase !== "active" || state.planet !== old?.planet) {
 				coreAttackedAtom(false);
@@ -44,11 +58,7 @@ export class BaseController implements OnStart {
 			screenEffectPulseAtom(attacked ? ATTACK_PULSE : 0);
 		});
 		baseMessaging.client.on(BaseMessage.Inventory, (inventory) => inventoryAtom(inventory));
-		baseMessaging.client.on(BaseMessage.Notice, ({ text }) => {
-			const notice: Notice = { text };
-			noticesAtom((notices) => [...notices, notice].filter((_, index, all) => index >= all.size() - MAX_NOTICES));
-			task.delay(NOTICE_SECONDS, () => noticesAtom((notices) => notices.filter((other) => other !== notice)));
-		});
+		baseMessaging.client.on(BaseMessage.Notice, ({ text }) => notify(text));
 		baseMessaging.server.emit(BaseMessage.Request);
 	}
 }

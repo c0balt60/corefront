@@ -11,8 +11,12 @@ export interface Inventory {
 	readonly capacity: number;
 }
 
+/** What a toast is about, which sets its band's colour: the server's warnings and refusals, waves, and research. */
+export type NoticeKind = "alert" | "wave" | "research";
+
 export interface Notice {
 	readonly text: string;
+	readonly kind: NoticeKind;
 }
 
 /** What the build bar has picked: a building to place, `remove` to take buildings down, or nothing. */
@@ -23,6 +27,9 @@ export const baseStateAtom = atom<BaseState>();
 
 /** Whether a ping is showing every alien (see `PingController`), so none is hidden for being far off. */
 export const pingedAtom = atom(false);
+
+/** The wave whose launch is being announced across the screen (`BaseController` sets it), if any. */
+export const waveBannerAtom = atom<number>();
 
 /** Whether the Core has taken a hit in the last few seconds (`BaseController` sets it), while the local player is deployed. */
 export const coreAttackedAtom = atom(false);
@@ -35,6 +42,16 @@ export const NOTICE_SECONDS = 4;
 
 /** Toasts on screen, oldest first. Each is a fresh object, so `For` gives it its own row. */
 export const noticesAtom = atom<ReadonlyArray<Notice>>([]);
+
+/** The most toasts on screen at once. A new one pushes the oldest out. */
+const MAX_NOTICES = 4;
+
+/** Puts up a toast for `NOTICE_SECONDS`. */
+export function notify(text: string, kind: NoticeKind = "alert") {
+	const notice: Notice = { text, kind };
+	noticesAtom((notices) => [...notices, notice].filter((_, index, all) => index >= all.size() - MAX_NOTICES));
+	task.delay(NOTICE_SECONDS, () => noticesAtom((notices) => notices.filter((other) => other !== notice)));
+}
 
 export const buildModeAtom = atom<BuildMode>();
 
