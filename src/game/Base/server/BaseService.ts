@@ -78,7 +78,16 @@ export interface Building {
 	burst: number;
 	/** Turrets that spin up: how far, 0 to 1, and whether they had a target when they last looked. */
 	spin: number;
+	/** Beam lasers: seconds left on their beam (see `TurretDef.beam`). */
+	burning: number;
 	engaged: boolean;
+	/**
+	 * Turrets: which way their head points, (yaw, pitch) in radians (see `aimFrame`), the alien it
+	 * tracks, if any, and seconds till it looks again for a better one.
+	 */
+	aim: [yaw: number, pitch: number];
+	target?: Model;
+	retarget: number;
 	/** Drills and crafters: what they make. */
 	readonly resource?: ResourceId;
 	/** Drills and crafters: made and waiting to go out, to a neighbour or a player. */
@@ -853,7 +862,10 @@ export class BaseService implements OnStart {
 			cooldown: 0,
 			burst: 0,
 			spin: 0,
+			burning: 0,
 			engaged: false,
+			aim: [(rotation * math.pi) / 2, 0],
+			retarget: 0,
 			muzzles: [],
 			resource: def.drill ? this.oreUnder(cell, def.size) : def.craft?.output,
 			stored: 0,

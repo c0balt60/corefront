@@ -79,6 +79,7 @@ function lines(kind: BuildableKind): Array<Line> {
 		{ heading: "FUNCTION" },
 		{ label: "Range", value: `${def.range ?? 0} studs` },
 		{ label: "Fire rate", value: `${round(perSecond)} shots / s` },
+		{ label: "Turn speed", value: `${gun.turn}° / s` },
 		{
 			label: "Targets",
 			value: gun.targets === "air" ? "Air only" : gun.targets === "ground" ? "Ground only" : "Air + Ground",
@@ -92,6 +93,7 @@ function lines(kind: BuildableKind): Array<Line> {
 	if (gun.spread !== undefined) list.push({ label: "Inaccuracy", value: `up to ${gun.spread} studs off` });
 	if (gun.burst !== undefined) list.push({ label: "Burst", value: `${gun.burst} shots, then reloads` });
 	if (gun.spinUp !== undefined) list.push({ label: "Spin-up", value: `${gun.spinUp}s to full rate` });
+	if (gun.beam !== undefined) list.push({ label: "Beam", value: `${gun.beam}s, then reloads` });
 	if (gun.energy) {
 		list.push({ label: "Power use", value: `${def.power ?? 0} / s firing` }, { heading: "POWER" });
 		list.push({ ammo: gun.energy });

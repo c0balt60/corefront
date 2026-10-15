@@ -203,6 +203,9 @@ export interface Shot {
 	readonly splash: number;
 	/** Bullets and flames: how heavy they look, the size of the turret that fired them. */
 	readonly size?: number;
+	/** A turret's: the turret, and which of its barrels fired it, to kick back (see `TurretController`). */
+	readonly turret?: Model;
+	readonly barrel?: number;
 }
 
 export interface ShotMessageData {
@@ -217,8 +220,13 @@ export interface ShotMessageData {
 	[ShotMessage.Blast]: { readonly at: Vector3; readonly splash: number };
 	/** Server -> clients: an alien's point defence shot the shot `id` down in the air, from its barrel at `from`. */
 	[ShotMessage.Downed]: { readonly id: number; readonly from: Vector3 };
-	/** Server -> clients: a laser turret's beam burned from `from` to `to` (one pulse of many). */
-	[ShotMessage.Beam]: { readonly from: Vector3; readonly to: Vector3 };
+	/** Server -> clients: a laser `turret`'s beam burned from `from` to `to` (one pulse of many), drawn `reach` (0 to 1) of the way out. */
+	[ShotMessage.Beam]: {
+		readonly turret: Model;
+		readonly from: Vector3;
+		readonly to: Vector3;
+		readonly reach: number;
+	};
 	/** Server -> clients: lightning leapt through `points`, from a turret's coil to each alien it struck in turn. */
 	[ShotMessage.Arc]: { readonly points: ReadonlyArray<Vector3> };
 }

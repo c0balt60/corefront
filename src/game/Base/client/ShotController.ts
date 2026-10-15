@@ -2,6 +2,7 @@ import { Controller, OnStart } from "@flamework/core";
 import { Debris, RunService, TweenService, Workspace } from "@rbxts/services";
 
 import { bezier, type Shot, ShotMessage, shotMessaging } from "game/Base/shared/base-network";
+import { BUILDINGS, type BuildingKind } from "game/Base/shared/buildings";
 
 /** Roblox's own particle textures, so nothing has to be uploaded. */
 const SMOKE = "rbxasset://textures/particles/smoke_main.dds";
@@ -23,8 +24,13 @@ const TRACER = Color3.fromRGB(255, 200, 90);
 const ENEMY_TRACER = Color3.fromRGB(255, 70, 60);
 const LASER = Color3.fromRGB(255, 90, 70);
 const LIGHTNING = Color3.fromRGB(150, 205, 255);
-/** Seconds a laser's pulse takes to fade: just past the next, so the beam looks steady. */
-const PULSE_SECONDS = 0.15;
+const BRASS = Color3.fromRGB(214, 170, 80);
+/** Seconds a muzzle's flash of light lasts. */
+const FLASH_SECONDS = 0.1;
+/** A laser's ray goes out this many seconds after its last pulse, and is this thick at full charge. */
+const RAY_SECONDS = 0.3;
+const RAY_WIDTH = 2.2;
+const CORE_WIDTH = 0.8;
 /** How many jags lightning makes between two aliens, and how far each strays off the straight line, in studs. */
 const ARC_KINKS = 4;
 const ARC_STRAY = 1.5;
@@ -36,6 +42,18 @@ const BLAST_SPLASH = 8;
 const TRAIL_SECONDS = 1.3;
 /** Seconds a blast's slowest particles, its smoke, last. */
 const BLAST_SECONDS = 2.6;
+
+/** A laser turret's ray, held on while its pulses come: from its muzzle, in its head's space, along where the head points. */
+interface Ray {
+	readonly outer: Part;
+	readonly core: Part;
+	muzzle: Vector3;
+	length: number;
+	/** How far out it reaches, 0 to 1: as the server last said, and as drawn, easing after it. */
+	reach: number;
+	shown: number;
+	last: number;
+}
 
 /** A shot as drawn, until it lands. */
 interface Flight {
@@ -74,13 +92,15 @@ function attachment(parent: Instance, position: Vector3): Attachment {
  * are fireballs that flare where they end. Rockets and shells trail flame and smoke, then blow up.
  * Flak bursts in a dark puff in the air. Aliens' hitscan shots are a fading red streak, a flash out
  * of the barrel and sparks off what they hit; a heavy one also blasts. A sapper just blasts. A shot
- * that point defence downs pops where it is, struck by a red streak. A laser pulses a white-hot
- * beam; lightning crackles in jags from alien to alien.
+ * that point defence downs pops where it is, struck by a red streak. A laser holds a white-hot
+ * ray on while it fires; lightning crackles in jags from alien to alien. A turret's shot lights up its muzzle, a gun
+ * flips out a brass casing, and a railgun's slug leaves in rings of shockwave.
  */
 @Controller()
 export class ShotController implements OnStart {
 	private readonly folder = new Instance("Folder");
 	private flights = new Array<Flight>();
+	private readonly rays = new Map<Model, Ray>();
 	/** Shared by every shot: moved to each muzzle and impact in turn, then burst there. */
 	private readonly muzzle = new Instance("Attachment");
 	private readonly impact = new Instance("Attachment");
@@ -107,6 +127,32 @@ export class ShotController implements OnStart {
 		Rotation: new NumberRange(0, 360),
 		RotSpeed: new NumberRange(-60, 60),
 		EmissionDirection: Enum.NormalId.Front,
+	});
+	/** Rings out of a railgun's muzzle, square to its shot. */
+	private readonly muzzleRings = emitter(this.muzzle, {
+		Texture: SHOCKWAVE,
+		Color: new ColorSequence(new Color3(1, 1, 1), LIGHTNING),
+		LightEmission: 1,
+		Orientation: Enum.ParticleOrientation.VelocityPerpendicular,
+		EmissionDirection: Enum.NormalId.Front,
+		Size: curve([0, 0.5], [1, 7]),
+		Transparency: curve([0, 0], [1, 1]),
+		Lifetime: new NumberRange(0.3, 0.45),
+		Speed: new NumberRange(2, 14),
+	});
+	/** Shared by every gun: moved beside each one's breech, looking out and up, then a casing flipped out. */
+	private readonly breech = new Instance("Attachment");
+	private readonly casings = emitter(this.breech, {
+		Texture: CHUNK,
+		Color: new ColorSequence(BRASS),
+		Size: curve([0, 0.3], [1, 0.3]),
+		Lifetime: new NumberRange(0.6, 0.9),
+		Speed: new NumberRange(10, 16),
+		Acceleration: new Vector3(0, -80, 0),
+		SpreadAngle: new Vector2(15, 15),
+		EmissionDirection: Enum.NormalId.Front,
+		Rotation: new NumberRange(0, 360),
+		RotSpeed: new NumberRange(-720, 720),
 	});
 	private readonly impactSparks = emitter(this.impact, {
 		Texture: SPARKLE,
@@ -136,17 +182,19 @@ export class ShotController implements OnStart {
 		// Attachments in the Terrain sit at their own world position.
 		this.muzzle.Parent = Workspace.Terrain;
 		this.impact.Parent = Workspace.Terrain;
+		this.breech.Parent = Workspace.Terrain;
 		shotMessaging.client.on(ShotMessage.Fired, (shot) => this.launch(shot));
 		shotMessaging.client.on(ShotMessage.Hit, ({ from, to, size, hostile }) => this.hit(from, to, size, hostile));
 		shotMessaging.client.on(ShotMessage.Blast, ({ at, splash }) => this.blast(at, splash, true));
 		shotMessaging.client.on(ShotMessage.Downed, ({ id, from }) => this.down(id, from));
-		shotMessaging.client.on(ShotMessage.Beam, ({ from, to }) => this.beam(from, to));
+		shotMessaging.client.on(ShotMessage.Beam, ({ turret, from, to, reach }) => this.beam(turret, from, to, reach));
 		shotMessaging.client.on(ShotMessage.Arc, ({ points }) => this.arc(points));
-		RunService.RenderStepped.Connect(() => this.render());
+		RunService.RenderStepped.Connect((dt) => this.render(dt));
 	}
 
 	/** A rocket or shell leaving its barrel, its tail a glowing streak, a flame (rockets) and smoke left hanging in the air. */
 	private launch(shot: Shot) {
+		if (shot.turret && shot.kind !== "flame") this.flash(shot, shot.turret);
 		if (shot.kind === "flak") return this.launchFlak(shot);
 		if (shot.kind === "bullet") return this.launchBullet(shot);
 		if (shot.kind === "flame") return this.launchFlame(shot);
@@ -199,6 +247,37 @@ export class ShotController implements OnStart {
 		this.muzzleFire.Emit(rocket ? 3 : 8);
 		this.muzzleSmoke.Emit(rocket ? 2 : 6);
 		this.flights.push({ shot, part, fired: os.clock(), to: shot.to });
+	}
+
+	/**
+	 * A `turret`'s shot leaving it: a flash of light at the muzzle, and a brass casing flipped out of a
+	 * gun's breech, on its barrel's side; a railgun's flash is bigger and blue, and rings shock out.
+	 */
+	private flash(shot: Shot, turret: Model) {
+		const rail = BUILDINGS[turret.GetAttribute("Kind") as BuildingKind].turret?.rail;
+		const size = shot.size ?? 1;
+		const anchor = new Instance("Attachment");
+		anchor.Parent = Workspace.Terrain;
+		anchor.Position = shot.from;
+		Debris.AddItem(anchor, FLASH_SECONDS);
+		const light = new Instance("PointLight");
+		light.Color = rail ? LIGHTNING : FLAME;
+		light.Range = rail ? 10 * size : 6 + 3 * size;
+		light.Brightness = rail ? 6 : 3;
+		light.Parent = anchor;
+		TweenService.Create(light, new TweenInfo(FLASH_SECONDS), { Brightness: 0 }).Play();
+		if (rail) {
+			this.muzzle.WorldCFrame = CFrame.lookAt(shot.from, shot.to);
+			this.muzzleRings.Emit(3);
+			return;
+		}
+		const head = turret.FindFirstChild("Head") as BasePart | undefined;
+		if (!head || (shot.kind !== "bullet" && shot.kind !== "flak")) return;
+		const side = head.CFrame.PointToObjectSpace(shot.from).X >= 0 ? 1 : -1;
+		const out = head.CFrame.RightVector.mul(side);
+		const at = head.Position.add(out.mul(head.Size.X / 2)).add(head.CFrame.UpVector.mul(head.Size.Y / 4));
+		this.breech.WorldCFrame = CFrame.lookAt(at, at.add(out).add(Vector3.yAxis));
+		this.casings.Emit(1);
 	}
 
 	/** Flak: a hot pellet with a short streak behind it, and a flash out of the barrel. No smoke until it bursts. */
@@ -318,11 +397,25 @@ export class ShotController implements OnStart {
 		}
 	}
 
-	/** A laser's pulse: a red beam round a white-hot core, flaring where it ends. */
-	private beam(from: Vector3, to: Vector3) {
-		this.bolt(from, to, 2.2, LASER, PULSE_SECONDS);
-		this.bolt(from, to, 0.8, HOT, PULSE_SECONDS);
-		this.impact.WorldCFrame = CFrame.lookAt(to, from);
+	/** A laser's pulse: keeps its `turret`'s ray, a red beam round a white-hot core, on (see `render`), flaring where it ends. */
+	private beam(turret: Model, from: Vector3, to: Vector3, reach: number) {
+		const head = turret.FindFirstChild("Head") as BasePart | undefined;
+		if (!head) return;
+		const ray = this.rays.get(turret) ?? {
+			outer: this.spark(Vector3.one, LASER, from),
+			core: this.spark(Vector3.one, HOT, from),
+			muzzle: Vector3.zero,
+			length: 0,
+			reach,
+			shown: 0,
+			last: 0,
+		};
+		this.rays.set(turret, ray);
+		ray.muzzle = head.CFrame.PointToObjectSpace(from);
+		ray.length = to.sub(from).Magnitude;
+		ray.reach = reach;
+		ray.last = os.clock();
+		this.impact.WorldCFrame = CFrame.lookAt(from.Lerp(to, ray.shown), from);
 		this.impactFire.Emit(1);
 	}
 
@@ -374,8 +467,27 @@ export class ShotController implements OnStart {
 		Debris.AddItem(part, TRAIL_SECONDS);
 	}
 
-	private render() {
+	private render(dt: number) {
 		const now = os.clock();
+		// Each ray out of its muzzle where its head points now, reaching out and drawing back in, its width throbbing.
+		for (const [turret, ray] of this.rays) {
+			const head = turret.FindFirstChild("Head") as BasePart | undefined;
+			if (!head || now - ray.last > RAY_SECONDS) {
+				ray.outer.Destroy();
+				ray.core.Destroy();
+				this.rays.delete(turret);
+				continue;
+			}
+			ray.shown += (ray.reach - ray.shown) * math.min(dt * 15, 1);
+			const length = math.max(ray.length * ray.shown, 0.1);
+			const from = head.CFrame.PointToWorldSpace(ray.muzzle);
+			const at = CFrame.lookAt(from, from.add(head.CFrame.LookVector)).mul(new CFrame(0, 0, -length / 2));
+			const width = ray.shown * (1 + 0.15 * math.sin(now * 25));
+			ray.outer.Size = new Vector3(RAY_WIDTH * width, RAY_WIDTH * width, length);
+			ray.core.Size = new Vector3(CORE_WIDTH * width, CORE_WIDTH * width, length);
+			ray.outer.CFrame = at;
+			ray.core.CFrame = at;
+		}
 		this.flights = this.flights.filter((flight) => {
 			const { shot, part } = flight;
 			if (shot.target?.Parent) flight.to = shot.target.GetPivot().Position;

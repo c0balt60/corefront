@@ -8,7 +8,8 @@ import { CELL_STUDS, cellCenter } from "game/Terrain/shared/map";
  *   `Cell` (the -X/-Z corner cell, see map.ts), `Rotation`, `Health` and `MaxHealth`. Drills and
  *   crafters also have `Resource` (what they make) and `Stored`, drills `Yield` (per tick), crafters
  *   `Input_<resource>` for each input, generators for each fuel and storage for each ore it holds,
- *   turrets `Ammo` (shots held) and `AmmoType` (the ore they fire next), sorters, sources and
+ *   turrets `Ammo` (shots held), `AmmoType` (the ore they fire next) and a `Target` ObjectValue
+ *   (the alien they track, whose head clients turn after it), sorters, sources and
  *   unloaders `Filter`, and belts `Entry`, `PathIn`, `PathMid`, `PathOut` and `PathEnds` (see
  *   `BeltPath`). Power: what uses it has `Power` (the share of its need it gets, 0 to 1), generators
  *   `PowerOut` (per second), batteries `Charge`, and nodes `Links` and their network's `Produced`,
@@ -149,9 +150,11 @@ export type EnergyDef = Omit<AmmoDef, "shots">;
  * It shoots only fliers or only ground aliens if `targets` says so, and the toughest alien in range,
  * not the nearest, if `strongest`. A power turret has no ammo: it fires `energy` while it has power,
  * reloading slower on less. Its lasers burn through everything along them at once, and its arcs
- * strike at once, jumping between aliens.
+ * strike at once, jumping between aliens. Its head turns `turn` degrees a second to track its
+ * target, and its shots fly where its guns point: one that can't keep up misses (see `turretAim`).
  */
 export interface TurretDef {
+	readonly turn: number;
 	readonly seconds: number;
 	readonly maxAmmo: number;
 	readonly ammo: Partial<Record<ResourceId, AmmoDef>>;
@@ -166,6 +169,59 @@ export interface TurretDef {
 	readonly fan?: number;
 	readonly targets?: "air" | "ground";
 	readonly strongest?: true;
+	/**
+	 * A beam laser's (Mindustry's Meltdown): once reloaded, with a target near its sights, it lights a
+	 * beam that burns on for this many seconds wherever its head points, target or not, then reloads
+	 * for `seconds`. Its head turns at `BEAM_TURN` of its speed while it burns (see `WaveService`).
+	 */
+	readonly beam?: number;
+	/** A railgun's: its rails flare and its slugs leave with a shockwave, but no casings (see `ShotController`). */
+	readonly rail?: true;
+}
+
+/** Seconds between a beam's pulses of damage, and how fast its head turns while it burns, of its `turn` (see `TurretDef.beam`). */
+export const BEAM_PULSE = 0.1;
+export const BEAM_TURN = 0.5;
+
+/** How fast bullets fly, in studs per second, unless their turret says (see `TurretDef.speed`), and flak. */
+const BULLET_SPEED = 150;
+const FLAK_SPEED = 160;
+
+/** How fast a turret's shots fly straight at where their target is going, if they do: lasers, arcs, rockets and shells don't. */
+export function shotSpeed(gun: TurretDef): number | undefined {
+	if (gun.projectile === "bullet" || gun.projectile === "flame") return gun.speed ?? BULLET_SPEED;
+	if (gun.projectile === "flak") return FLAK_SPEED;
+	return undefined;
+}
+
+/** Turrets that lob or strike from on high keep their heads level; the rest tip theirs between these to aim. */
+const LEVEL: ReadonlySet<TurretDef["projectile"]> = new Set(["shell", "rocket", "arc"]);
+const LOWEST = math.rad(-35);
+const HIGHEST = math.rad(80);
+
+/** The yaw and pitch, in radians, a turret's head at `from` turns to, to aim at `at` (see `aimFrame`). */
+export function turretAim(gun: TurretDef, from: Vector3, at: Vector3): [yaw: number, pitch: number] {
+	const to = at.sub(from);
+	const flat = math.sqrt(to.X ** 2 + to.Z ** 2);
+	const pitch = LEVEL.has(gun.projectile) ? 0 : math.clamp(math.atan2(to.Y, flat), LOWEST, HIGHEST);
+	return [math.atan2(-to.X, -to.Z), pitch];
+}
+
+/** Turns a head's (yaw, pitch) toward (yaw, pitch) `want`, by at most its turret's `turn` over `dt` seconds each way, yaw the short way round. */
+export function turnHead(
+	gun: TurretDef,
+	[yaw, pitch]: readonly [number, number],
+	[wantYaw, wantPitch]: readonly [number, number],
+	dt: number,
+): [yaw: number, pitch: number] {
+	const step = math.rad(gun.turn) * dt;
+	const yawOff = ((wantYaw - yaw + math.pi) % (2 * math.pi)) - math.pi;
+	return [yaw + math.clamp(yawOff, -step, step), pitch + math.clamp(wantPitch - pitch, -step, step)];
+}
+
+/** A turret's head at `at`, turned to (yaw, pitch): it looks along -Z. */
+export function aimFrame(at: Vector3, [yaw, pitch]: readonly [number, number]): CFrame {
+	return new CFrame(at).mul(CFrame.Angles(0, yaw, 0)).mul(CFrame.Angles(pitch, 0, 0));
 }
 
 export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
@@ -505,6 +561,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		size: 1,
 		range: 56,
 		turret: {
+			turn: 300,
 			seconds: 0.3,
 			maxAmmo: 30,
 			projectile: "bullet",
@@ -528,6 +585,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		size: 1,
 		range: 60,
 		turret: {
+			turn: 360,
 			seconds: 0.12,
 			maxAmmo: 40,
 			projectile: "bullet",
@@ -550,6 +608,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		size: 1,
 		range: 28,
 		turret: {
+			turn: 240,
 			seconds: 0.1,
 			maxAmmo: 30,
 			projectile: "flame",
@@ -573,7 +632,8 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		size: 1,
 		range: 100,
 		turret: {
-			seconds: 1.8,
+			turn: 120,
+			seconds: 1.2,
 			maxAmmo: 10,
 			projectile: "shell",
 			spread: 4,
@@ -597,6 +657,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		size: 2,
 		range: 80,
 		turret: {
+			turn: 220,
 			seconds: 0.3,
 			maxAmmo: 40,
 			projectile: "flak",
@@ -623,6 +684,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		size: 2,
 		range: 72,
 		turret: {
+			turn: 200,
 			seconds: 0.05,
 			maxAmmo: 80,
 			projectile: "bullet",
@@ -649,6 +711,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		size: 2,
 		range: 36,
 		turret: {
+			turn: 180,
 			seconds: 0.6,
 			maxAmmo: 20,
 			projectile: "bullet",
@@ -664,7 +727,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 	salvo: {
 		name: "Salvo",
 		description:
-			"Fires heavy rounds in bursts of four, hitting fliers and the ground alike. A solid all-rounder for the middle of a defence.",
+			"Hammers out heavy rounds on full auto, hitting fliers and the ground alike. A solid all-rounder for the middle of a defence.",
 		cost: [
 			{ resource: "copper", amount: 100 },
 			{ resource: "graphite", amount: 50 },
@@ -674,12 +737,11 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		size: 2,
 		range: 76,
 		turret: {
-			seconds: 1.2,
+			turn: 150,
+			seconds: 0.3,
 			maxAmmo: 32,
 			projectile: "bullet",
 			speed: 180,
-			burst: 4,
-			gap: 0.1,
 			ammo: {
 				copper: { damage: 13, shots: 2 },
 				graphite: { damage: 22, shots: 4, rate: 0.85 },
@@ -698,13 +760,15 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		],
 		health: 1000,
 		size: 2,
-		range: 100,
+		range: 150,
 		turret: {
+			turn: 80,
 			seconds: 2.4,
 			maxAmmo: 10,
 			projectile: "bullet",
 			speed: 200,
 			targets: "ground",
+			rail: true,
 			ammo: {
 				graphite: { damage: 120, shots: 2, splash: 3 },
 				silicon: { damage: 95, shots: 3, splash: 3, homing: true },
@@ -724,6 +788,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		size: 2,
 		range: 80,
 		turret: {
+			turn: 180,
 			seconds: 0.35,
 			maxAmmo: 30,
 			projectile: "rocket",
@@ -747,6 +812,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		size: 3,
 		range: 220,
 		turret: {
+			turn: 60,
 			seconds: 4,
 			maxAmmo: 20,
 			projectile: "shell",
@@ -776,6 +842,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		size: 3,
 		range: 104,
 		turret: {
+			turn: 110,
 			seconds: 0.15,
 			maxAmmo: 60,
 			projectile: "bullet",
@@ -801,11 +868,13 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		size: 3,
 		range: 320,
 		turret: {
+			turn: 35,
 			seconds: 5,
 			maxAmmo: 8,
 			projectile: "bullet",
 			speed: 600,
 			strongest: true,
+			rail: true,
 			ammo: {
 				titanium: { damage: 380, shots: 1, pierce: 2 },
 				thorium: { damage: 600, shots: 1, pierce: 4, range: 40 },
@@ -825,6 +894,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		range: 44,
 		power: 200,
 		turret: {
+			turn: 720,
 			seconds: 0.35,
 			maxAmmo: 0,
 			projectile: "arc",
@@ -836,7 +906,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 	meltdown: {
 		name: "Meltdown",
 		description:
-			"A colossal laser. Runs on power alone, a lot of it: its beam melts every alien along it, in the air or on the ground, as long as it has power.",
+			"A colossal laser. Runs on power alone, a lot of it: it fires a long, sweeping beam that melts every alien along it, in the air or on the ground, then cools down before the next.",
 		cost: [
 			{ resource: "copper", amount: 450 },
 			{ resource: "lead", amount: 300 },
@@ -848,7 +918,15 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 		size: 3,
 		range: 112,
 		power: 1000,
-		turret: { seconds: 0.1, maxAmmo: 0, projectile: "laser", ammo: {}, energy: { damage: 40 } },
+		turret: {
+			turn: 40,
+			seconds: 1.5,
+			maxAmmo: 0,
+			projectile: "laser",
+			beam: 3.8,
+			ammo: {},
+			energy: { damage: 40 },
+		},
 	},
 	mender: {
 		name: "Mender",

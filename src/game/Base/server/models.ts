@@ -15,6 +15,8 @@ import { BUILDINGS, type BuildingKind } from "game/Base/shared/buildings";
 import { type ResourceId, RESOURCES } from "game/Base/shared/resources";
 import { CELL_STUDS } from "game/Terrain/shared/map";
 
+import { both, DARK, NEON, type Piece, splay, TURRET_BASE, TURRET_LOOKS } from "game/Base/server/turret-models";
+
 /*
  * Placeholder art: every building and alien (a war machine) is a handful of
  * parts, built here so the services only deal in gameplay. Swap these for real
@@ -23,7 +25,6 @@ import { CELL_STUDS } from "game/Terrain/shared/map";
 
 const FOUNDATION = Color3.fromRGB(70, 72, 80);
 const METAL = Color3.fromRGB(122, 128, 142);
-const DARK = Color3.fromRGB(46, 48, 56);
 /** The team's accent, on every building. */
 const GLOW = Color3.fromRGB(255, 170, 60);
 const TITANIUM = Color3.fromRGB(140, 195, 225);
@@ -39,61 +40,6 @@ const SOLAR = Color3.fromRGB(40, 60, 110);
 const WALL_WIDTH = 6;
 const WALL_HEIGHT = 6;
 
-/** Each turret's barrels, welded to its head: their size, their centres on it, and their tilt up, in degrees. */
-const BARRELS: Partial<Record<BuildingKind, readonly [size: Vector3, centres: ReadonlyArray<Vector3>, pitch: number]>> =
-	{
-		turret: [new Vector3(0.8, 0.8, 4), [new Vector3(0, 0, -3)], 0],
-		autoTurret: [new Vector3(0.5, 0.5, 4.4), [new Vector3(-0.55, 0, -3.2), new Vector3(0.55, 0, -3.2)], 0],
-		// Twin flak barrels, raised for the sky.
-		scatter: [new Vector3(1.1, 1.1, 6), [new Vector3(-1.4, 0.5, -4.5), new Vector3(1.4, 0.5, -4.5)], 30],
-		// Six thin barrels in a ring: the gatling.
-		vulcan: [
-			new Vector3(0.4, 0.4, 6),
-			[0, 1, 2, 3, 4, 5].map(
-				(i) => new Vector3(math.cos((i * math.pi) / 3) * 0.7, math.sin((i * math.pi) / 3) * 0.7, -4.5),
-			),
-			0,
-		],
-		cannon: [new Vector3(1.8, 1.8, 9), [new Vector3(0, 0, -6.5)], 0],
-		// A pod of rocket tubes on its face.
-		swarmer: [
-			new Vector3(1.2, 1.2, 1),
-			[
-				new Vector3(-1.3, 0.8, -3.1),
-				new Vector3(1.3, 0.8, -3.1),
-				new Vector3(-1.3, -0.8, -3.1),
-				new Vector3(1.3, -0.8, -3.1),
-			],
-			0,
-		],
-		ripple: [new Vector3(1.4, 1.4, 9), [-3, -1, 1, 3].map((x) => new Vector3(x, 0, -6)), 25],
-		// A stubby mortar tube, raised to lob.
-		hail: [new Vector3(1.2, 1.2, 3), [new Vector3(0, 0.4, -2)], 35],
-		// A short wide nozzle.
-		scorch: [new Vector3(1.1, 1.1, 2.6), [new Vector3(0, 0, -2.3)], 0],
-		// Three thick prongs side by side.
-		fuse: [new Vector3(1, 1, 5), [-2, 0, 2].map((x) => new Vector3(x, 0, -5)), 0],
-		// Four barrels in a square.
-		salvo: [
-			new Vector3(0.7, 0.7, 6),
-			[
-				new Vector3(-0.8, 0.8, -5.5),
-				new Vector3(0.8, 0.8, -5.5),
-				new Vector3(-0.8, -0.8, -5.5),
-				new Vector3(0.8, -0.8, -5.5),
-			],
-			0,
-		],
-		// Twin heavy barrels, fired in turn.
-		reaper: [new Vector3(1.6, 1.6, 11), [new Vector3(-2, 0, -9.5), new Vector3(2, 0, -9.5)], 0],
-		// One very long rail.
-		harbinger: [new Vector3(1.2, 1.2, 18), [new Vector3(0, 0.5, -13)], 0],
-		// A short coil the lightning leaps from.
-		arc: [new Vector3(0.7, 0.7, 2.2), [new Vector3(0, 0.6, -1.4)], 0],
-		// One huge emitter.
-		meltdown: [new Vector3(3, 3, 8), [new Vector3(0, 0, -7)], 0],
-	};
-
 /** Alien machines: gunmetal hulls and plates, lit red so they never read as the team's. */
 const HULL = Color3.fromRGB(58, 60, 68);
 const PLATE = Color3.fromRGB(104, 108, 120);
@@ -102,24 +48,13 @@ const HOSTILE = Color3.fromRGB(255, 60, 50);
 const CHARGE = Color3.fromRGB(255, 215, 50);
 /** A shielder's emitter and its bubble. */
 const SHIELD = Color3.fromRGB(255, 110, 90);
-const NEON = Enum.Material.Neon;
 
-/** A part welded to an alien's hull: its size, where on the hull, its colour, and its material and shape if not plain metal. */
-type Piece = readonly [size: Vector3, at: CFrame, color: Color3, material?: Enum.Material, shape?: Enum.PartType];
-
-/** Each piece, and its mirror image on the hull's other side (-X). */
-function both(...pieces: Array<Piece>): Array<Piece> {
-	const mirrored = pieces.map(([size, at, color, material, shape]): Piece => {
-		const [x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22] = at.GetComponents();
-		const flipped = new CFrame(-x, y, z, r00, -r01, -r02, -r10, r11, r12, -r20, r21, r22);
-		return [size, flipped, color, material, shape];
-	});
-	return [...pieces, ...mirrored];
-}
-
-/** At (x, y, z), tipped `degrees` about the hull's length: at 90, a cylinder (which lies along X) stands as a flat rotor disc. */
-function splay(x: number, y: number, z: number, degrees: number): CFrame {
-	return new CFrame(x, y, z).mul(CFrame.Angles(0, 0, math.rad(degrees)));
+/** Places `piece` from `from`, in `parent`, every size and offset `scale` times over. */
+function place(parent: Instance, [size, at, color, material, shape]: Piece, from: CFrame, scale = 1): Part {
+	const offset = at.Rotation.add(at.Position.mul(scale));
+	const part = block(parent, size.mul(scale), from.mul(offset), color, material ?? Enum.Material.Metal);
+	if (shape) part.Shape = shape;
+	return part;
 }
 
 /** The mortar's tube on its turntable, raised toward the front. */
@@ -161,12 +96,13 @@ const CHIN_GUN: ReadonlyArray<Piece> = [
 /**
  * Every alien's hull, which the server moves, the pieces on it and the turrets that turn on it. The
  * front is -Z. Walkers' legs aren't here: each client draws them (see `ALIEN_GAITS`). Walkers and
- * tanks stand on the ground at their `hover` (see `ALIENS`); fliers fly that high.
+ * tanks stand on the ground at their `hover` (see `ALIENS`); fliers fly that high. Built in a
+ * function so its spreads' temporaries don't count toward this module's 200 locals.
  */
 const ALIEN_BODIES: Record<
 	AlienKind,
 	readonly [hull: Vector3, pieces: ReadonlyArray<Piece>, turrets?: ReadonlyArray<Turret>]
-> = {
+> = (() => ({
 	// A scout scuttling on four splayed legs.
 	crawler: [
 		new Vector3(2.6, 1, 3),
@@ -519,7 +455,7 @@ const ALIEN_BODIES: Record<
 			...broadside(4.6, 0.8, [-3, 3], 2.2, TWIN_GUN),
 		],
 	],
-};
+}))();
 
 /**
  * A shielder's bubble, `radius` round its hull and welded on. Nothing touches or hits it: the
@@ -565,6 +501,35 @@ export function weld<T extends BasePart>(root: BasePart, part: T): T {
 	constraint.Part1 = part;
 	constraint.Parent = part;
 	return part;
+}
+
+/**
+ * Welds a turret's barrel `part` to its `head` on a `Weld` named `Recoil`, which clients slide back
+ * when it fires (see `TurretController`): the barrel of whichever of `muzzles` it lies in line with,
+ * as its `Barrel` attribute, and `kick` studs back along it as its `Kick`.
+ */
+function recoil(head: BasePart, part: BasePart, muzzles: ReadonlyArray<CFrame>, kick: number) {
+	const at = head.CFrame.ToObjectSpace(part.CFrame);
+	let barrel = 0;
+	let best = math.huge;
+	muzzles.forEach((muzzle, index) => {
+		const off = at.Position.sub(muzzle.Position);
+		const across = off.sub(muzzle.LookVector.mul(off.Dot(muzzle.LookVector))).Magnitude;
+		if (across >= best) return;
+		best = across;
+		barrel = index;
+	});
+	part.Anchored = false;
+	part.Massless = true;
+	part.CanCollide = false;
+	const joint = new Instance("Weld");
+	joint.Name = "Recoil";
+	joint.Part0 = head;
+	joint.Part1 = part;
+	joint.C0 = at;
+	joint.SetAttribute("Barrel", barrel);
+	joint.SetAttribute("Kick", muzzles[barrel].LookVector.mul(-kick));
+	joint.Parent = part;
 }
 
 /** Gives the Build tool its Handle: a stubby emitter with the team's glow at the tip. */
@@ -626,6 +591,17 @@ export function setAmmo(model: Model, shots: number, resource: ResourceId | unde
 	model.SetAttribute("Ammo", shots);
 	model.SetAttribute("AmmoType", resource);
 	warn(model, "NoAmmo", "NO AMMO", shots === 0);
+}
+
+/** Points a turret's `Target` at the alien it tracks, or at nothing, for clients to turn its head after (see `TurretController`). */
+export function setTarget(model: Model, target: Model | undefined) {
+	let value = model.FindFirstChild("Target") as ObjectValue | undefined;
+	if (!value) {
+		value = new Instance("ObjectValue");
+		value.Name = "Target";
+		value.Parent = model;
+	}
+	if (value.Value !== target) value.Value = target;
 }
 
 /** Writes `Power`, the share of its need a building gets, and shows NO POWER over it while it gets none. */
@@ -953,16 +929,22 @@ export function buildingModel(
 		block(model, new Vector3(width + 0.2, 0.5, width + 0.2), at(height - 0.8), GLOW, Enum.Material.Neon);
 		block(model, new Vector3(width / 2.5, 1, width / 2.5), at(height + 0.5), works, Enum.Material.Neon);
 	} else {
-		// Turrets: a body, and a head that turns to aim with its barrels welded on. Bigger ones scale up.
+		// Turrets: a base, lit in its colour round the turntable, and a head that turns to aim, its guns welded on (see `TURRET_LOOKS`).
 		const scale = def.size;
-		body = block(model, new Vector3(6, 2, 6).mul(scale), at(scale), DARK, Enum.Material.Metal);
-		head = block(model, new Vector3(3, 2, 3).mul(scale), at(3 * scale), METAL, Enum.Material.DiamondPlate);
+		const [accent, height, pieces, tips, kick = 0] = TURRET_LOOKS[kind]!();
+		body = place(model, TURRET_BASE[0], base, scale);
+		for (const each of TURRET_BASE) if (each !== TURRET_BASE[0]) place(model, each, base, scale);
+		const ring: Piece = [new Vector3(0.2, 4.9, 4.9), splay(0, 1.1, 0, 90), accent, NEON, Enum.PartType.Cylinder];
+		place(model, ring, base, scale);
+		const pivot = at(height * scale);
+		head = place(model, pieces[0], pivot, scale);
 		head.Name = "Head";
-		const [barrel, centres, pitch] = BARRELS[kind]!;
-		for (const centre of centres) {
-			const offset = new CFrame(centre).mul(CFrame.Angles(math.rad(pitch), 0, 0));
-			weld(head, block(model, barrel, head.CFrame.mul(offset), GLOW, Enum.Material.Neon));
-			muzzles.push(offset.mul(new CFrame(0, 0, -barrel.Z / 2)));
+		for (const tip of tips) muzzles.push(tip.Rotation.add(tip.Position.mul(scale)));
+		for (const each of pieces) {
+			if (each === pieces[0]) continue;
+			const part = place(model, each, pivot, scale);
+			if (each[5]) recoil(head, part, muzzles, kick * scale);
+			else weld(head, part);
 		}
 	}
 	model.PrimaryPart = body;
@@ -983,11 +965,7 @@ export function alienModel(kind: AlienKind, cframe: CFrame): [model: Model, root
 	const root = block(model, hull, cframe, HULL, Enum.Material.Metal);
 	root.CanCollide = false;
 	root.CanTouch = false;
-	const piece = ([size, at, color, material, shape]: Piece, from: CFrame) => {
-		const part = block(model, size, from.mul(at), color, material ?? Enum.Material.Metal);
-		if (shape) part.Shape = shape;
-		return part;
-	};
+	const piece = (each: Piece, from: CFrame) => place(model, each, from);
 	for (const each of pieces) weld(root, piece(each, cframe));
 	turrets.forEach(([pivot, , turretPieces], index) => {
 		const from = cframe.mul(pivot);
