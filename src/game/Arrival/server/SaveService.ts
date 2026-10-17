@@ -6,6 +6,7 @@ import { IS_STUDIO } from "core/shared/constants";
 import { readSave, updateSave } from "core/Worlds/server/saves";
 import { ArrivalService, type World } from "game/Arrival/server/ArrivalService";
 import { BaseService, type SavedBase } from "game/Base/server/BaseService";
+import type { CoreKind } from "game/Base/shared/buildings";
 import type { ResourceId } from "game/Base/shared/resources";
 import { PlanetsService } from "game/Planets/server/PlanetsService";
 import { discoveredAtom, personal, teamAtom } from "game/Research/server/research-store";
@@ -18,8 +19,9 @@ const READ_TRIES = 5;
 
 /** A world's progress, as its save slot keeps it. Keyed by strings, not numbers, so it stays JSON-safe. */
 interface Progress {
-	/** The planet the team was on. */
+	/** The planet the team was on, and the tier of Core they had (see `BaseService.coreAtom`). Saves from before tiers have none. */
 	readonly active: number;
+	readonly core?: CoreKind;
 	readonly unlocked: ReadonlyArray<number>;
 	readonly conquered: ReadonlyArray<number>;
 	readonly team: Levels;
@@ -109,6 +111,7 @@ export class SaveService implements OnStart {
 
 	private restore(progress: Progress) {
 		this.planetsService.restore(progress.unlocked, progress.conquered);
+		if (progress.core) this.baseService.coreAtom(progress.core);
 		teamAtom(progress.team);
 		for (const [userId, levels] of pairs(progress.personal)) personal.set(tonumber(userId)!, levels);
 		const bases = new Map<number, SavedBase>();
@@ -136,6 +139,7 @@ export class SaveService implements OnStart {
 		const conquered = [...this.planetsService.getConquered()];
 		const progress: Progress = {
 			active,
+			core: this.baseService.coreAtom(),
 			unlocked: [...this.planetsService.getUnlocked()],
 			conquered,
 			team: teamAtom(),

@@ -2,16 +2,20 @@ import { OnStart, Service } from "@flamework/core";
 import { Players, StarterPack, Workspace } from "@rbxts/services";
 import { t } from "@rbxts/t";
 
+import { BaseService } from "game/Base/server/BaseService";
 import { block, weld } from "game/Base/server/models";
 import { WaveService } from "game/Base/server/WaveService";
 import { BaseMessage, baseMessaging, ShotMessage, shotMessaging } from "game/Base/shared/base-network";
-import { statOf } from "game/Research/server/research-store";
+import { type BlasterDef, blasterOf, BLASTERS, blastersOf, type BlasterKind } from "game/Base/shared/blasters";
+import { isCore } from "game/Base/shared/buildings";
+import { cellAt } from "game/Terrain/shared/map";
 
-const MAX_RANGE = 300;
-/** How fast a bullet flies, in studs a second. */
+/** How fast bullets and flames fly, in studs a second. */
 const BULLET_SPEED = 320;
-/** How big a bullet looks, against a turret's 1. */
-const BULLET_SIZE = 0.7;
+const FLAME_SPEED = 60;
+/** A shell's seconds in the air: this long to leave, plus its distance over its speed. */
+const LAUNCH_SECONDS = 0.3;
+const SHELL_SPEED = 110;
 
 const LIGHT = Color3.fromRGB(152, 154, 164);
 const MID = Color3.fromRGB(110, 112, 128);
@@ -19,10 +23,13 @@ const DARK = Color3.fromRGB(74, 75, 83);
 const YELLOW = Color3.fromRGB(255, 211, 127);
 
 const isFireData = t.interface({ target: t.Vector3 });
+const isPickData = t.interface({ x: t.integer, z: t.integer, kind: t.keyOf(BLASTERS) });
 
 /**
  * Every character's sidearm. The Blaster lives in StarterPack, so each spawn
- * gets one. The client says where it aimed; the server checks the Blaster is
+ * gets one, and it fires whichever of the Core's tier's Blasters its player
+ * picked at the Core (their `Blaster` attribute, see `blasterOf`). The
+ * client says where it aimed; the server checks the Blaster is
  * equipped, then raycasts from its muzzle, so a client can only choose the
  * direction of a shot, never where it starts or what it hits. The bullet flies
  * for clients to see, and hurts what it hit when it lands.
@@ -33,7 +40,10 @@ export class BlasterService implements OnStart {
 	/** Counts down, so a bullet's id never meets a turret shot's (see `Shot`). */
 	private shotId = -1;
 
-	constructor(private readonly waveService: WaveService) {}
+	constructor(
+		private readonly baseService: BaseService,
+		private readonly waveService: WaveService,
+	) {}
 
 	onStart() {
 		const tool = new Instance("Tool");
@@ -68,6 +78,10 @@ export class BlasterService implements OnStart {
 		tool.Parent = StarterPack;
 
 		baseMessaging.server.on(BaseMessage.Fire, (player, data) => this.fire(player, data));
+		baseMessaging.server.on(BaseMessage.PickBlaster, (player, data) => {
+			if (!isPickData(data) || !isCore(this.baseService.reachable(player, data)?.kind)) return;
+			if (blastersOf(this.baseService.coreAtom()).includes(data.kind)) player.SetAttribute("Blaster", data.kind);
+		});
 		Players.PlayerRemoving.Connect((player) => this.lastShot.delete(player));
 	}
 
@@ -79,8 +93,10 @@ export class BlasterService implements OnStart {
 		const humanoid = character?.FindFirstChildOfClass("Humanoid");
 		if (!character || !handle?.IsA("BasePart") || !humanoid || humanoid.Health <= 0) return;
 
+		const kind = blasterOf(player.GetAttribute("Blaster"), this.baseService.coreAtom());
+		const gun = BLASTERS[kind];
 		const now = os.clock();
-		if (now - (this.lastShot.get(player) ?? -math.huge) < statOf(player.UserId, "blasterCooldown")) return;
+		if (now - (this.lastShot.get(player) ?? -math.huge) < gun.seconds) return;
 		this.lastShot.set(player, now);
 
 		const muzzle = handle.FindFirstChild("Muzzle");
@@ -88,28 +104,62 @@ export class BlasterService implements OnStart {
 		const offset = data.target.sub(origin);
 		// Also rejects NaN, which compares false to everything, and infinity.
 		if (!(offset.Magnitude > 0.01 && offset.Magnitude < math.huge)) return;
-		const direction = offset.Unit.mul(MAX_RANGE);
+		const volley = gun.volley ?? 1;
+		for (let index = 0; index < volley; index++) {
+			const turn = math.rad((index - (volley - 1) / 2) * (gun.fan ?? 0));
+			this.shoot(character, origin, CFrame.Angles(0, turn, 0).mul(offset.Unit), kind);
+		}
+	}
+
+	/**
+	 * One shot from `origin` along `along` (a unit vector), to what it meets within the Blaster's range,
+	 * or the end of it: lightning strikes at once, and the rest hurt what they reach when they land.
+	 */
+	private shoot(character: Model, origin: Vector3, along: Vector3, kind: BlasterKind) {
+		const gun: BlasterDef = BLASTERS[kind];
+		const direction = along.mul(gun.range);
 		const params = new RaycastParams();
 		params.FilterType = Enum.RaycastFilterType.Exclude;
-		params.FilterDescendantsInstances = [character];
+		params.FilterDescendantsInstances =
+			gun.pierce !== undefined ? [character, this.baseService.aliensFolder] : [character];
 		const result = Workspace.Raycast(origin, direction, params);
-
 		const to = result?.Position ?? origin.add(direction);
-		const seconds = to.sub(origin).Magnitude / BULLET_SPEED;
+
+		if (gun.projectile === "arc") {
+			// Fizzles where it was aimed with nothing there to strike.
+			if (!this.waveService.zapNear(origin, to, gun.damage, gun.chain ?? 0))
+				shotMessaging.client.emitAll(ShotMessage.Arc, { points: [origin, to] });
+			return;
+		}
+		const distance = to.sub(origin).Magnitude;
+		const shell = gun.projectile === "shell";
+		const seconds = shell
+			? LAUNCH_SECONDS + distance / SHELL_SPEED
+			: distance / (gun.projectile === "flame" ? FLAME_SPEED : BULLET_SPEED);
 		shotMessaging.client.emitAll(ShotMessage.Fired, {
 			id: this.shotId--,
-			kind: "bullet",
+			kind: gun.projectile,
 			from: origin,
-			control: origin.Lerp(to, 0.5),
+			control: shell ? origin.Lerp(to, 0.5).add(new Vector3(0, distance * 0.6, 0)) : origin.Lerp(to, 0.5),
 			to,
 			seconds,
-			splash: 0,
-			size: BULLET_SIZE,
-			blaster: true,
+			splash: gun.splash ?? 0,
+			size: gun.size,
+			blaster: kind,
 		});
+		// It lands when the shot does. An alien that's gone by then just isn't hurt (see `damageAlien`).
+		const { damage, pierce, splash, repair } = gun;
 		const model = result?.Instance.FindFirstAncestorOfClass("Model");
-		const damage = statOf(player.UserId, "blasterDamage");
-		// It lands when the bullet does. An alien that's gone by then just isn't hurt (see `damageAlien`).
-		if (model) task.delay(seconds, () => this.waveService.damageAlien(model, damage));
+		// Just past where it struck, so a hit on a building's side finds the building's cell.
+		const cell = result?.Instance.IsDescendantOf(this.baseService.buildingsFolder)
+			? cellAt(to.X + along.X * 0.1, to.Z + along.Z * 0.1)
+			: undefined;
+		task.delay(seconds, () => {
+			if (pierce !== undefined) this.waveService.pierceAliens(origin, to, damage, undefined, pierce);
+			else if (splash !== undefined) this.waveService.blastAliens(to, splash, damage, undefined);
+			else if (model) this.waveService.damageAlien(model, damage);
+			const building = cell !== undefined ? this.baseService.cells.get(cell) : undefined;
+			if (repair !== undefined && building) this.baseService.repair(building, repair);
+		});
 	}
 }

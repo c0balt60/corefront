@@ -2,11 +2,10 @@ import { Controller, OnStart } from "@flamework/core";
 import { atom, effect } from "@rbxts/charm";
 import { Players, TweenService, UserInputService, Workspace } from "@rbxts/services";
 
+import { coreNow } from "game/Base/client/base-state";
 import { starMapOpenAtom } from "game/Planets/client/planets-state";
-import { levelsAtom } from "game/Research/client/research-state";
-import { statValue } from "game/Research/shared/research";
 
-/** Walk speed while sprinting, as a multiple of the researched walk speed. */
+/** Walk speed while sprinting, as a multiple of the Core's walk speed. */
 const SPRINT_SPEED = 1.35;
 /** Degrees the camera widens while sprinting. */
 const SPRINT_FOV = 8;
@@ -14,7 +13,7 @@ const FOV_TWEEN = new TweenInfo(0.25, Enum.EasingStyle.Quad, Enum.EasingDirectio
 const SPRINT_KEYS: ReadonlyArray<Enum.KeyCode> = [Enum.KeyCode.LeftShift, Enum.KeyCode.RightShift];
 
 /**
- * Owns the local character's walk speed: the researched one, times
+ * Owns the local character's walk speed: the Core's tier's, times
  * `SPRINT_SPEED` while Shift is held, when the camera also widens. Not while
  * the star map has the camera.
  */
@@ -42,7 +41,7 @@ export class SprintController implements OnStart {
 		effect(() => {
 			const humanoid = humanoidAtom();
 			const sprinting = heldAtom() && humanoid !== undefined && !starMapOpenAtom();
-			if (humanoid) humanoid.WalkSpeed = statValue(levelsAtom(), "walkSpeed") * (sprinting ? SPRINT_SPEED : 1);
+			if (humanoid) humanoid.WalkSpeed = coreNow().walkSpeed * (sprinting ? SPRINT_SPEED : 1);
 			const camera = Workspace.CurrentCamera;
 			const fov = baseFov + (sprinting ? SPRINT_FOV : 0);
 			if (camera) TweenService.Create(camera, FOV_TWEEN, { FieldOfView: fov }).Play();

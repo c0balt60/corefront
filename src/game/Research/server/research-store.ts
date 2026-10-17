@@ -12,7 +12,7 @@ import { type Levels, type StatId, statValue } from "game/Research/shared/resear
 
 /** Each player's own research, by UserId. Kept after they leave, for if they come back. */
 export const personal = new Map<number, Levels>();
-/** The research on team stats, which every player shares. */
+/** Levels every player has on top of their own: a sandbox's whole tree. */
 export const teamAtom = atom<Levels>({});
 /** Every resource the Core has held. */
 export const discoveredAtom = atom<ReadonlyArray<ResourceId>>([]);
@@ -25,9 +25,4 @@ export function levelsOf(userId: number): Levels {
 /** A player's value of `stat`. A building's stats are its placer's. */
 export function statOf(userId: number, stat: StatId): number {
 	return statValue(levelsOf(userId), stat);
-}
-
-/** The team's value of a team stat, such as the Core's. Reactive inside Charm's `computed` and `subscribe`. */
-export function teamStat(stat: StatId): number {
-	return statValue(teamAtom(), stat);
 }

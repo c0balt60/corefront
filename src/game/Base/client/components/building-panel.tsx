@@ -5,7 +5,8 @@ import { Button } from "core/Interface/client/components/button";
 import { COLORS, FONT_DISPLAY } from "core/Interface/client/theme";
 import { HudBox, Label, Swatch } from "game/Base/client/components/base-hud";
 import { InfoButton } from "game/Base/client/components/turret-info";
-import { BUILDINGS, type BuildingKind, MACHINE_SECONDS } from "game/Base/shared/buildings";
+import { BLASTERS, type BlasterKind } from "game/Base/shared/blasters";
+import { BUILDINGS, type BuildingKind, isCore, MACHINE_SECONDS } from "game/Base/shared/buildings";
 import { RESOURCE_ORDER, RESOURCES, type ResourceId, type ResourceStack } from "game/Base/shared/resources";
 import { CELL_STUDS } from "game/Terrain/shared/map";
 
@@ -44,6 +45,21 @@ interface BuildingPanelProps {
 	readonly onTake: (resource: ResourceId) => void;
 	/** Turrets: opens the info page (see `TurretInfo`). */
 	readonly onInfo: () => void;
+	/** The Core: the Blasters its tier lets players pick, the one the local player carries, and picking another. */
+	readonly blasters: () => ReadonlyArray<BlasterKind>;
+	readonly blaster: () => BlasterKind;
+	readonly onBlaster: (kind: BlasterKind) => void;
+}
+
+/** What a Blaster does, in a row's few characters. */
+function blasterText(kind: BlasterKind): string {
+	const { damage, seconds, volley, pierce, splash, chain, repair } = BLASTERS[kind];
+	let text = `${damage}${volley !== undefined ? ` ×${volley}` : ""} DMG · ${math.round(10 / seconds) / 10}/S`;
+	if (pierce !== undefined) text += " · PIERCES";
+	if (splash !== undefined) text += " · AREA";
+	if (chain !== undefined) text += " · CHAINS";
+	if (repair !== undefined) text += " · REPAIRS";
+	return text;
 }
 
 interface OreButtonProps {
@@ -91,7 +107,8 @@ function OreButton({ resource, text = () => "", picked = () => false, layoutOrde
  * clicking the outlined one lets nothing through. A Source's picks the ore it hands out, and an
  * Unloader's the ore it takes, the same way. A belt's has a swatch for each ore on it, with its
  * count: clicking one takes all of that ore. Storage lists what it holds; what's on the power
- * network shows its power. A turret's has a ? button in its corner, which opens its info page. It
+ * network shows its power. A turret's has a ? button in its corner, which opens its info page. The
+ * Core's has a button for each Blaster its tier lets players pick, the local player's outlined. It
  * has to live in PlayerGui, not on the building, to take clicks.
  */
 export function BuildingPanel({
@@ -105,6 +122,9 @@ export function BuildingPanel({
 	ore,
 	onTake,
 	onInfo,
+	blasters,
+	blaster,
+	onBlaster,
 }: BuildingPanelProps) {
 	const kind = building.GetAttribute("Kind") as BuildingKind;
 	const def = BUILDINGS[kind];
@@ -202,7 +222,8 @@ export function BuildingPanel({
 		}
 		if (def.repair !== undefined) list.push({ label: "REPAIRS", value: `${def.repair} / ${MACHINE_SECONDS}s` });
 		if (def.range !== undefined) list.push({ label: "RANGE", value: `${def.range}` });
-		if (kind === "core") {
+		if (isCore(kind)) {
+			list.push({ label: BLASTERS[blaster()].name.upper(), value: blasterText(blaster()) });
 			for (const { resource, amount } of pool()) {
 				list.push({ label: RESOURCES[resource].name.upper(), value: `${amount} / ${capacity()}`, resource });
 			}
@@ -211,7 +232,7 @@ export function BuildingPanel({
 	};
 
 	const actions = new Array<[text: string, onClick: () => void]>();
-	if (kind === "core") actions.push(["DEPOSIT ALL", onLoad]);
+	if (isCore(kind)) actions.push(["DEPOSIT ALL", onLoad]);
 	if (def.turret && !def.turret.energy) actions.push(["LOAD AMMO", onLoad]);
 	if (def.generator?.fuel) actions.push(["LOAD FUEL", onLoad]);
 	if (def.store !== undefined) actions.push(["STORE ALL", onLoad]);
@@ -227,7 +248,9 @@ export function BuildingPanel({
 	const sorter = kind === "sorter" || kind === "source" || kind === "unloader";
 	// Below the rows: the swatches (a belt's in one row), then the buttons.
 	const swatches = sorter ? math.ceil(RESOURCE_ORDER.size() / PER_ROW) * (SWATCH + GAP) + 6 : belt ? SWATCH + 8 : 0;
-	const extra = swatches + (actions.isEmpty() ? 0 : BUTTONS);
+	// The Core's Blasters, two to a row.
+	const picker = () => (isCore(kind) ? math.ceil(blasters().size() / 2) * (SWATCH + GAP) + 6 : 0);
+	const extra = () => swatches + picker() + (actions.isEmpty() ? 0 : BUTTONS);
 	// What's on a belt, as counts.
 	const onBelt = () => {
 		const carried = ore();
@@ -245,7 +268,7 @@ export function BuildingPanel({
 			AlwaysOnTop={true}
 			LightInfluence={0}
 			ResetOnSpawn={false}
-			Size={() => UDim2.fromOffset(WIDTH, CHROME + ROW * rows().size() + extra)}
+			Size={() => UDim2.fromOffset(WIDTH, CHROME + ROW * rows().size() + extra())}
 			// Its near edge on the point: a belt's grows upward, anything else's outward to the side.
 			SizeOffset={belt ? new Vector2(0, 0.5) : new Vector2(side * 0.5, 0)}
 			StudsOffset={beside}
@@ -336,6 +359,39 @@ export function BuildingPanel({
 							<Show when={() => belt && onBelt().isEmpty()}>
 								{() => <Label size={UDim2.fromScale(1, 1)} text="NOTHING ON IT" />}
 							</Show>
+						</frame>
+					) : undefined}
+					{isCore(kind) ? (
+						<frame BackgroundTransparency={1} LayoutOrder={100} Size={() => new UDim2(1, 0, 0, picker())}>
+							<uipadding PaddingTop={new UDim(0, 4)} />
+							<uigridlayout
+								CellPadding={UDim2.fromOffset(GAP, GAP)}
+								CellSize={new UDim2(0.5, -GAP / 2, 0, SWATCH)}
+								SortOrder={Enum.SortOrder.LayoutOrder}
+							/>
+							<Index each={blasters}>
+								{(each, index) => (
+									<textbutton
+										AutoButtonColor={true}
+										BackgroundColor3={() => BLASTERS[each()].color.Lerp(new Color3(), 0.55)}
+										BorderSizePixel={0}
+										FontFace={FONT_DISPLAY}
+										LayoutOrder={index}
+										Text={() => BLASTERS[each()].name.upper()}
+										TextColor3={() => (near() ? COLORS.text : COLORS.muted)}
+										TextSize={12}
+										ZIndex={() => (blaster() === each() ? 2 : 1)}
+										Activated={() => near() && onBlaster(each())}
+									>
+										<uistroke
+											ApplyStrokeMode={Enum.ApplyStrokeMode.Border}
+											Color={() => (blaster() === each() ? COLORS.text : COLORS.stroke)}
+											LineJoinMode={Enum.LineJoinMode.Miter}
+											Thickness={() => (blaster() === each() ? 2.5 : 1)}
+										/>
+									</textbutton>
+								)}
+							</Index>
 						</frame>
 					) : undefined}
 					{!actions.isEmpty() ? (

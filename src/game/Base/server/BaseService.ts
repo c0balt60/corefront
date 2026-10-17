@@ -1,5 +1,5 @@
 import { OnStart, Service } from "@flamework/core";
-import { atom, computed } from "@rbxts/charm";
+import { atom, computed, subscribe } from "@rbxts/charm";
 import { Cmdr } from "@rbxts/cmdr";
 import type { Logger } from "@rbxts/log";
 import { CollectionService, Players, StarterPack, Workspace } from "@rbxts/services";
@@ -26,21 +26,24 @@ import {
 	type BuildingDef,
 	BUILDINGS,
 	type BuildingKind,
+	coreCorner,
+	type CoreKind,
+	coreStats,
 	type EnergyDef,
 	inDropZone,
 	isBelt,
+	isCore,
 	isPowered,
 	linkReach,
 	MACHINE_SECONDS,
 	MAX_LINE,
-	MINE_SECONDS,
 	REFUND,
 	replaces,
 	TRANSFER_RANGE,
 } from "game/Base/shared/buildings";
 import { KIND_ORES, RESOURCE_ORDER, RESOURCES, type ResourceId, type ResourceStack } from "game/Base/shared/resources";
 import { PlanetsService } from "game/Planets/server/PlanetsService";
-import { levelsOf, statOf, teamStat } from "game/Research/server/research-store";
+import { levelsOf, statOf } from "game/Research/server/research-store";
 import { canBuild } from "game/Research/shared/research";
 import type { OreDeposit, PlanetMap } from "game/Terrain/server/planet-map";
 import { CELL_STUDS, cellAt, cellCenter, cellCoords, cellIndex, GRID_SIZE } from "game/Terrain/shared/map";
@@ -222,6 +225,11 @@ export class BaseService implements OnStart {
 	readonly poolAtom = atom<Stock>({});
 	readonly coreHealthAtom = atom(0);
 	readonly coreMaxHealthAtom = atom(0);
+	/**
+	 * The Core's tier: the one standing, or the one to land next. It travels with the team, so it lands
+	 * wherever they launch to; losing a planet loses it, back to a Shard. It sets everyone's stats (see `CoreDef`).
+	 */
+	readonly coreAtom = atom<CoreKind>("core");
 	/** How the mission on the active planet ended, while its banner shows. `WaveService` clears it. */
 	readonly resultAtom = atom<"won" | "lost">();
 	readonly phase = computed((): Phase => {
@@ -252,7 +260,7 @@ export class BaseService implements OnStart {
 
 	private map?: PlanetMap;
 	private readonly ores = new Map<number, OreDeposit>();
-	/** When each player last mined, so a held click mines no faster than `MINE_SECONDS`. */
+	/** When each player last mined, so a held click mines no faster than the Core allows. */
 	private readonly lastMined = new Map<Player, number>();
 	private readonly inventories = new Map<Player, Stock>();
 	/** Liberated planets' bases, while the team is elsewhere. */
@@ -292,10 +300,11 @@ export class BaseService implements OnStart {
 		buildToolHandle(tool);
 		tool.Parent = StarterPack;
 
-		// What a player carries is lost when they die.
+		// What a player carries is lost when they die. Their health is the Core's.
 		const watch = (player: Player) =>
 			player.CharacterAdded.Connect((character) => {
 				const humanoid = character.WaitForChild("Humanoid") as Humanoid;
+				humanoid.MaxHealth = humanoid.Health = this.stats().health;
 				humanoid.Died.Connect(() => this.setInventory(player, {}));
 			});
 		Players.GetPlayers().forEach(watch);
@@ -303,6 +312,14 @@ export class BaseService implements OnStart {
 		Players.PlayerRemoving.Connect((player) => {
 			this.inventories.delete(player);
 			this.lastMined.delete(player);
+		});
+		// A new tier reaches everyone at once: their packs, and their health, topped up.
+		subscribe(this.coreAtom, () => {
+			for (const player of Players.GetPlayers()) {
+				this.sendInventory(player);
+				const humanoid = player.Character?.FindFirstChildOfClass("Humanoid");
+				if (humanoid && humanoid.Health > 0) humanoid.MaxHealth = humanoid.Health = this.stats().health;
+			}
 		});
 
 		task.spawn(() => {
@@ -316,8 +333,8 @@ export class BaseService implements OnStart {
 	}
 
 	/**
-	 * Clears the base and, given a map, starts one on it: a Core at the landing,
-	 * plus the planet's saved base if it has one.
+	 * Clears the base and, given a map, starts one on it: a Core of the team's tier at the landing,
+	 * plus the planet's saved base if it has one, but for what that Core now covers (refunded).
 	 * The pool is what was saved plus any cargo landing here; with neither, the
 	 * starting pool. Everyone's inventory is emptied either way.
 	 */
@@ -354,14 +371,17 @@ export class BaseService implements OnStart {
 
 		for (const ore of map.ores) this.ores.set(ore.cell, ore);
 
-		// The landing is a cell corner: the Core's 2×2 cells meet on it.
-		const corner = cellAt(map.landing.X - CELL_STUDS / 2, map.landing.Z - CELL_STUDS / 2);
-		if (corner !== undefined) this.core = this.build(map, "core", corner, 0, 0);
-		this.coreHealthAtom(this.core?.health ?? 0);
-		this.coreMaxHealthAtom(this.core?.maxHealth ?? 0);
+		this.placeCore(map, this.coreAtom());
 
+		const rebuilt = new Map<number, Building>();
 		for (const old of saved?.buildings ?? []) {
+			// A bigger Core than the one that left may stand there now.
+			if (footprint(old.cell, BUILDINGS[old.kind].size).some((covered) => this.cells.has(covered))) {
+				this.pay(BUILDINGS[old.kind].cost, REFUND);
+				continue;
+			}
 			const building = this.build(map, old.kind, old.cell, old.rotation, old.owner);
+			rebuilt.set(old.cell, building);
 			building.health = math.min(old.health, building.maxHealth);
 			building.stored = old.stored;
 			building.filter = old.filter;
@@ -372,36 +392,31 @@ export class BaseService implements OnStart {
 		}
 		// Links once everything's back, both ends of each.
 		for (const old of saved?.buildings ?? []) {
-			const building = this.cells.get(old.cell);
+			const building = rebuilt.get(old.cell);
 			for (const cell of old.linked) {
-				const other = this.cells.get(cell);
+				const other = rebuilt.get(cell);
 				if (building && other && !building.links.has(other)) this.link(building, other);
 			}
 		}
 	}
 
-	/** Brings the Core's max health up to the team's research, healing it by the difference. */
-	refreshCore() {
-		const core = this.core;
-		if (!core) return;
-		const max = teamStat("coreHealth");
-		core.health += max - core.maxHealth;
-		core.maxHealth = max;
-		setHealth(core.model, core.health, core.maxHealth);
-		this.coreHealthAtom(core.health);
-		this.coreMaxHealthAtom(max);
+	/** What the Core's tier gives everyone (see `coreAtom`). */
+	stats() {
+		return coreStats(this.coreAtom());
 	}
 
-	/** Turns this server into a sandbox (see `sandbox`). Research everything first, so the pool fills to the top capacity. */
+	/** Turns this server into a sandbox (see `sandbox`), with the top tier of Core and the pool filled to its capacity. */
 	startSandbox() {
 		this.sandbox(true);
+		if (this.map && this.core) this.placeCore(this.map, "coreNucleus");
+		else this.coreAtom("coreNucleus");
 		this.fillPool();
 	}
 
 	/** Every resource, up to the Core's capacity. */
 	private fillPool() {
 		const pool: Stock = {};
-		const capacity = teamStat("coreCapacity");
+		const capacity = this.stats().capacity;
 		for (const resource of RESOURCE_ORDER) pool[resource] = capacity;
 		this.poolAtom(pool);
 	}
@@ -428,7 +443,7 @@ export class BaseService implements OnStart {
 	private capture(): SavedBase {
 		const buildings = new Array<SavedBase["buildings"][number]>();
 		for (const { kind, cell, rotation, owner, health, stored, filter, input, links } of this.buildings) {
-			if (kind === "core") continue;
+			if (isCore(kind)) continue;
 			const linked = new Array<number>();
 			for (const other of links) linked.push(other.cell);
 			buildings.push({ kind, cell, rotation, owner, health, stored, filter, input: { ...input }, linked });
@@ -462,6 +477,7 @@ export class BaseService implements OnStart {
 		if (this.phase() !== "active") return false;
 		this.logger.Info("Planet {Planet} {Result}", this.map?.planet, result);
 		this.resultAtom(result);
+		if (result === "lost") this.coreAtom("core");
 		return true;
 	}
 
@@ -475,7 +491,7 @@ export class BaseService implements OnStart {
 		if (building.health > 0) return;
 
 		this.demolish(building);
-		if (building.kind === "core") this.end("lost");
+		if (isCore(building.kind)) this.end("lost");
 	}
 
 	/** Heals a building, up to its max health. */
@@ -501,7 +517,7 @@ export class BaseService implements OnStart {
 	receive(building: Building, resource: ResourceId): boolean {
 		const def = BUILDINGS[building.kind];
 		if (building === this.core) {
-			if ((this.poolAtom()[resource] ?? 0) >= teamStat("coreCapacity")) return false;
+			if ((this.poolAtom()[resource] ?? 0) >= this.stats().capacity) return false;
 			this.pay([{ resource, amount: 1 }], 1);
 		} else if (def.turret) {
 			const shots = def.turret.ammo[resource]?.shots;
@@ -583,7 +599,7 @@ export class BaseService implements OnStart {
 		const items = this.inventories.get(player) ?? {};
 		let carried = 0;
 		for (const [, count] of pairs(items)) carried += count;
-		const given = math.max(0, math.min(amount, statOf(player.UserId, "carryCapacity") - carried));
+		const given = math.max(0, math.min(amount, this.stats().carry - carried));
 		if (given > 0) this.setInventory(player, { ...items, [resource]: (items[resource] ?? 0) + given });
 		return given;
 	}
@@ -595,7 +611,7 @@ export class BaseService implements OnStart {
 				resource,
 				amount: items[resource]!,
 			})),
-			capacity: statOf(player.UserId, "carryCapacity"),
+			capacity: this.stats().carry,
 		});
 	}
 
@@ -616,7 +632,7 @@ export class BaseService implements OnStart {
 		// A sandbox's pool never runs down.
 		if (this.sandbox() && scale < 0) return;
 		const pool = { ...this.poolAtom() };
-		const capacity = teamStat("coreCapacity");
+		const capacity = this.stats().capacity;
 		for (const { resource, amount } of stacks) {
 			const current = pool[resource] ?? 0;
 			const added = current + math.floor(amount * scale);
@@ -639,6 +655,11 @@ export class BaseService implements OnStart {
 		if (!map || this.phase() !== "active") return refuse("You can't build right now.");
 		if (!canBuild(levelsOf(player.UserId), data.kind, this.sandbox())) {
 			return refuse(`Research the ${def.name} first.`);
+		}
+		if (isCore(data.kind)) {
+			const reason = this.upgradeCore(player, map, data.kind);
+			if (reason !== undefined) refuse(reason);
+			return;
 		}
 
 		// A belt line keeps the routers and such it runs through (see `replaces`); anything else, or one belt, swaps them out.
@@ -735,13 +756,61 @@ export class BaseService implements OnStart {
 		return undefined;
 	}
 
+	/**
+	 * Builds a higher tier of Core over the one standing, Mindustry style, paid from the pool. Its
+	 * bigger footprint may cover belt pieces, refunded, but nothing else. Returns why not, if it can't.
+	 */
+	private upgradeCore(player: Player, map: PlanetMap, kind: CoreKind): string | undefined {
+		const core = this.core;
+		if (!core) return "There's no Core to build over.";
+		if (!replaces(kind, core.kind)) return `You already have a ${BUILDINGS[core.kind].name}.`;
+		const def = BUILDINGS[kind];
+		const cell = this.coreCell(map, kind);
+		if (!this.inReach(player, cellCenter(cell, def.size))) return "That's too far away to build.";
+		for (const covered of footprint(cell, def.size)) {
+			const there = this.cells.get(covered);
+			if (there && !replaces(kind, there.kind)) return "Clear the space round the Core first.";
+		}
+		const short = this.shortOf(def.cost);
+		if (short !== undefined) return short;
+
+		this.pay(def.cost, -1);
+		this.placeCore(map, kind);
+		this.logger.Info("{Player} built a {Kind}", player.Name, kind);
+		for (const other of Players.GetPlayers()) this.notify(other, `${player.Name} built a ${def.name}!`);
+		return undefined;
+	}
+
+	/** Puts up a `kind` Core round the landing, in place of whatever is there: the old Core, and the rest refunded like a removal. */
+	private placeCore(map: PlanetMap, kind: CoreKind) {
+		const cell = this.coreCell(map, kind);
+		for (const covered of footprint(cell, BUILDINGS[kind].size)) {
+			const there = this.cells.get(covered);
+			if (!there) continue;
+			this.demolish(there);
+			if (!isCore(there.kind)) this.pay(BUILDINGS[there.kind].cost, REFUND);
+		}
+		const core = this.build(map, kind, cell, 0, 0);
+		this.core = core;
+		this.coreAtom(kind);
+		this.coreHealthAtom(core.health);
+		this.coreMaxHealthAtom(core.maxHealth);
+	}
+
+	/** The -X/-Z corner cell of a `kind` Core: round the landing, a cell corner the Shard's 2×2 cells meet on (see `coreCorner`). */
+	private coreCell(map: PlanetMap, kind: CoreKind): number {
+		const [x, z] = cellCoords(cellAt(map.landing.X - CELL_STUDS / 2, map.landing.Z - CELL_STUDS / 2)!);
+		const [cx, cz] = coreCorner(x, z, BUILDINGS.core.size, BUILDINGS[kind].size);
+		return cellIndex(cx, cz);
+	}
+
 	/** Turns a building a quarter turn, free. A belt then carries the new way. */
 	private rotate(player: Player, data: unknown) {
 		if (!isCellData(data)) return;
 		const map = this.map;
 		if (!map || this.phase() !== "active") return this.notify(player, "You can't turn anything right now.");
 		const building = this.buildingOn(data.x, data.z);
-		if (!building || building.kind === "core") return;
+		if (!building || isCore(building.kind)) return;
 		if (!this.inReach(player, building.position)) return this.notify(player, "That's too far away to turn.");
 
 		building.rotation = (building.rotation + 1) % 4;
@@ -855,7 +924,7 @@ export class BaseService implements OnStart {
 			}
 			return;
 		}
-		if (building.kind === "core") return refuse("The Core can't be removed.");
+		if (isCore(building.kind)) return refuse("The Core can't be removed.");
 		if (!this.inReach(player, building.position)) return refuse("That's too far away to remove.");
 
 		this.demolish(building);
@@ -865,8 +934,7 @@ export class BaseService implements OnStart {
 	/** Builds without any checks; `place` does those. */
 	private build(map: PlanetMap, kind: BuildingKind, cell: number, rotation: number, owner: number): Building {
 		const def = BUILDINGS[kind];
-		const maxHealth =
-			kind === "core" ? teamStat("coreHealth") : math.round(def.health * statOf(owner, "buildingHealth"));
+		const maxHealth = isCore(kind) ? def.health : math.round(def.health * statOf(owner, "buildingHealth"));
 		const model = new Instance("Model");
 		model.SetAttribute("Kind", kind);
 		model.SetAttribute("Cell", cell);
@@ -1168,21 +1236,24 @@ export class BaseService implements OnStart {
 		return cleared;
 	}
 
-	/** Mines one ore from the deposit on a cell, for a held click: in reach, not built over, and no faster than `MINE_SECONDS`. */
+	/** Mines one ore from the deposit on a cell, for a held click: in reach, not built over, an ore the Core's tier can mine, and no faster than it allows. */
 	private mine(player: Player, data: unknown) {
 		if (!isCellData(data) || this.phase() !== "active") return;
 		if (data.x < 0 || data.z < 0 || data.x >= GRID_SIZE || data.z >= GRID_SIZE) return;
 		const cell = cellIndex(data.x, data.z);
 		const ore = this.ores.get(cell);
 		if (!ore || this.cells.has(cell) || !this.inReach(player, cellCenter(cell), TRANSFER_RANGE)) return;
+		// The client explains a refused ore, so a held click doesn't flood toasts.
+		const { mines, mineSeconds } = this.stats();
+		if (!mines.includes(ore.resource)) return;
 		const now = os.clock();
-		if (now - (this.lastMined.get(player) ?? -math.huge) < MINE_SECONDS - MINE_SLACK) return;
+		if (now - (this.lastMined.get(player) ?? -math.huge) < mineSeconds - MINE_SLACK) return;
 		this.lastMined.set(player, now);
 		if (this.give(player, ore.resource, 1) === 0) this.notify(player, FULL);
 	}
 
 	/** The building covering a cell a player wants to move items in or out of, if they're close enough to. */
-	private reachable(player: Player, data: unknown): Building | undefined {
+	reachable(player: Player, data: unknown): Building | undefined {
 		if (!isCellData(data) || this.phase() !== "active") return undefined;
 		const building = this.buildingOn(data.x, data.z);
 		if (building && !this.inReach(player, building.position, TRANSFER_RANGE)) {
@@ -1295,7 +1366,7 @@ export class BaseService implements OnStart {
 	private deposit(player: Player) {
 		const items = this.inventories.get(player) ?? {};
 		const pool = this.poolAtom();
-		const capacity = teamStat("coreCapacity");
+		const capacity = this.stats().capacity;
 		const stacks = new Array<ResourceStack>();
 		const left: Stock = {};
 		let carried = 0;
@@ -1310,7 +1381,7 @@ export class BaseService implements OnStart {
 		if (carried === 0) return this.notify(player, "You have nothing to deposit.");
 		this.pay(stacks, 1);
 		this.setInventory(player, left);
-		if (kept > 0) this.notify(player, "The Core is full. Research Core Silos for more room.");
+		if (kept > 0) this.notify(player, "The Core is full. Upgrade it for more room.");
 	}
 
 	/**

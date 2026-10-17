@@ -9,7 +9,6 @@ import { RESOURCE_ORDER } from "game/Base/shared/resources";
 import { PlanetsService } from "game/Planets/server/PlanetsService";
 import { discoveredAtom, levelsOf, personal, teamAtom } from "game/Research/server/research-store";
 import {
-	isTeamNode,
 	levelCost,
 	type Levels,
 	lockReason,
@@ -24,10 +23,8 @@ const isResearchData = t.interface({ id: t.string });
 
 /**
  * Research: each player levels up their own tree, paying from the team's Core
- * pool, and nodes on team stats (the Core's) level up for everyone. Also
- * notes which resources the Core has held, which some nodes wait on. The stats
- * themselves are read through `research-store` where they apply, except walk
- * speed, which the client applies (see `SprintController`).
+ * pool. Also notes which resources the Core has held, which some nodes wait on.
+ * The stats themselves are read through `research-store` where they apply.
  */
 @Service()
 export class ResearchService implements OnStart {
@@ -57,11 +54,7 @@ export class ResearchService implements OnStart {
 		for (const id of RESEARCH_ORDER) levels[id] = maxLevel(id);
 		// The team's levels override each player's (see `levelsOf`), so this reaches everyone.
 		teamAtom(levels);
-		this.baseService.refreshCore();
-		for (const player of Players.GetPlayers()) {
-			this.send(player);
-			this.baseService.sendInventory(player);
-		}
+		for (const player of Players.GetPlayers()) this.send(player);
 		this.logger.Info("Researched everything");
 	}
 
@@ -83,17 +76,8 @@ export class ResearchService implements OnStart {
 
 		this.baseService.spend(cost);
 		this.logger.Info("{Player} researched {Node} to level {Level}", player.Name, id, level + 1);
-		if (isTeamNode(id)) {
-			teamAtom((team) => ({ ...team, [id]: level + 1 }));
-			this.baseService.refreshCore();
-			Players.GetPlayers().forEach((other) => this.send(other));
-			return;
-		}
-
 		personal.set(player.UserId, { ...personal.get(player.UserId), [id]: level + 1 });
 		this.send(player);
-		const stat = RESEARCH[id].effect?.stat;
-		if (stat === "carryCapacity") this.baseService.sendInventory(player);
 	}
 
 	private send(player: Player) {

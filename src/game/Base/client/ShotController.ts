@@ -2,6 +2,7 @@ import { Controller, OnStart } from "@flamework/core";
 import { Debris, RunService, TweenService, Workspace } from "@rbxts/services";
 
 import { bezier, type Shot, ShotMessage, shotMessaging } from "game/Base/shared/base-network";
+import { BLASTERS } from "game/Base/shared/blasters";
 import { BUILDINGS, type BuildingKind } from "game/Base/shared/buildings";
 
 /** Roblox's own particle textures, so nothing has to be uploaded. */
@@ -21,7 +22,6 @@ const DIRT = Color3.fromRGB(96, 80, 62);
 const ROCKET = Color3.fromRGB(255, 150, 60);
 const SHELL = Color3.fromRGB(255, 220, 120);
 const TRACER = Color3.fromRGB(255, 200, 90);
-const BLASTER = Color3.fromRGB(255, 211, 127);
 const ENEMY_TRACER = Color3.fromRGB(255, 70, 60);
 const LASER = Color3.fromRGB(255, 90, 70);
 const LIGHTNING = Color3.fromRGB(150, 205, 255);
@@ -302,12 +302,13 @@ export class ShotController implements OnStart {
 	/** A bullet: a glowing tracer as heavy as its turret, with a short streak behind it, and a flash (and smoke, from a big gun) out of the barrel. */
 	private launchBullet(shot: Shot) {
 		const size = shot.size ?? 1;
-		const part = this.spark(new Vector3(0.2, 0.2, 1.2).mul(size), shot.blaster ? BLASTER : TRACER, shot.from);
+		const color = shot.blaster ? BLASTERS[shot.blaster].color : TRACER;
+		const part = this.spark(new Vector3(0.2, 0.2, 1.2).mul(size), color, shot.from);
 		const width = 0.1 * size;
 		const trail = new Instance("Trail");
 		trail.Attachment0 = attachment(part, new Vector3(0, width, 0));
 		trail.Attachment1 = attachment(part, new Vector3(0, -width, 0));
-		trail.Color = new ColorSequence(HOT, shot.blaster ? BLASTER : TRACER);
+		trail.Color = new ColorSequence(HOT, color);
 		trail.Transparency = curve([0, 0.2], [1, 1]);
 		trail.Lifetime = shot.blaster ? 0.1 : 0.06;
 		trail.LightEmission = 1;

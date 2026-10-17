@@ -1,5 +1,6 @@
 import { RunService, Workspace } from "@rbxts/services";
 
+import { isCore } from "game/Base/shared/buildings";
 import { CAMERA_STEP, followCharacter } from "game/Planets/client/galaxy-camera";
 import { LAND_SECONDS, LAUNCH_SECONDS, type Travel } from "game/Planets/shared/planets-network";
 
@@ -18,7 +19,7 @@ const random = new Random();
 
 function findCore(): Model | undefined {
 	const buildings = Workspace.FindFirstChild("Base")?.FindFirstChild("Buildings");
-	return buildings?.GetChildren().find((child) => child.GetAttribute("Kind") === "core") as Model | undefined;
+	return buildings?.GetChildren().find((child) => isCore(child.GetAttribute("Kind"))) as Model | undefined;
 }
 
 /**

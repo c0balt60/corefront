@@ -8,6 +8,7 @@ import { hudVisibleAtom } from "core/Interface/client/ui-state";
 import { generateStarSystem } from "core/Worlds/shared/star-system";
 import {
 	baseStateAtom,
+	blasterNow,
 	buildModeAtom,
 	coreAttackedAtom,
 	equippedAtom,
@@ -44,6 +45,7 @@ import {
 	SandboxMessage,
 	sandboxMessaging,
 } from "game/Base/shared/base-network";
+import { blastersOf } from "game/Base/shared/blasters";
 import { BUILD_TOOL, type BuildableKind, BUILDABLE } from "game/Base/shared/buildings";
 import { LoadoutPanel, PlanPanel, TravelOverlay } from "game/Planets/client/components/launch-panel";
 import { PlanetPanel } from "game/Planets/client/components/planet-panel";
@@ -94,6 +96,7 @@ export function GameApp() {
 	const buildMode = useAtom(buildModeAtom);
 	const clicked = useAtom(selectedAtom);
 	const nearClicked = useAtom(nearSelectedAtom);
+	const blaster = useAtom(blasterNow);
 	const clickedOre = useAtom(selectedOreAtom);
 	const tools = useAtom(toolsAtom);
 	const equipped = useAtom(equippedAtom);
@@ -331,6 +334,7 @@ export function GameApp() {
 				{/* Mounted once and hidden while closed: it's thousands of instances, too many to make on every open. */}
 				<ResearchTree
 					levels={levels}
+					core={() => base()?.core ?? "core"}
 					gates={() => ({ conquered: world()?.conquered.size() ?? 0, discovered: discovered() })}
 					pool={() => base()?.pool ?? []}
 					onResearch={(id) => researchMessaging.server.emit(ResearchMessage.Research, { id })}
@@ -458,6 +462,11 @@ export function GameApp() {
 							baseMessaging.server.emit(BaseMessage.Collect, { ...cellOf(building), resource })
 						}
 						onInfo={() => infoAtom(building.GetAttribute("Kind") as BuildableKind)}
+						blasters={() => blastersOf(base()?.core ?? "core")}
+						blaster={blaster}
+						onBlaster={(kind) =>
+							baseMessaging.server.emit(BaseMessage.PickBlaster, { ...cellOf(building), kind })
+						}
 					/>
 				)}
 			</For>

@@ -18,6 +18,7 @@ export = CreateVideStory({ controls, vide: Vide }, (props: InferVideProps<typeof
 	return (
 		<ResearchTree
 			levels={levels}
+			core={() => "core"}
 			gates={() => ({
 				conquered: props.controls.conquered(),
 				discovered: props.controls.titanium() ? ["copper", "lead", "titanium"] : ["copper", "lead"],

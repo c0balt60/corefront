@@ -2,9 +2,9 @@ import { atom } from "@rbxts/charm";
 import { Players } from "@rbxts/services";
 
 import type { BaseState } from "game/Base/shared/base-network";
-import type { BuildableKind } from "game/Base/shared/buildings";
+import { blasterOf, type BlasterKind } from "game/Base/shared/blasters";
+import { type BuildableKind, coreStats, type CoreDef } from "game/Base/shared/buildings";
 import type { ResourceId, ResourceStack } from "game/Base/shared/resources";
-import { STATS } from "game/Research/shared/research";
 
 export interface Inventory {
 	readonly items: ReadonlyArray<ResourceStack>;
@@ -35,7 +35,20 @@ export const waveBannerAtom = atom<number>();
 export const coreAttackedAtom = atom(false);
 
 /** What the local player carries. */
-export const inventoryAtom = atom<Inventory>({ items: [], capacity: STATS.carryCapacity.base });
+export const inventoryAtom = atom<Inventory>({ items: [], capacity: coreStats("core").carry });
+
+/** What the Core's tier gives the local character (see `CoreDef`): a Shard's until the server says. */
+export function coreNow(): CoreDef {
+	return coreStats(baseStateAtom()?.core ?? "core");
+}
+
+/** The local player's `Blaster` attribute, as `BlasterController` last saw it: the Blaster they picked at the Core. */
+export const pickedBlasterAtom = atom<unknown>();
+
+/** The Blaster the local character fires (see `blasterOf`). */
+export function blasterNow(): BlasterKind {
+	return blasterOf(pickedBlasterAtom(), baseStateAtom()?.core ?? "core");
+}
 
 /** Seconds a toast stays up. It fades out over the last `EXIT_TIME` of them. */
 export const NOTICE_SECONDS = 4;

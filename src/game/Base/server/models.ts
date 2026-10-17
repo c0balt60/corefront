@@ -11,7 +11,7 @@ import {
 	isCorner,
 	pointOn,
 } from "game/Base/shared/belts";
-import { BUILDINGS, type BuildingKind } from "game/Base/shared/buildings";
+import { BUILDINGS, type BuildingKind, isCore } from "game/Base/shared/buildings";
 import { type ResourceId, RESOURCES } from "game/Base/shared/resources";
 import { CELL_STUDS } from "game/Terrain/shared/map";
 
@@ -753,10 +753,12 @@ export function buildingModel(
 	let body: Part;
 	let head: Part | undefined;
 	const muzzles = new Array<CFrame>();
-	if (kind === "core") {
-		body = block(model, new Vector3(12, 8, 12), at(4), METAL, Enum.Material.DiamondPlate);
-		block(model, new Vector3(13, 1, 13), at(1), GLOW, Enum.Material.Neon);
-		block(model, new Vector3(4, 3, 4), at(9.5), GLOW, Enum.Material.Neon);
+	if (isCore(kind)) {
+		// The Shard's look, grown with each tier's footprint.
+		const scale = def.size / 2;
+		body = block(model, new Vector3(12, 8, 12).mul(scale), at(4 * scale), METAL, Enum.Material.DiamondPlate);
+		block(model, new Vector3(13 * scale, 1, 13 * scale), at(1), GLOW, Enum.Material.Neon);
+		block(model, new Vector3(4, 3, 4).mul(scale), at(9.5 * scale), GLOW, Enum.Material.Neon);
 	} else if (kind === "drill" || kind === "advancedDrill") {
 		body = block(model, new Vector3(6, 3, 6), at(1.5), METAL, Enum.Material.DiamondPlate);
 		block(model, new Vector3(2, 3, 2), at(4.5), oreColor ?? GLOW, Enum.Material.Neon);

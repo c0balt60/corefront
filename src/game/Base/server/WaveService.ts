@@ -25,6 +25,7 @@ import {
 	BEAM_TURN,
 	DROP_ZONE_RADIUS,
 	type EnergyDef,
+	isCore,
 	shotSpeed,
 	turnHead,
 	turretAim,
@@ -33,7 +34,7 @@ import {
 import { RESOURCE_ORDER } from "game/Base/shared/resources";
 import { PlanetsService } from "game/Planets/server/PlanetsService";
 import { TravelService } from "game/Planets/server/TravelService";
-import { statOf, teamStat } from "game/Research/server/research-store";
+import { statOf } from "game/Research/server/research-store";
 import type { PlanetMap } from "game/Terrain/server/planet-map";
 import { TerrainService } from "game/Terrain/server/TerrainService";
 import { CELL_STUDS, cellAt, cellCenter, GRID_SIZE } from "game/Terrain/shared/map";
@@ -705,7 +706,8 @@ export class WaveService implements OnStart {
 			aliens: this.alienCount(),
 			coreHealth: this.baseService.coreHealthAtom(),
 			coreMaxHealth: this.baseService.coreMaxHealthAtom(),
-			capacity: teamStat("coreCapacity"),
+			core: this.baseService.coreAtom(),
+			capacity: this.baseService.stats().capacity,
 			pool: RESOURCE_ORDER.filter((resource) => pool[resource] !== undefined).map((resource) => ({
 				resource,
 				amount: pool[resource]!,
@@ -1071,7 +1073,7 @@ export class WaveService implements OnStart {
 		// What blocks the way: everything but belts, which aliens walk over.
 		const solid = new Map<number, Building>();
 		for (const [cell, building] of this.baseService.cells) {
-			if (building.kind === "core") targets.push(cell);
+			if (isCore(building.kind)) targets.push(cell);
 			if (!BUILDINGS[building.kind].walkable) solid.set(cell, building);
 		}
 		this.fieldBuilding = true;
@@ -1712,13 +1714,7 @@ export class WaveService implements OnStart {
 	 * `from` first: those it can hit whose body reaches its line, up to one more than it pierces.
 	 * They're where they are as it lands.
 	 */
-	private pierceAliens(
-		from: Vector3,
-		to: Vector3,
-		damage: number,
-		targets: "air" | "ground" | undefined,
-		pierce: number,
-	) {
+	pierceAliens(from: Vector3, to: Vector3, damage: number, targets: "air" | "ground" | undefined, pierce: number) {
 		const line = to.sub(from);
 		const length = line.Magnitude;
 		if (length < 1e-3) return;
@@ -1771,11 +1767,25 @@ export class WaveService implements OnStart {
 		shotMessaging.client.emitAll(ShotMessage.Arc, { points });
 	}
 
+	/** A Blaster's lightning: strikes the alien nearest `at` within `ARC_JUMP`, then leaps on as `zap` does. False if none is there. */
+	zapNear(from: Vector3, at: Vector3, damage: number, chain: number): boolean {
+		let best = ARC_JUMP;
+		let target: Alien | undefined;
+		for (const [, alien] of this.aliens) {
+			const distance = alien.root.Position.sub(at).Magnitude;
+			if (distance >= best) continue;
+			best = distance;
+			target = alien;
+		}
+		if (target) this.zap(from, target, damage, chain, undefined);
+		return target !== undefined;
+	}
+
 	/**
 	 * Hurts every alien within `splash` studs of `at` that a turret shooting `targets` can hit. In the
 	 * air, not across the ground: a blast in the sky misses what's under it, and one on the ground what's over it.
 	 */
-	private blastAliens(at: Vector3, splash: number, damage: number, targets: "air" | "ground" | undefined) {
+	blastAliens(at: Vector3, splash: number, damage: number, targets: "air" | "ground" | undefined) {
 		for (const [model, alien] of this.aliens) {
 			if (canHit(targets, alien) && alien.root.Position.sub(at).Magnitude <= splash)
 				this.damageAlien(model, damage);

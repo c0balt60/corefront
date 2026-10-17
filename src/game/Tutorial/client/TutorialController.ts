@@ -7,7 +7,13 @@ import { COLORS } from "core/Interface/client/theme";
 import { generateStarSystem, type Planet } from "core/Worlds/shared/star-system";
 import { amountOf, baseStateAtom, buildModeAtom, equippedAtom, notify, toolsAtom } from "game/Base/client/base-state";
 import { ghostPart } from "game/Base/client/BuildController";
-import { BUILD_CATEGORIES, BUILD_TOOL, type BuildableKind, type BuildingKind } from "game/Base/shared/buildings";
+import {
+	BUILD_CATEGORIES,
+	BUILD_TOOL,
+	type BuildableKind,
+	type BuildingKind,
+	isCore,
+} from "game/Base/shared/buildings";
 import { RESOURCES } from "game/Base/shared/resources";
 import {
 	deployedAtom,
@@ -254,7 +260,7 @@ export class TutorialController implements OnStart {
 			case "drill":
 				return this.based && buildingsOf("drill").size() > this.drills;
 			case "conveyor": {
-				const core = buildingsOf("core")[0];
+				const core = modelsIn("Buildings").find((building) => isCore(building.GetAttribute("Kind")));
 				return core !== undefined && buildingsOf("drill").some((drill) => beltReaches(drill, core));
 			}
 			case "research": {
@@ -296,7 +302,7 @@ export class TutorialController implements OnStart {
 				};
 			case "drill": {
 				// Nearest the Core, not the player, so a belt to it fits in one drag.
-				const core = buildingsOf("core")[0];
+				const core = modelsIn("Buildings").find((building) => isCore(building.GetAttribute("Kind")));
 				return {
 					title: "BUILD A DRILL",
 					...(pick("drill", "Drill") ?? {
@@ -306,7 +312,7 @@ export class TutorialController implements OnStart {
 				};
 			}
 			case "conveyor": {
-				const core = buildingsOf("core")[0];
+				const core = modelsIn("Buildings").find((building) => isCore(building.GetAttribute("Kind")));
 				return {
 					title: "CONNECT THE CORE",
 					progress: `Core copper ${amountOf(pool, "copper")}`,
@@ -354,7 +360,7 @@ export class TutorialController implements OnStart {
 				};
 			}
 			case "turret": {
-				const core = buildingsOf("core")[0];
+				const core = modelsIn("Buildings").find((building) => isCore(building.GetAttribute("Kind")));
 				return {
 					title: "BUILD A TURRET",
 					...(pick("turret", "Turret") ?? {
@@ -364,7 +370,7 @@ export class TutorialController implements OnStart {
 				};
 			}
 			case "ammo": {
-				const core = buildingsOf("core")[0];
+				const core = modelsIn("Buildings").find((building) => isCore(building.GetAttribute("Kind")));
 				const turret = nearest(buildingsOf("turret"));
 				const at = turret?.GetPivot().Position;
 				// The drill for it is one the Core isn't already fed by.

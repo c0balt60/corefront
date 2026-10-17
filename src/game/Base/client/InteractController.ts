@@ -7,9 +7,11 @@ import { COLORS } from "core/Interface/client/theme";
 import {
 	baseStateAtom,
 	buildModeAtom,
+	coreNow,
 	equippedAtom,
 	inventoryAtom,
 	nearSelectedAtom,
+	notify,
 	selectedAtom,
 } from "game/Base/client/base-state";
 import { groundRing, pointedAt } from "game/Base/client/BuildController";
@@ -19,9 +21,11 @@ import {
 	BUILD_TOOL,
 	BUILDINGS,
 	type BuildingKind,
+	CORES,
+	coreStats,
+	isCore,
 	isPowered,
 	linkReach,
-	MINE_SECONDS,
 	TRANSFER_RANGE,
 } from "game/Base/shared/buildings";
 import { type ResourceId, RESOURCES } from "game/Base/shared/resources";
@@ -150,8 +154,14 @@ export class InteractController implements OnStart {
 		};
 	}
 
-	/** Mines `ore` while `held()`: one every `MINE_SECONDS`, until the pack fills or the character leaves its reach. */
+	/** Mines `ore` while `held()`: as often as the Core allows, until the pack fills or the character leaves its reach. */
 	private mine(ore: Model, held: () => boolean) {
+		const resource = ore.GetAttribute("Resource") as ResourceId;
+		if (!coreNow().mines.includes(resource)) {
+			const tier = CORES.find((kind) => coreStats(kind).mines.includes(resource));
+			const how = tier ? `, or build a ${BUILDINGS[tier].name}` : "";
+			return notify(`${RESOURCES[resource].name} is too hard to mine by hand. Drill it${how}.`);
+		}
 		const cell = ore.GetAttribute("Cell") as number;
 		const [x, z] = cellCoords(cell);
 		const stopBeam = this.beam(ore);
@@ -161,7 +171,7 @@ export class InteractController implements OnStart {
 			// Full, it still asks once, so the server says why it stops.
 			baseMessaging.server.emit(BaseMessage.Mine, { x, z });
 			if (full) break;
-			task.wait(MINE_SECONDS);
+			task.wait(coreNow().mineSeconds);
 		}
 		stopBeam();
 	}
@@ -196,7 +206,7 @@ export class InteractController implements OnStart {
 		const def = BUILDINGS[kind];
 		const at = cellOf(building);
 		const loads = (def.turret && !def.turret.energy) || def.craft || def.store !== undefined || def.generator?.fuel;
-		if (kind === "core" || loads) baseMessaging.server.emit(BaseMessage.Load, at);
+		if (isCore(kind) || loads) baseMessaging.server.emit(BaseMessage.Load, at);
 		if (def.drill || def.craft || def.belt !== undefined) baseMessaging.server.emit(BaseMessage.Collect, at);
 	}
 

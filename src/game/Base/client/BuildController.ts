@@ -35,8 +35,10 @@ import {
 	BUILDABLE,
 	BUILDINGS,
 	type BuildingKind,
+	coreCorner,
 	inDropZone,
 	isBelt,
+	isCore,
 	MAX_LINE,
 	replaces,
 } from "game/Base/shared/buildings";
@@ -505,7 +507,7 @@ export class BuildController implements OnStart {
 				const { building: model, prop, cell } = pointedAt(taken);
 				const corner = model?.GetAttribute("Cell");
 				if (model) {
-					if (typeIs(corner, "number") && model.GetAttribute("Kind") !== "core") {
+					if (typeIs(corner, "number") && !isCore(model.GetAttribute("Kind"))) {
 						highlight.Adornee = model;
 						target = cellCoords(corner);
 					}
@@ -523,6 +525,15 @@ export class BuildController implements OnStart {
 			const half = ((size - 1) * CELL_STUDS) / 2;
 			const corner = hit ? cellAt(hit.Position.X - half, hit.Position.Z - half) : undefined;
 			hover = corner !== undefined ? cellCoords(corner) : undefined;
+			// A Core goes over the one standing, wherever it's aimed, as the server builds it.
+			const standing = isCore(kind)
+				? [...taken].find(([, model]) => isCore(model.GetAttribute("Kind")))?.[1]
+				: undefined;
+			const standingCell = standing?.GetAttribute("Cell");
+			if (hover && standing && typeIs(standingCell, "number")) {
+				const [x, z] = cellCoords(standingCell);
+				hover = coreCorner(x, z, BUILDINGS[standing.GetAttribute("Kind") as BuildingKind].size, size);
+			}
 			if (!hover) line = [];
 			else if (anchor && size === 1) line = lineBetween(anchor, hover, this.rotation, belt);
 			else line = [{ x: hover[0], z: hover[1], rotation: this.rotation }];
@@ -554,7 +565,9 @@ export class BuildController implements OnStart {
 				let onOre = false;
 				for (let dz = 0; dz < size; dz++) {
 					for (let dx = 0; dx < size; dx++) {
-						free &&= swapping || modelOn(taken, x + dx, z + dz) === undefined;
+						// A Core checks every cell it covers; the rest swap only what's on their own (see `replaces`).
+						const other = modelOn(taken, x + dx, z + dz)?.GetAttribute("Kind") as BuildingKind | undefined;
+						free &&= other === undefined || (isCore(kind) ? replaces(kind, other) : swapping);
 						onOre ||= ores.has(cellIndex(x + dx, z + dz));
 					}
 				}

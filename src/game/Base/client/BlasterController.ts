@@ -1,9 +1,9 @@
 import { Controller, OnStart } from "@flamework/core";
 import { Players, TweenService, UserInputService, Workspace } from "@rbxts/services";
 
+import { blasterNow, pickedBlasterAtom } from "game/Base/client/base-state";
 import { BaseMessage, baseMessaging } from "game/Base/shared/base-network";
-import { levelsAtom } from "game/Research/client/research-state";
-import { statValue } from "game/Research/shared/research";
+import { BLASTERS } from "game/Base/shared/blasters";
 
 /** Added to the server's cooldown between shots, so ordinary jitter doesn't drop shots. */
 const FIRE_SLACK = 0.02;
@@ -32,8 +32,9 @@ function aim(character: Model) {
 
 /**
  * Fires the server's Blaster: while the character has it out and the button is
- * held, tells the server where the mouse points once per researched cooldown. The
- * server raycasts from the Blaster itself and decides what it hits.
+ * held, tells the server where the mouse points once per cooldown of the Blaster
+ * they picked, which it keeps `pickedBlasterAtom` up to date with. The server
+ * raycasts from the Blaster itself and decides what it hits.
  */
 @Controller()
 export class BlasterController implements OnStart {
@@ -41,6 +42,8 @@ export class BlasterController implements OnStart {
 
 	onStart() {
 		const player = Players.LocalPlayer;
+		pickedBlasterAtom(player.GetAttribute("Blaster"));
+		player.GetAttributeChangedSignal("Blaster").Connect(() => pickedBlasterAtom(player.GetAttribute("Blaster")));
 		// A tool is parented to the character while it's out, so this sees the Blaster every time it's drawn.
 		const watch = (character: Model) => {
 			const check = (child: Instance) => {
@@ -90,7 +93,7 @@ export class BlasterController implements OnStart {
 			task.spawn(() => {
 				while (held && tool.Parent === character) {
 					const target = aim(character);
-					const cooldown = statValue(levelsAtom(), "blasterCooldown");
+					const cooldown = BLASTERS[blasterNow()].seconds;
 					if (target) {
 						baseMessaging.server.emit(BaseMessage.Fire, { target });
 						kick(cooldown * 0.8);

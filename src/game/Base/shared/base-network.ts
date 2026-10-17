@@ -1,7 +1,8 @@
 import type { f64 } from "@rbxts/serio";
 import { MessageEmitter } from "@rbxts/tether";
 
-import type { BuildableKind } from "game/Base/shared/buildings";
+import type { BlasterKind } from "game/Base/shared/blasters";
+import type { BuildableKind, CoreKind } from "game/Base/shared/buildings";
 import type { ResourceId, ResourceStack } from "game/Base/shared/resources";
 
 /** The defend mission on the active planet. Ids start at 110, clear of core's and Planets' (100+). */
@@ -24,6 +25,7 @@ export const enum BaseMessage {
 	Ping,
 	Pinged,
 	Link,
+	PickBlaster,
 }
 
 /**
@@ -51,6 +53,8 @@ export interface BaseState {
 	readonly aliens: number;
 	readonly coreHealth: number;
 	readonly coreMaxHealth: number;
+	/** The Core's tier, which sets every character's stats (see `CoreDef`). */
+	readonly core: CoreKind;
 	/** The Core's storage: every resource this planet has, in `RESOURCE_ORDER`, zeros included. */
 	readonly pool: ReadonlyArray<ResourceStack>;
 	/** The most of each resource deposits can fill the pool to. */
@@ -80,7 +84,7 @@ export interface BaseMessageData {
 	[BaseMessage.Fire]: { readonly target: Vector3 };
 	/** Client -> server: turn whichever building covers cell (x, z) a quarter turn. */
 	[BaseMessage.Rotate]: { readonly x: number; readonly z: number };
-	/** Client -> server, every `MINE_SECONDS` while a click is held on it: mine one ore from the deposit on cell (x, z). */
+	/** Client -> server, every `CoreDef.mineSeconds` while a click is held on it: mine one ore from the deposit on cell (x, z). */
 	[BaseMessage.Mine]: { readonly x: number; readonly z: number };
 	/** Client -> server: take what the drill or crafter covering cell (x, z) has made, or the ore on the belt there: just `resource`, if given. */
 	[BaseMessage.Collect]: { readonly x: number; readonly z: number; readonly resource?: ResourceId };
@@ -94,6 +98,8 @@ export interface BaseMessageData {
 	[BaseMessage.Pinged]: undefined;
 	/** Client -> server: link the power node covering cell (x, z) to the building covering (toX, toZ), or unlink them if they are. */
 	[BaseMessage.Link]: { readonly x: number; readonly z: number; readonly toX: number; readonly toZ: number };
+	/** Client -> server: carry the Blaster `kind` from now on. (x, z) is a cell of the Core, which must be in reach. */
+	[BaseMessage.PickBlaster]: { readonly x: number; readonly z: number; readonly kind: BlasterKind };
 }
 
 /** One building to place: its -X/-Z corner on cell (x, z), turned `rotation` quarter turns (0-3, see `DIRECTIONS`). */
@@ -207,8 +213,8 @@ export interface Shot {
 	/** A turret's: the turret, and which of its barrels fired it, to kick back (see `TurretController`). */
 	readonly turret?: Model;
 	readonly barrel?: number;
-	/** A player's Blaster bullet: drawn small and yellow, with no turret behind it. */
-	readonly blaster?: true;
+	/** A player's Blaster shot: drawn in that Blaster's colour (see `BlasterDef`), with no turret behind it. */
+	readonly blaster?: BlasterKind;
 }
 
 export interface ShotMessageData {

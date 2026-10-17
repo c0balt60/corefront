@@ -11,7 +11,8 @@ import { useAppear, useScramble, useSpin } from "core/Interface/client/motion";
 import { COLORS, FONT, FONT_DISPLAY, FONT_LABEL, hasEffect, SPRINGS } from "core/Interface/client/theme";
 import { amountOf, canAfford } from "game/Base/client/base-state";
 import { HudBox, Label, Swatch } from "game/Base/client/components/base-hud";
-import { BUILDINGS } from "game/Base/shared/buildings";
+import { blastersOf } from "game/Base/shared/blasters";
+import { BUILDINGS, type CoreKind, coreStats } from "game/Base/shared/buildings";
 import { RESOURCES, type ResourceStack } from "game/Base/shared/resources";
 import {
 	type ChipPalette,
@@ -25,7 +26,6 @@ import {
 import { Glyph } from "game/Research/client/components/glyphs";
 import {
 	formatStat,
-	isTeamNode,
 	type Levels,
 	levelCost,
 	lockReason,
@@ -192,9 +192,6 @@ const LINE_WIDTHS: Record<NodeState, number> = { done: 4, open: 3, locked: 2 };
 const STATE_NAMES: Record<NodeState, string> = { done: "RESEARCHED", open: "AVAILABLE", locked: "LOCKED" };
 /** Brighter lines draw over dimmer ones where branches share a bar. */
 const LINE_ORDER: Record<NodeState, number> = { locked: 1, open: 2, done: 3 };
-
-/** The research the Core's own stats come from. */
-const TEAM_NODES = RESEARCH_ORDER.filter(isTeamNode);
 
 /** Brackets round a tile, pushed out past its `STROKE`-wide outline so they frame it instead of drawing over it. */
 function OutlineBrackets(props: {
@@ -747,6 +744,8 @@ function Description({ text, fade }: { readonly text: string | (() => string); r
 interface ResearchPanelProps {
 	readonly picked: () => ResearchId | "core";
 	readonly levels: () => Levels;
+	/** The Core's tier, whose stats it shows. */
+	readonly core: () => CoreKind;
 	readonly stateOf: (id: ResearchId) => NodeState;
 	readonly reasonOf: (id: ResearchId) => string | undefined;
 	readonly pool: () => ReadonlyArray<ResourceStack>;
@@ -760,9 +759,9 @@ interface ResearchPanelProps {
  * left of the star map: it slides in, and every pick and every research scans
  * it again and replays its details. A node's status chip, level, effect and
  * cost, with Research at the bottom; a locked node's under hazard stripes, and
- * a refused Research shakes. The Core's health, storage and team upgrades.
+ * a refused Research shakes. The Core's tier: its health and storage, and what it gives every character.
  */
-function ResearchPanel({ picked, levels, stateOf, reasonOf, pool, onResearch, show }: ResearchPanelProps) {
+function ResearchPanel({ picked, levels, core, stateOf, reasonOf, pool, onResearch, show }: ResearchPanelProps) {
 	const slide = useAppear(show);
 	const hovered = source(false);
 	const [lift, liftSpring] = useSpring(0, SPRINGS.responsive);
@@ -812,7 +811,8 @@ function ResearchPanel({ picked, levels, stateOf, reasonOf, pool, onResearch, sh
 	};
 
 	const name = useScramble("text", () => RESEARCH[id()].name.upper(), 0.1, 0.5);
-	const coreName = useScramble("text", () => BUILDINGS.core.name.upper(), 0.1, 0.5);
+	const coreName = useScramble("text", () => BUILDINGS[core()].name.upper(), 0.1, 0.5);
+	const stats = () => coreStats(core());
 	const heading = () => {
 		const upgrade = RESEARCH[id()].effect;
 		return upgrade ? STATS[upgrade.stat].name.upper() : "NEW BUILDING";
@@ -902,14 +902,6 @@ function ResearchPanel({ picked, levels, stateOf, reasonOf, pool, onResearch, sh
 								label="EFFECT"
 								reveal={reveal(2)}
 								value={effectText}
-							/>
-							<Row
-								textScale={TEXT_SCALE}
-								color={() => (isTeamNode(id()) ? AMBER : COLORS.text)}
-								delay={stagger(3)}
-								label="FOR"
-								reveal={reveal(3)}
-								value={() => (isTeamNode(id()) ? "WHOLE TEAM" : "YOU")}
 							/>
 							<Heading text={() => (maxed() ? "FULLY RESEARCHED" : "COST")} swap={swap} />
 							<frame BackgroundTransparency={1} Size={UDim2.fromScale(1, 0.16)}>
@@ -1015,7 +1007,7 @@ function ResearchPanel({ picked, levels, stateOf, reasonOf, pool, onResearch, sh
 							<NameLabel text={coreName} fade={fade} />
 							<Underline progress={swap} color={() => AMBER} />
 							<Description
-								text={`${BUILDINGS.core.description} Every branch of research starts here.`}
+								text={`${BUILDINGS.core.description} Its tier sets what every character can do. Every branch of research starts here.`}
 								fade={fade}
 							/>
 							<Heading text="STATUS" swap={swap} />
@@ -1024,26 +1016,55 @@ function ResearchPanel({ picked, levels, stateOf, reasonOf, pool, onResearch, sh
 								delay={stagger(1)}
 								label="HEALTH"
 								reveal={reveal(1)}
-								value={() => formatStat("coreHealth", statValue(levels(), "coreHealth"))}
+								value={() => tostring(BUILDINGS[core()].health)}
 							/>
 							<Row
 								textScale={TEXT_SCALE}
 								delay={stagger(2)}
 								label="STORAGE"
 								reveal={reveal(2)}
-								value={() => `${formatStat("coreCapacity", statValue(levels(), "coreCapacity"))} EACH`}
+								value={() => `${stats().capacity} EACH`}
 							/>
-							<Heading text="TEAM UPGRADES" swap={swap} />
-							{TEAM_NODES.map((node, index) => (
-								<Row
-									textScale={TEXT_SCALE}
-									color={() => ((levels()[node] ?? 0) > 0 ? AMBER : COLORS.muted)}
-									delay={stagger(3 + index)}
-									label={RESEARCH[node].name.upper()}
-									reveal={reveal(3 + index)}
-									value={() => `${levels()[node] ?? 0} / ${maxLevel(node)}`}
-								/>
-							))}
+							<Heading text="EVERY CHARACTER" swap={swap} />
+							<Row
+								textScale={TEXT_SCALE}
+								color={() => AMBER}
+								delay={stagger(3)}
+								label="BLASTERS"
+								reveal={reveal(3)}
+								value={() => `${blastersOf(core()).size()} TO PICK FROM`}
+							/>
+							<Row
+								textScale={TEXT_SCALE}
+								delay={stagger(4)}
+								label="PACK"
+								reveal={reveal(4)}
+								value={() => tostring(stats().carry)}
+							/>
+							<Row
+								textScale={TEXT_SCALE}
+								delay={stagger(5)}
+								label="SPEED"
+								reveal={reveal(5)}
+								value={() => tostring(stats().walkSpeed)}
+							/>
+							<Row
+								textScale={TEXT_SCALE}
+								delay={stagger(6)}
+								label="HEALTH"
+								reveal={reveal(6)}
+								value={() => tostring(stats().health)}
+							/>
+							<Row
+								textScale={TEXT_SCALE}
+								delay={stagger(7)}
+								label="MINES"
+								reveal={reveal(7)}
+								value={() => {
+									const { mines } = stats();
+									return `UP TO ${RESOURCES[mines[mines.size() - 1]].name.upper()}`;
+								}}
+							/>
 						</frame>
 						<textlabel
 							AnchorPoint={new Vector2(0, 1)}
@@ -1069,6 +1090,8 @@ function ResearchPanel({ picked, levels, stateOf, reasonOf, pool, onResearch, sh
 interface ResearchTreeProps {
 	/** The local player's research, the team's included. */
 	readonly levels: () => Levels;
+	/** The Core's tier, which the Core's panel shows. */
+	readonly core: () => CoreKind;
 	readonly gates: () => ResearchGates;
 	/** The Core's pool, which research is paid from. */
 	readonly pool: () => ReadonlyArray<ResourceStack>;
@@ -1089,7 +1112,7 @@ interface ResearchTreeProps {
  * space closes it. The Core's storage sits top left.
  * ponytail: no pinch zoom on touch; add it with UserInputService.TouchPinch if mobile players need it.
  */
-export function ResearchTree({ levels, gates, pool, onResearch, onClose, show }: ResearchTreeProps) {
+export function ResearchTree({ levels, core, gates, pool, onResearch, onClose, show }: ResearchTreeProps) {
 	const appear = useAppear(show);
 	/** Whether it's fading in or out, and so in the canvas group (see the end), where anything moving redraws it all. */
 	const fading = derive(() => appear() < 0.99);
@@ -1411,6 +1434,7 @@ export function ResearchTree({ levels, gates, pool, onResearch, onClose, show }:
 						<ResearchPanel
 							picked={inspected}
 							levels={levels}
+							core={core}
 							stateOf={stateOf}
 							reasonOf={reasonOf}
 							pool={stock}

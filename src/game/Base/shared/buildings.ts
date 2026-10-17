@@ -21,6 +21,8 @@ import { CELL_STUDS, cellCenter } from "game/Terrain/shared/map";
 
 export type BuildingKind =
 	| "core"
+	| "coreFoundation"
+	| "coreNucleus"
 	| "drill"
 	| "advancedDrill"
 	| "laserDrill"
@@ -115,6 +117,22 @@ export interface BuildingDef {
 	readonly node?: number;
 	/** Storage: the most of each ore it holds. Unloaders take it back out. */
 	readonly store?: number;
+	/** Cores: what the team gets while it stands (see `CoreDef`). */
+	readonly core?: CoreDef;
+}
+
+/**
+ * A Core tier, Mindustry style, where the core decides the unit everyone plays: the most of each
+ * resource it stores, and for every character the ores a held click can mine and how often, what a
+ * pack holds, walk speed and health. It also decides the Blasters they can pick (see `blastersOf`).
+ */
+export interface CoreDef {
+	readonly capacity: number;
+	readonly mines: ReadonlyArray<ResourceId>;
+	readonly mineSeconds: number;
+	readonly carry: number;
+	readonly walkSpeed: number;
+	readonly health: number;
 }
 
 /**
@@ -226,11 +244,60 @@ export function aimFrame(at: Vector3, [yaw, pitch]: readonly [number, number]): 
 
 export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 	core: {
-		name: "Core",
+		name: "Core: Shard",
 		description: "Stores the team's resources. Lose it, lose the planet.",
 		cost: [],
 		health: 1500,
 		size: 2,
+		core: {
+			capacity: 600,
+			mines: ["copper", "lead", "sand", "coal", "scrap"],
+			mineSeconds: 0.27,
+			carry: 50,
+			walkSpeed: 30,
+			health: 100,
+		},
+	},
+	coreFoundation: {
+		name: "Core: Foundation",
+		description:
+			"Built over the Core. Stores more and takes more punishment, and gives everyone a twin-shot Blaster, a bigger pack, more health and titanium mining.",
+		cost: [
+			{ resource: "copper", amount: 500 },
+			{ resource: "lead", amount: 300 },
+			{ resource: "silicon", amount: 150 },
+		],
+		health: 4000,
+		size: 3,
+		core: {
+			capacity: 1500,
+			mines: ["copper", "lead", "sand", "coal", "scrap", "titanium"],
+			mineSeconds: 0.2,
+			carry: 100,
+			walkSpeed: 35,
+			health: 150,
+		},
+	},
+	coreNucleus: {
+		name: "Core: Nucleus",
+		description:
+			"Built over the Core. Huge storage and health, and gives everyone a Blaster whose heavy rounds pierce through aliens, the biggest pack, the most health and thorium mining.",
+		cost: [
+			{ resource: "copper", amount: 1300 },
+			{ resource: "lead", amount: 1300 },
+			{ resource: "silicon", amount: 800 },
+			{ resource: "thorium", amount: 650 },
+		],
+		health: 8000,
+		size: 4,
+		core: {
+			capacity: 3000,
+			mines: ["copper", "lead", "sand", "coal", "scrap", "titanium", "thorium"],
+			mineSeconds: 0.15,
+			carry: 150,
+			walkSpeed: 40,
+			health: 200,
+		},
 	},
 	drill: {
 		name: "Drill",
@@ -1011,7 +1078,30 @@ export const BUILD_CATEGORIES: ReadonlyArray<BuildCategory> = [
 		],
 	},
 	{ name: "Defense", glyph: "wall", kinds: ["wall", "titaniumWall", "mender"] },
+	{ name: "Core", glyph: "core", kinds: ["coreFoundation", "coreNucleus"] },
 ];
+
+/** The Core's tiers, lowest first. Each is researched, then built over the one standing. */
+export const CORES = ["core", "coreFoundation", "coreNucleus"] as const;
+export type CoreKind = (typeof CORES)[number];
+
+export function isCore(kind: unknown): kind is CoreKind {
+	return CORES.includes(kind as CoreKind);
+}
+
+/** What a `kind` Core gives the team (see `CoreDef`). */
+export function coreStats(kind: CoreKind): CoreDef {
+	return BUILDINGS[kind].core!;
+}
+
+/**
+ * The -X/-Z corner cell (x, z) of a `size` Core built over one of `oldSize` on (x0, z0): round the
+ * same landing point, where the Shard's 2×2 cells meet. An odd size takes its extra row to the -X/-Z.
+ */
+export function coreCorner(x0: number, z0: number, oldSize: number, size: number): [x: number, z: number] {
+	const shift = math.ceil(oldSize / 2) - math.ceil(size / 2);
+	return [x0 + shift, z0 + shift];
+}
 
 /** Every building a player can place, in build menu order. */
 export const BUILDABLE: ReadonlyArray<BuildableKind> = BUILD_CATEGORIES.reduce<Array<BuildableKind>>(
@@ -1033,9 +1123,6 @@ export const BUILD_RANGE = 160;
 
 /** Furthest a player can mine ore, or move items in or out of a building, from their character, in studs. */
 export const TRANSFER_RANGE = 24;
-
-/** Seconds between the ores a held click mines, one at a time. */
-export const MINE_SECONDS = 0.27;
 
 /** Seconds between drill, crafter and mender ticks. */
 export const MACHINE_SECONDS = 2;
@@ -1081,7 +1168,7 @@ export function isPowered(kind: BuildingKind): boolean {
 
 /** Whether `kind` holds ore an Unloader can take out: the Core or storage. */
 export function isStorage(kind: BuildingKind): boolean {
-	return kind === "core" || BUILDINGS[kind].store !== undefined;
+	return isCore(kind) || BUILDINGS[kind].store !== undefined;
 }
 
 /**
@@ -1107,9 +1194,11 @@ const LOGISTICS: ReadonlySet<BuildingKind> = new Set(["conveyor", "titaniumConve
 
 /**
  * Whether placing `kind` swaps out an `existing` building on its cell instead of being blocked by it.
- * A dragged belt `line` only swaps slower belts, upgrading them, and runs through the rest.
+ * A dragged belt `line` only swaps slower belts, upgrading them, and runs through the rest. A Core
+ * swaps a lower tier's, and the belt pieces round it, which its bigger footprint covers.
  */
 export function replaces(kind: BuildingKind, existing: BuildingKind, line = false): boolean {
+	if (isCore(kind)) return isCore(existing) ? CORES.indexOf(existing) < CORES.indexOf(kind) : LOGISTICS.has(existing);
 	if (kind === existing || !LOGISTICS.has(kind) || !LOGISTICS.has(existing)) return false;
 	return !line || (BUILDINGS[existing].belt ?? math.huge) < (BUILDINGS[kind].belt ?? 0);
 }

@@ -3,7 +3,8 @@ import { type ResourceId, RESOURCES, type ResourceStack } from "game/Base/shared
 
 /*
  * The research tree. Each player researches their own copy, paying from the
- * team's Core pool, and keeps it for the life of the world server. To add an
+ * team's Core pool, and the world's save keeps it. What characters can do comes
+ * from the Core's tier instead (see `CoreDef`), which research unlocks. To add an
  * upgrade: add a stat (if it's new) and read it where it applies with
  * `statValue`; then add a node id, its entry in `RESEARCH` and its place in
  * `RESEARCH_ORDER`. To add a building to research: give its node `unlocks`.
@@ -13,13 +14,9 @@ import { type ResourceId, RESOURCES, type ResourceStack } from "game/Base/shared
 /** The pixel-art icons a node or the build menu can use, drawn by the client (see `glyphs.tsx`). */
 export type GlyphId =
 	| "core"
+	| "coreFoundation"
+	| "coreNucleus"
 	| "lock"
-	| "pack"
-	| "boots"
-	| "bolt"
-	| "coils"
-	| "shield"
-	| "silo"
 	| "remove"
 	| "drill"
 	| "advancedDrill"
@@ -68,16 +65,7 @@ export type GlyphId =
 	| "crosshair"
 	| "warning";
 
-export type StatId =
-	| "carryCapacity"
-	| "walkSpeed"
-	| "blasterDamage"
-	| "blasterCooldown"
-	| "coreHealth"
-	| "coreCapacity"
-	| "buildingHealth"
-	| "turretDamage"
-	| "drillYield";
+export type StatId = "buildingHealth" | "turretDamage" | "drillYield";
 
 export interface StatDef {
 	readonly name: string;
@@ -85,32 +73,17 @@ export interface StatDef {
 	readonly base: number;
 	/** Shown as a percentage: a multiplier, where 1 is 100%. */
 	readonly percent?: true;
-	/**
-	 * The team's, not each player's: researched once, for everyone. The Core's
-	 * stats are, since there's one Core. Buildings use their placer's stats.
-	 */
-	readonly team?: true;
 }
 
 export const STATS: Record<StatId, StatDef> = {
-	carryCapacity: { name: "Carry capacity", base: 50 },
-	walkSpeed: { name: "Walk speed", base: 30 },
-	blasterDamage: { name: "Blaster damage", base: 15 },
-	blasterCooldown: { name: "Seconds between shots", base: 0.25 },
-	coreHealth: { name: "Core health", base: 1500, team: true },
-	coreCapacity: { name: "Core storage per resource", base: 400, team: true },
 	buildingHealth: { name: "Building health", base: 1, percent: true },
 	turretDamage: { name: "Turret damage", base: 1, percent: true },
 	drillYield: { name: "Extra ore per drill tick", base: 0 },
 };
 
 export type ResearchId =
-	| "cargoPack"
-	| "servoBoots"
-	| "blasterCells"
-	| "rapidCoils"
-	| "coreArmor"
-	| "coreSilos"
+	| "coreFoundation"
+	| "coreNucleus"
 	| "wall"
 	| "plating"
 	| "titaniumWall"
@@ -182,78 +155,36 @@ export interface ResearchNode {
 export const COST_GROWTH = 1.75;
 
 export const RESEARCH: Record<ResearchId, ResearchNode> = {
-	cargoPack: {
-		name: "Cargo Pack",
-		description: "Carry more ore between trips to the Core.",
-		glyph: "pack",
-		side: "down",
-		requires: [],
-		cost: [{ resource: "copper", amount: 25 }],
-		levels: 3,
-		effect: { stat: "carryCapacity", step: 25 },
-	},
-	servoBoots: {
-		name: "Servo Boots",
-		description: "Run faster.",
-		glyph: "boots",
-		requires: ["cargoPack"],
-		cost: [
-			{ resource: "copper", amount: 20 },
-			{ resource: "lead", amount: 15 },
-		],
-		levels: 3,
-		effect: { stat: "walkSpeed", step: 4 },
-	},
-	blasterCells: {
-		name: "Overcharged Cells",
-		description: "Your Blaster hits harder.",
-		glyph: "bolt",
+	coreFoundation: {
+		name: "Core: Foundation",
+		description:
+			"Build a Foundation over the Core. Its tier unlocks more Blasters to pick from, and sets everyone's pack, speed, health and what they can mine.",
+		glyph: "coreFoundation",
 		side: "down",
 		requires: [],
 		cost: [
-			{ resource: "copper", amount: 20 },
-			{ resource: "lead", amount: 10 },
+			{ resource: "copper", amount: 200 },
+			{ resource: "lead", amount: 150 },
+			{ resource: "silicon", amount: 60 },
 		],
-		levels: 4,
-		effect: { stat: "blasterDamage", step: 5 },
+		unlocks: "coreFoundation",
+		discover: "silicon",
+		conquered: 1,
 	},
-	rapidCoils: {
-		name: "Rapid Coils",
-		description: "Your Blaster fires faster.",
-		glyph: "coils",
-		requires: ["blasterCells"],
+	coreNucleus: {
+		name: "Core: Nucleus",
+		description: "Build a Nucleus over the Core: the top tier, for the toughest planets.",
+		glyph: "coreNucleus",
+		requires: ["coreFoundation"],
 		cost: [
-			{ resource: "copper", amount: 25 },
-			{ resource: "lead", amount: 25 },
+			{ resource: "copper", amount: 500 },
+			{ resource: "lead", amount: 400 },
+			{ resource: "silicon", amount: 250 },
+			{ resource: "thorium", amount: 150 },
 		],
-		levels: 3,
-		effect: { stat: "blasterCooldown", step: -0.03 },
-	},
-	coreArmor: {
-		name: "Core Plating",
-		description: "The Core takes more punishment. Researched for the whole team.",
-		glyph: "shield",
-		side: "down",
-		requires: [],
-		cost: [
-			{ resource: "copper", amount: 60 },
-			{ resource: "lead", amount: 40 },
-		],
-		levels: 3,
-		effect: { stat: "coreHealth", step: 500 },
-	},
-	coreSilos: {
-		name: "Core Silos",
-		description: "The Core stores more of each resource. Researched for the whole team.",
-		glyph: "silo",
-		side: "down",
-		requires: [],
-		cost: [
-			{ resource: "copper", amount: 40 },
-			{ resource: "lead", amount: 30 },
-		],
-		levels: 4,
-		effect: { stat: "coreCapacity", step: 250 },
+		unlocks: "coreNucleus",
+		discover: "thorium",
+		conquered: 3,
 	},
 	wall: {
 		name: "Wall",
@@ -779,12 +710,8 @@ export const RESEARCH: Record<ResearchId, ResearchNode> = {
 
 /** Every node, in the order the tree lays out siblings left to right, roots on each side of the Core likewise. */
 export const RESEARCH_ORDER: ReadonlyArray<ResearchId> = [
-	"cargoPack",
-	"servoBoots",
-	"blasterCells",
-	"rapidCoils",
-	"coreArmor",
-	"coreSilos",
+	"coreFoundation",
+	"coreNucleus",
 	"drillBits",
 	"advancedDrill",
 	"laserDrill",
@@ -845,12 +772,6 @@ export interface ResearchGates {
 
 export function maxLevel(id: ResearchId): number {
 	return RESEARCH[id].levels ?? 1;
-}
-
-/** Whether `id` is researched once for the whole team rather than per player. */
-export function isTeamNode(id: ResearchId): boolean {
-	const effect = RESEARCH[id].effect;
-	return effect !== undefined && STATS[effect.stat].team === true;
 }
 
 /** What researching `id` again costs, when it is at `level` now. */
