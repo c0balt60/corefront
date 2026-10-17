@@ -117,7 +117,10 @@ export class InteractController implements OnStart {
 			if (!selected) return;
 			const distance = this.distanceTo(selected.GetPivot().Position);
 			if (!selected.Parent || distance > BUILD_RANGE) selectedAtom(undefined);
-			else nearSelectedAtom(distance <= TRANSFER_RANGE);
+			else
+				nearSelectedAtom(
+					distance <= (isCore(selected.GetAttribute("Kind")) ? coreNow().reach : TRANSFER_RANGE),
+				);
 		});
 
 		const press = UserInputService.InputBegan.Connect((input, processed) => {

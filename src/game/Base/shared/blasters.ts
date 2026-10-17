@@ -1,4 +1,14 @@
+import { Workspace } from "@rbxts/services";
+
+import type { Shot } from "game/Base/shared/base-network";
 import { CORES, type CoreKind } from "game/Base/shared/buildings";
+
+/** How fast bullets and flames fly, in studs a second. */
+const BULLET_SPEED = 320;
+const FLAME_SPEED = 60;
+/** A shell's seconds in the air: this long to leave, plus its distance over its speed. */
+const LAUNCH_SECONDS = 0.3;
+const SHELL_SPEED = 110;
 
 export type BlasterKind = "blaster" | "mender" | "twin" | "flamer" | "rail" | "arc" | "mortar";
 
@@ -132,4 +142,64 @@ export function blastersOf(core: CoreKind): ReadonlyArray<BlasterKind> {
 /** The Blaster a player who picked `picked` (a Player's `Blaster` attribute) fires under a Core of tier `core`: the plain one until they pick, or if theirs isn't there. */
 export function blasterOf(picked: unknown, core: CoreKind): BlasterKind {
 	return blastersOf(core).includes(picked as BlasterKind) ? (picked as BlasterKind) : "blaster";
+}
+
+/** Whether `tool` is a Blaster: the server makes one for each kind, with the kind as its `Blaster` attribute (see `BlasterService`). */
+export function isBlaster(tool: Instance | undefined): boolean {
+	return tool !== undefined && tool.IsA("Tool") && tool.GetAttribute("Blaster") !== undefined;
+}
+
+/** The Blaster in `container`, a character (while it's out) or a backpack, if any. */
+export function findBlaster(container: Instance | undefined): Tool | undefined {
+	return container?.GetChildren().find(isBlaster) as Tool | undefined;
+}
+
+/** The ways one shot of `gun` aimed along `along` (a unit vector) flies: its `volley`, fanned `fan` degrees apart. */
+export function volleyOf(gun: BlasterDef, along: Vector3): Array<Vector3> {
+	const volley = gun.volley ?? 1;
+	const ways = new Array<Vector3>();
+	for (let index = 0; index < volley; index++) {
+		ways.push(CFrame.Angles(0, math.rad((index - (volley - 1) / 2) * (gun.fan ?? 0)), 0).mul(along));
+	}
+	return ways;
+}
+
+/**
+ * Where a shot of `gun` from `origin` along `along` (a unit vector) ends: at what it meets within its
+ * range, passing through `ignore` (and `aliens`, if it pierces), or at the end of its range. The
+ * server and the shooter's client cast it alike, so the shot the client draws is the one that lands.
+ */
+export function castBlaster(
+	gun: BlasterDef,
+	origin: Vector3,
+	along: Vector3,
+	ignore: Array<Instance>,
+	aliens: Instance | undefined,
+): [to: Vector3, result: RaycastResult | undefined] {
+	const direction = along.mul(gun.range);
+	const params = new RaycastParams();
+	params.FilterType = Enum.RaycastFilterType.Exclude;
+	params.FilterDescendantsInstances = gun.pierce !== undefined && aliens ? [...ignore, aliens] : ignore;
+	const result = Workspace.Raycast(origin, direction, params);
+	return [result?.Position ?? origin.add(direction), result];
+}
+
+/** A shot of `kind` (not an arc, which strikes at once) from `origin` to `to`, for clients to draw (see `Shot`). */
+export function blasterShot(kind: BlasterKind, id: number, origin: Vector3, to: Vector3): Shot {
+	const gun = BLASTERS[kind];
+	const distance = to.sub(origin).Magnitude;
+	const shell = gun.projectile === "shell";
+	return {
+		id,
+		kind: gun.projectile as Shot["kind"],
+		from: origin,
+		control: shell ? origin.Lerp(to, 0.5).add(new Vector3(0, distance * 0.6, 0)) : origin.Lerp(to, 0.5),
+		to,
+		seconds: shell
+			? LAUNCH_SECONDS + distance / SHELL_SPEED
+			: distance / (gun.projectile === "flame" ? FLAME_SPEED : BULLET_SPEED),
+		splash: gun.splash ?? 0,
+		size: gun.size,
+		blaster: kind,
+	};
 }

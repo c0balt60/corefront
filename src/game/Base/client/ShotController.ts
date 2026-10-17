@@ -194,7 +194,7 @@ export class ShotController implements OnStart {
 	}
 
 	/** A rocket or shell leaving its barrel, its tail a glowing streak, a flame (rockets) and smoke left hanging in the air. */
-	private launch(shot: Shot) {
+	launch(shot: Shot) {
 		if (shot.turret && shot.kind !== "flame") this.flash(shot, shot.turret);
 		if (shot.kind === "flak") return this.launchFlak(shot);
 		if (shot.kind === "bullet") return this.launchBullet(shot);
@@ -422,7 +422,7 @@ export class ShotController implements OnStart {
 	}
 
 	/** Lightning through `points`, in jags between each and the next, sparking off each alien it strikes. */
-	private arc(points: ReadonlyArray<Vector3>) {
+	arc(points: ReadonlyArray<Vector3>) {
 		for (let i = 1; i < points.size(); i++) {
 			const from = points[i - 1];
 			const to = points[i];

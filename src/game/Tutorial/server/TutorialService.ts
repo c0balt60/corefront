@@ -1,12 +1,14 @@
 import { OnStart, Service } from "@flamework/core";
 import { subscribe } from "@rbxts/charm";
 import { Cmdr } from "@rbxts/cmdr";
-import { Players, StarterPack } from "@rbxts/services";
+import { Players } from "@rbxts/services";
 import { t } from "@rbxts/t";
 
 import { DataService } from "core/Data/server/DataService";
 import { BaseService } from "game/Base/server/BaseService";
+import { BlasterService } from "game/Base/server/BlasterService";
 import { WaveService } from "game/Base/server/WaveService";
+import { findBlaster } from "game/Base/shared/blasters";
 import { nearestZone } from "game/Base/shared/buildings";
 import { PlanetsService } from "game/Planets/server/PlanetsService";
 import { isUnlocked, stepIndex, TUTORIAL_DONE, type TutorialLock } from "game/Tutorial/shared/tutorial";
@@ -39,6 +41,7 @@ export class TutorialService implements OnStart {
 		private readonly baseService: BaseService,
 		private readonly planetsService: PlanetsService,
 		private readonly waveService: WaveService,
+		private readonly blasterService: BlasterService,
 	) {}
 
 	onStart() {
@@ -56,7 +59,10 @@ export class TutorialService implements OnStart {
 			this.untrack.get(player)?.();
 			this.untrack.delete(player);
 		});
-		subscribe(this.baseService.sandbox, () => Players.GetPlayers().forEach((player) => this.giveBlaster(player)));
+		this.blasterService.canHave = (player) => this.unlocked(player, "blaster");
+		subscribe(this.baseService.sandbox, () =>
+			Players.GetPlayers().forEach((player) => this.blasterService.refresh(player)),
+		);
 
 		this.waveService.canCall = (player) => this.unlocked(player, "callWave");
 
@@ -96,36 +102,11 @@ export class TutorialService implements OnStart {
 		const unsubscribe = subscribe(this.dataService.selectData(player), (now, before) => {
 			if (now?.tutorial === before?.tutorial) return;
 			this.practiced.delete(player);
-			this.giveBlaster(player);
+			this.blasterService.refresh(player);
 			this.practise(player);
 			this.waveService.holdAtom(this.shouldHold());
 		});
 		this.untrack.set(player, unsubscribe);
-
-		// The Backpack is made anew at each spawn, and fills a moment after CharacterAdded.
-		const guard = (backpack: Backpack) => {
-			const strip = (child: Instance) => {
-				if (!child.IsA("Tool") || child.Name !== "Blaster") return;
-				// Deferred: under immediate signals the Tool is still being parented.
-				task.defer(() => {
-					if (!this.unlocked(player, "blaster")) child.Destroy();
-				});
-			};
-			backpack.GetChildren().forEach(strip);
-			backpack.ChildAdded.Connect(strip);
-		};
-		player.ChildAdded.Connect((child) => child.IsA("Backpack") && guard(child));
-		const backpack = player.FindFirstChildOfClass("Backpack");
-		if (backpack) guard(backpack);
-	}
-
-	/** Hands over the Blaster once its step is reached, if they don't have it. A spawn brings it itself. */
-	private giveBlaster(player: Player) {
-		const backpack = player.FindFirstChildOfClass("Backpack");
-		if (!player.Character || !backpack || !this.unlocked(player, "blaster")) return;
-		if (backpack.FindFirstChild("Blaster") || player.Character.FindFirstChild("Blaster")) return;
-		const blaster = StarterPack.FindFirstChild("Blaster")?.Clone();
-		if (blaster) blaster.Parent = backpack;
 	}
 
 	/**
@@ -152,10 +133,7 @@ export class TutorialService implements OnStart {
 		const direction = new Vector3(toward.X - core.X, 0, toward.Z - core.Z);
 		const at = direction.Magnitude > 1e-3 ? core.add(direction.Unit.mul(PRACTICE_STUDS)) : core;
 		player.SetAttribute("TutorialSpawn", new Vector3(at.X, map.landing.Y, at.Z));
-		if (
-			player.Character?.FindFirstChild("Blaster")?.IsA("Tool") &&
-			this.waveService.queue(PRACTICE_KIND, PRACTICE_COUNT, at)
-		) {
+		if (findBlaster(player.Character) && this.waveService.queue(PRACTICE_KIND, PRACTICE_COUNT, at)) {
 			this.practiced.set(player, map);
 		}
 	}

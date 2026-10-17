@@ -72,7 +72,7 @@ export const buildModeAtom = atom<BuildMode>();
 export const selectedAtom = atom<Model>();
 /** The turret whose info page is open, from its panel's ? button. */
 export const infoAtom = atom<BuildableKind>();
-/** Whether the local player is within `TRANSFER_RANGE` of it, to move items in or out. */
+/** Whether the local player is within `TRANSFER_RANGE` of it (the Core: its tier's `reach`), to move items in or out. */
 export const nearSelectedAtom = atom(false);
 /** The ore drawn on it, if it's a belt, back to front. */
 export const selectedOreAtom = atom<ReadonlyArray<ResourceId>>([]);

@@ -1256,7 +1256,8 @@ export class BaseService implements OnStart {
 	reachable(player: Player, data: unknown): Building | undefined {
 		if (!isCellData(data) || this.phase() !== "active") return undefined;
 		const building = this.buildingOn(data.x, data.z);
-		if (building && !this.inReach(player, building.position, TRANSFER_RANGE)) {
+		const range = building && isCore(building.kind) ? this.stats().reach : TRANSFER_RANGE;
+		if (building && !this.inReach(player, building.position, range)) {
 			this.notify(player, "That's too far away. Move closer.");
 			return undefined;
 		}

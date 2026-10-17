@@ -124,7 +124,8 @@ export interface BuildingDef {
 /**
  * A Core tier, Mindustry style, where the core decides the unit everyone plays: the most of each
  * resource it stores, and for every character the ores a held click can mine and how often, what a
- * pack holds, walk speed and health. It also decides the Blasters they can pick (see `blastersOf`).
+ * pack holds, walk speed and health, and how far from the Core's middle they can use it, in studs.
+ * It also decides the Blasters they can pick (see `blastersOf`).
  */
 export interface CoreDef {
 	readonly capacity: number;
@@ -133,6 +134,7 @@ export interface CoreDef {
 	readonly carry: number;
 	readonly walkSpeed: number;
 	readonly health: number;
+	readonly reach: number;
 }
 
 /**
@@ -197,6 +199,9 @@ export interface TurretDef {
 	readonly rail?: true;
 }
 
+/** How far lightning leaps from one alien to the next, in studs (see `AmmoDef.chain`). */
+export const ARC_JUMP = 18;
+
 /** Seconds between a beam's pulses of damage, and how fast its head turns while it burns, of its `turn` (see `TurretDef.beam`). */
 export const BEAM_PULSE = 0.1;
 export const BEAM_TURN = 0.5;
@@ -256,12 +261,13 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 			carry: 50,
 			walkSpeed: 30,
 			health: 100,
+			reach: 24,
 		},
 	},
 	coreFoundation: {
 		name: "Core: Foundation",
 		description:
-			"Built over the Core. Stores more and takes more punishment, and gives everyone a twin-shot Blaster, a bigger pack, more health and titanium mining.",
+			"Built over the Core. Stores more and takes more punishment, unlocks the Twin Blaster and Flamer, and gives everyone a bigger pack, more health, a longer reach and titanium mining.",
 		cost: [
 			{ resource: "copper", amount: 500 },
 			{ resource: "lead", amount: 300 },
@@ -276,12 +282,13 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 			carry: 100,
 			walkSpeed: 35,
 			health: 150,
+			reach: 36,
 		},
 	},
 	coreNucleus: {
 		name: "Core: Nucleus",
 		description:
-			"Built over the Core. Huge storage and health, and gives everyone a Blaster whose heavy rounds pierce through aliens, the biggest pack, the most health and thorium mining.",
+			"Built over the Core. Huge storage and health, unlocks the Rail Blaster, Arc Caster and Mortar, and gives everyone the biggest pack, the most health, the longest reach and thorium mining.",
 		cost: [
 			{ resource: "copper", amount: 1300 },
 			{ resource: "lead", amount: 1300 },
@@ -297,6 +304,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingDef> = {
 			carry: 150,
 			walkSpeed: 40,
 			health: 200,
+			reach: 48,
 		},
 	},
 	drill: {
@@ -1121,7 +1129,7 @@ export const REFUND = 0.5;
 /** Furthest a player can build or remove from their character, in studs. Building panels open within it too. */
 export const BUILD_RANGE = 160;
 
-/** Furthest a player can mine ore, or move items in or out of a building, from their character, in studs. */
+/** Furthest a player can mine ore, or move items in or out of a building, from their character, in studs. The Core's tier sets its own (see `CoreDef.reach`). */
 export const TRANSFER_RANGE = 24;
 
 /** Seconds between drill, crafter and mender ticks. */

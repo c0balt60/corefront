@@ -14,6 +14,7 @@ import {
 	type BuildingKind,
 	isCore,
 } from "game/Base/shared/buildings";
+import { isBlaster } from "game/Base/shared/blasters";
 import { RESOURCES } from "game/Base/shared/resources";
 import {
 	deployedAtom,
@@ -330,10 +331,9 @@ export class TutorialController implements OnStart {
 				const beacon = this.mark(
 					alien ? undefined : (Players.LocalPlayer.GetAttribute("TutorialSpawn") as Vector3 | undefined),
 				);
-				const aim =
-					equippedAtom()?.Name !== "Blaster"
-						? takeOut("Blaster", "your Blaster")
-						: { text: alien ? "Shoot the aliens" : "Aliens incoming, shoot them" };
+				const aim = !isBlaster(equippedAtom())
+					? takeOut(toolsAtom().find(isBlaster)?.Name ?? "Blaster", "your Blaster")
+					: { text: alien ? "Shoot the aliens" : "Aliens incoming, shoot them" };
 				return {
 					title: "SHOOT THE ALIENS",
 					...aim,

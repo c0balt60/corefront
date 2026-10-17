@@ -80,8 +80,11 @@ export interface BaseMessageData {
 	[BaseMessage.Remove]: { readonly x: number; readonly z: number };
 	/** Client -> server: launch the next wave now. */
 	[BaseMessage.CallWave]: undefined;
-	/** Client -> server: the equipped Blaster fired at this world point. The server raycasts from the Blaster. */
-	[BaseMessage.Fire]: { readonly target: Vector3 };
+	/**
+	 * Client -> server: the equipped Blaster fired from `origin` (its muzzle, as the client drew the shot)
+	 * at the world point `target`. The server raycasts from there, if it's near enough the muzzle.
+	 */
+	[BaseMessage.Fire]: { readonly origin: Vector3; readonly target: Vector3 };
 	/** Client -> server: turn whichever building covers cell (x, z) a quarter turn. */
 	[BaseMessage.Rotate]: { readonly x: number; readonly z: number };
 	/** Client -> server, every `CoreDef.mineSeconds` while a click is held on it: mine one ore from the deposit on cell (x, z). */

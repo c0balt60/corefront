@@ -20,6 +20,7 @@ import {
 } from "game/Base/shared/base-network";
 import {
 	aimFrame,
+	ARC_JUMP,
 	BUILDINGS,
 	BEAM_PULSE,
 	BEAM_TURN,
@@ -432,8 +433,6 @@ const SHELL_SPEED = 110;
 const LAUNCH_SECONDS = 0.3;
 /** Seconds a bomber's bomb takes to fall. */
 const BOMB_SECONDS = 0.6;
-/** How far lightning leaps from one alien to the next, in studs (see `AmmoDef.chain`). */
-const ARC_JUMP = 18;
 /** A beam laser lights only with its target within this cone (cosine of 40°), and reaches out and draws back in over this many seconds. */
 const BEAM_CONE = math.cos(math.rad(40));
 const BEAM_FADE = 0.27;
@@ -1745,8 +1744,15 @@ export class WaveService implements OnStart {
 		shotMessaging.client.emitAll(ShotMessage.Beam, { turret, from, to, reach });
 	}
 
-	/** Lightning: strikes `target`, then leaps `chain` times on to the nearest alien it can hit within `ARC_JUMP` of the last. */
-	private zap(from: Vector3, target: Alien, damage: number, chain: number, targets: "air" | "ground" | undefined) {
+	/** Lightning: strikes `target`, then leaps `chain` times on to the nearest alien it can hit within `ARC_JUMP` of the last. Drawn for all but `shooter`. */
+	private zap(
+		from: Vector3,
+		target: Alien,
+		damage: number,
+		chain: number,
+		targets: "air" | "ground" | undefined,
+		shooter?: Player,
+	) {
 		const points = [from];
 		const struck = new Set<Alien>();
 		let striking: Alien | undefined = target;
@@ -1764,11 +1770,15 @@ export class WaveService implements OnStart {
 				striking = alien;
 			}
 		}
-		shotMessaging.client.emitAll(ShotMessage.Arc, { points });
+		if (shooter) shotMessaging.client.emitExcept(shooter, ShotMessage.Arc, { points });
+		else shotMessaging.client.emitAll(ShotMessage.Arc, { points });
 	}
 
-	/** A Blaster's lightning: strikes the alien nearest `at` within `ARC_JUMP`, then leaps on as `zap` does. False if none is there. */
-	zapNear(from: Vector3, at: Vector3, damage: number, chain: number): boolean {
+	/**
+	 * A Blaster's lightning: strikes the alien nearest `at` within `ARC_JUMP`, then leaps on as `zap` does.
+	 * False if none is there. `shooter` drew it already (see `BlasterController`).
+	 */
+	zapNear(from: Vector3, at: Vector3, damage: number, chain: number, shooter: Player): boolean {
 		let best = ARC_JUMP;
 		let target: Alien | undefined;
 		for (const [, alien] of this.aliens) {
@@ -1777,7 +1787,7 @@ export class WaveService implements OnStart {
 			best = distance;
 			target = alien;
 		}
-		if (target) this.zap(from, target, damage, chain, undefined);
+		if (target) this.zap(from, target, damage, chain, undefined, shooter);
 		return target !== undefined;
 	}
 

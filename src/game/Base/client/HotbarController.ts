@@ -2,11 +2,12 @@ import { Controller, OnStart } from "@flamework/core";
 import { Players, StarterGui, UserInputService } from "@rbxts/services";
 
 import { equippedAtom, toggleTool, toolsAtom } from "game/Base/client/base-state";
+import { isBlaster } from "game/Base/shared/blasters";
 import { BUILD_TOOL } from "game/Base/shared/buildings";
 import { starMapOpenAtom } from "game/Planets/client/planets-state";
 
-/** Hotbar order. Tools not listed follow, by name. */
-const TOOL_ORDER = ["Blaster", BUILD_TOOL];
+/** Hotbar order, after the Blaster. Tools not listed follow, by name. */
+const TOOL_ORDER = [BUILD_TOOL];
 
 /** The number keys, so the hotbar's nth slot is key n. */
 const NUMBER_KEYS: ReadonlyArray<Enum.KeyCode> = [
@@ -22,8 +23,9 @@ const NUMBER_KEYS: ReadonlyArray<Enum.KeyCode> = [
 ];
 
 function rank(tool: Tool) {
+	if (isBlaster(tool)) return 0;
 	const index = TOOL_ORDER.indexOf(tool.Name);
-	return index >= 0 ? index : TOOL_ORDER.size();
+	return index >= 0 ? index + 1 : TOOL_ORDER.size() + 1;
 }
 
 /**
