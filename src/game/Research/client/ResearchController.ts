@@ -5,9 +5,10 @@ import { Icon } from "@rbxts/topbar-plus";
 
 import { baseStateAtom, notify } from "game/Base/client/base-state";
 import { deployedAtom, starMapOpenAtom, worldStateAtom } from "game/Planets/client/planets-state";
-import { discoveredAtom, levelsAtom, researchOpenAtom } from "game/Research/client/research-state";
+import { discoveredAtom, levelsAtom, researchIconAtom, researchOpenAtom } from "game/Research/client/research-state";
 import { type Levels, lockReason, RESEARCH, RESEARCH_ORDER, type ResearchId } from "game/Research/shared/research";
 import { ResearchMessage, researchMessaging } from "game/Research/shared/research-network";
+import { unlockedAtom } from "game/Tutorial/client/tutorial-state";
 
 /**
  * Keeps the research atoms in sync with the server, and opens the tree with T
@@ -39,14 +40,21 @@ export class ResearchController implements OnStart {
 			const now = new Set(
 				RESEARCH_ORDER.filter((id) => (levels[id] ?? 0) === 0 && lockReason(id, levels, gates) === undefined),
 			);
-			const fresh = available && [...now].filter((id) => !available!.has(id));
+			// Not while the tree is locked: it would point somewhere the player can't open. What became available
+			// meanwhile is announced once it opens.
+			if (!available) available = now;
+			if (!unlockedAtom("research")) return;
+			const fresh = [...now].filter((id) => !available!.has(id));
 			available = now;
-			if (fresh && !fresh.isEmpty()) {
+			if (!fresh.isEmpty()) {
 				notify(`Research available: ${fresh.map((id) => RESEARCH[id].name).join(", ")}`, "research");
 			}
 		});
 
-		const canOpen = computed(() => deployedAtom() && !starMapOpenAtom() && baseStateAtom()?.phase === "active");
+		const canOpen = computed(
+			() =>
+				deployedAtom() && !starMapOpenAtom() && baseStateAtom()?.phase === "active" && unlockedAtom("research"),
+		);
 		const toggle = () => {
 			if (canOpen()) researchOpenAtom(!researchOpenAtom());
 		};
@@ -55,6 +63,7 @@ export class ResearchController implements OnStart {
 		});
 
 		const icon = new Icon().setLabel("Research").autoDeselect(false).setEnabled(false);
+		researchIconAtom(icon.getInstance("IconButton") as GuiObject);
 		icon.toggled.Connect((selected) => {
 			if (selected !== researchOpenAtom()) toggle();
 		});

@@ -302,6 +302,8 @@ function TraceLine({ trace, state, grown, pulse }: TraceLineProps) {
 }
 
 interface TileProps {
+	/** Its name, for the tutorial to find it by. */
+	readonly name?: string;
 	/** Its centre on the canvas, in pixels. */
 	readonly at: Vector2;
 	readonly size: number;
@@ -325,7 +327,7 @@ interface TileProps {
  * A square tile on the canvas, like a build card: outlined, shadowed and
  * bracketed in `color`. Hovering lifts it and picking it grows it.
  */
-function Tile({ at, size, color, energy, spin, pop, glow, selected, onClick, content }: TileProps) {
+function Tile({ name, at, size, color, energy, spin, pop, glow, selected, onClick, content }: TileProps) {
 	const hovered = source(false);
 	const [lift, liftSpring] = useSpring(0, SPRINGS.responsive);
 	const [scale, scaleSpring] = useSpring(1, SPRINGS.bouncy);
@@ -337,6 +339,7 @@ function Tile({ at, size, color, energy, spin, pop, glow, selected, onClick, con
 
 	return (
 		<frame
+			Name={name}
 			AnchorPoint={new Vector2(0.5, 0.5)}
 			BackgroundTransparency={1}
 			Position={UDim2.fromOffset(at.X, at.Y)}
@@ -442,6 +445,7 @@ function NodeButton({ id, level, state, selected, pop, pulse, live, onClick }: N
 
 	return (
 		<Tile
+			name={`Node_${id}`}
 			at={pixels(POSITIONS.get(id)!)}
 			size={NODE}
 			color={tint}

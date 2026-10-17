@@ -1,10 +1,10 @@
 import { MessageEmitter } from "@rbxts/tether";
 
-/** The terrain debug panel (F4). Only trusted players get answers. Ids start at 120. */
+/** The terrain debug panel (F4). Only trusted players get answers. Ids start at 190. */
 export const terrainMessaging = MessageEmitter.create<TerrainMessageData>();
 
 export const enum TerrainMessage {
-	DebugRequest = 120,
+	DebugRequest = 190,
 	DebugState,
 	DebugApply,
 }

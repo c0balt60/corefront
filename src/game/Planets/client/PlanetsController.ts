@@ -8,11 +8,13 @@ import {
 	composingAtom,
 	deployedAtom,
 	selectedPlanetAtom,
+	starMapIconAtom,
 	starMapOpenAtom,
 	worldStateAtom,
 } from "game/Planets/client/planets-state";
 import { playTravel } from "game/Planets/client/travel-cutscene";
 import { PlanetsMessage, planetsMessaging } from "game/Planets/shared/planets-network";
+import { unlockedAtom } from "game/Tutorial/client/tutorial-state";
 
 const BLOCK_MOVEMENT = "StarMapBlockMovement";
 /** The keys the character walks and jumps with, which the star map takes over. */
@@ -48,8 +50,15 @@ export class PlanetsController implements OnStart {
 		// The stage alone, so a fresh WorldState with the same stage doesn't restart the cutscene.
 		const travelStage = computed(() => (deployedAtom() ? worldStateAtom()?.travel?.stage : undefined));
 		const canOpen = computed(() => deployedAtom() && travelStage() === undefined);
+		// On the ground the tutorial holds the map back till its last step, unless a planet is already liberated
+		// (a veteran needs it to retreat). Closing it is always allowed.
+		const canToggle = computed(
+			() =>
+				canOpen() &&
+				(starMapOpenAtom() || unlockedAtom("starMap") || (worldStateAtom()?.conquered.size() ?? 0) > 0),
+		);
 		const toggle = () => {
-			if (canOpen()) starMapOpenAtom(!starMapOpenAtom());
+			if (canToggle()) starMapOpenAtom(!starMapOpenAtom());
 		};
 
 		// Travelling closes the map; the cutscene has the camera.
@@ -68,11 +77,12 @@ export class PlanetsController implements OnStart {
 
 		// Not deselected by the HUD button: it's the map's own state.
 		const icon = new Icon().setLabel("Star Map").autoDeselect(false).setEnabled(false);
+		starMapIconAtom(icon.getInstance("IconButton") as GuiObject);
 		icon.toggled.Connect((selected) => {
 			if (selected !== starMapOpenAtom()) toggle();
 		});
 		effect(() => {
-			icon.setEnabled(canOpen());
+			icon.setEnabled(canToggle());
 			if (starMapOpenAtom()) icon.select();
 			else icon.deselect();
 		});

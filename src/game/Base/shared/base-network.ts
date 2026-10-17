@@ -1,3 +1,4 @@
+import type { f64 } from "@rbxts/serio";
 import { MessageEmitter } from "@rbxts/tether";
 
 import type { BuildableKind } from "game/Base/shared/buildings";
@@ -45,8 +46,8 @@ export interface BaseState {
 	/** Waves launched so far, and how many the planet has. */
 	readonly wave: number;
 	readonly waves: number;
-	/** `Workspace.GetServerTimeNow()` when the next wave launches, or 0 when none is coming. */
-	readonly nextWaveAt: number;
+	/** `Workspace.GetServerTimeNow()` when the next wave launches, or 0 when none is coming. An f64: a plain number goes as an f32, which rounds a time this big to 128 s. */
+	readonly nextWaveAt: f64;
 	readonly aliens: number;
 	readonly coreHealth: number;
 	readonly coreMaxHealth: number;
@@ -206,6 +207,8 @@ export interface Shot {
 	/** A turret's: the turret, and which of its barrels fired it, to kick back (see `TurretController`). */
 	readonly turret?: Model;
 	readonly barrel?: number;
+	/** A player's Blaster bullet: drawn small and yellow, with no turret behind it. */
+	readonly blaster?: true;
 }
 
 export interface ShotMessageData {

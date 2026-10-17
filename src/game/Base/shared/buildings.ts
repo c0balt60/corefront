@@ -1060,6 +1060,17 @@ export function inDropZone(cell: number, size: number, zones: ReadonlyArray<Vect
 	return zones.some((zone) => footprintDistance(cell, size, zone) < DROP_ZONE_RADIUS);
 }
 
+/** The drop zone nearest `from`, across the ground. Undefined with no zones. */
+export function nearestZone(zones: ReadonlyArray<Vector3>, from: Vector3): Vector3 | undefined {
+	let best: Vector3 | undefined;
+	let bestDistance = math.huge;
+	for (const zone of zones) {
+		const distance = new Vector3(zone.X - from.X, 0, zone.Z - from.Z).Magnitude;
+		if (distance < bestDistance) [best, bestDistance] = [zone, distance];
+	}
+	return best;
+}
+
 /** Whether `kind` is on the power network: it makes, stores, carries or uses power. Nodes link these. */
 export function isPowered(kind: BuildingKind): boolean {
 	const def = BUILDINGS[kind];

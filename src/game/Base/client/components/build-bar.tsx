@@ -49,6 +49,8 @@ const clamp01 = (value: number) => math.clamp(value, 0, 1);
 const picked = source(BUILD_CATEGORIES[0]);
 
 interface TileProps {
+	/** Its name, for the tutorial to find it by. */
+	readonly name: string;
 	readonly glyph: GlyphId;
 	/** Width and height, in pixels. */
 	readonly size: number;
@@ -69,7 +71,7 @@ interface TileProps {
  * One square tile: a glyph, and its hotkey (if it has one) in the corner. Hovering lifts it; picking
  * it grows it, lights its outline and locks brackets onto its corners.
  */
-function Tile({ glyph, size, color, selected, dim, hotkey, layoutOrder, visible, onClick, onHover }: TileProps) {
+function Tile({ name, glyph, size, color, selected, dim, hotkey, layoutOrder, visible, onClick, onHover }: TileProps) {
 	const hovered = source(false);
 	const [lift, liftSpring] = useSpring(0, SPRINGS.responsive);
 	const [scale, scaleSpring] = useSpring(1, SPRINGS.bouncy);
@@ -85,6 +87,7 @@ function Tile({ glyph, size, color, selected, dim, hotkey, layoutOrder, visible,
 
 	return (
 		<frame
+			Name={name}
 			BackgroundTransparency={1}
 			LayoutOrder={layoutOrder}
 			Size={UDim2.fromOffset(size, size)}
@@ -402,6 +405,7 @@ export function BuildBar({ kinds, pool, held, mode, onSelect, onInfo, show }: Bu
 						<For each={kinds}>
 							{(kind) => (
 								<Tile
+									name={`Build_${kind}`}
 									color={COLORS.accent}
 									dim={() => !canAfford(pool(), BUILDINGS[kind].cost)}
 									glyph={kind}
@@ -431,6 +435,7 @@ export function BuildBar({ kinds, pool, held, mode, onSelect, onInfo, show }: Bu
 						<For each={categories}>
 							{(category) => (
 								<Tile
+									name={`Category_${category.name}`}
 									color={COLORS.accent}
 									glyph={category.glyph}
 									layoutOrder={BUILD_CATEGORIES.indexOf(category)}
@@ -442,6 +447,7 @@ export function BuildBar({ kinds, pool, held, mode, onSelect, onInfo, show }: Bu
 							)}
 						</For>
 						<Tile
+							name="Remove"
 							color={COLORS.danger}
 							glyph="remove"
 							hotkey="F"

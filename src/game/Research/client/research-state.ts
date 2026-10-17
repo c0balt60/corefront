@@ -11,3 +11,6 @@ export const discoveredAtom = atom<ReadonlyArray<ResourceId>>([]);
 
 /** Whether the research tree is open. */
 export const researchOpenAtom = atom(false);
+
+/** The Research button in the top bar, once `ResearchController` has made it. */
+export const researchIconAtom = atom<GuiObject>();

@@ -483,6 +483,7 @@ export function PlanetPanel({
 					</frame>
 
 					<frame
+						Name="PlanetAction"
 						AnchorPoint={new Vector2(0, 1)}
 						BackgroundTransparency={1}
 						Position={() => new UDim2(0, shake(), 1, 0)}

@@ -156,7 +156,7 @@ let occupied: ReadonlyMap<number, Model> | undefined;
 let watched: Instance | undefined;
 
 /** Every building's model, by each cell it covers. Read every frame, so it's only worked out again once buildings change. */
-function occupancy(): ReadonlyMap<number, Model> {
+export function occupancy(): ReadonlyMap<number, Model> {
 	const buildings = Workspace.FindFirstChild("Base")?.FindFirstChild("Buildings");
 	if (buildings !== watched) {
 		watched = buildings;
@@ -182,7 +182,7 @@ function occupancy(): ReadonlyMap<number, Model> {
 }
 
 /** The building covering cell (x, z), if any. */
-function modelOn(taken: ReadonlyMap<number, Model>, x: number, z: number): Model | undefined {
+export function modelOn(taken: ReadonlyMap<number, Model>, x: number, z: number): Model | undefined {
 	if (x < 0 || z < 0 || x >= GRID_SIZE || z >= GRID_SIZE) return undefined;
 	return taken.get(cellIndex(x, z));
 }
@@ -243,7 +243,7 @@ function feeds(model: Model | undefined, side: number): boolean {
 }
 
 /** Whether `model` is a belt. */
-function isBeltModel(model: Model | undefined): model is Model {
+export function isBeltModel(model: Model | undefined): model is Model {
 	const kind = model?.GetAttribute("Kind");
 	return typeIs(kind, "string") && BUILDINGS[kind as BuildingKind]?.belt !== undefined;
 }
@@ -309,7 +309,7 @@ function linePaths(
  * The cells from `from` to `to` as an L, the longer way first, at most `MAX_LINE` of them. Belts
  * (`directed`) each face the next cell, the last on the way the line runs; anything else faces `rotation`.
  */
-function lineBetween(
+export function lineBetween(
 	from: readonly [number, number],
 	to: readonly [number, number],
 	rotation: number,
@@ -348,7 +348,7 @@ function lineBetween(
 }
 
 /** A local, non-colliding part for the ghost. Hidden until the first frame places it. */
-function ghostPart(parent: Instance, size: Vector3) {
+export function ghostPart(parent: Instance, size: Vector3) {
 	const part = new Instance("Part");
 	part.Anchored = true;
 	part.CanCollide = false;

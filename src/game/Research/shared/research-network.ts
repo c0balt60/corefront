@@ -3,7 +3,7 @@ import { MessageEmitter } from "@rbxts/tether";
 import type { ResourceId } from "game/Base/shared/resources";
 import type { ResearchId } from "game/Research/shared/research";
 
-/** Each player's research tree. Ids start at 130, clear of Base's (110+) and Terrain's (120+). */
+/** Each player's research tree. Ids start at 130, clear of Base's messages (110 to 125) and clear of its belt, shot and sandbox ones (140+). */
 export const researchMessaging = MessageEmitter.create<ResearchMessageData>();
 
 export const enum ResearchMessage {

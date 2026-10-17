@@ -395,6 +395,8 @@ interface Mark {
 
 /** Seconds to build before a planet's first wave, and between a wave being cleared and the next. */
 const GRACE_SECONDS = 180;
+/** Seconds to the first wave once the hold lifts (see `holdAtom`). */
+const HELD_SECONDS = 60;
 const WAVE_SECONDS = 45;
 /** Waves on a planet: this many, plus `WAVES_PER_DIFFICULTY` for each level of its difficulty. */
 const BASE_WAVES = 8;
@@ -681,6 +683,14 @@ export class WaveService implements OnStart {
 	private readonly wave = atom(0);
 	private readonly waves = atom(0);
 	private readonly nextWaveAt = atom(0);
+	/**
+	 * While true the planet's first wave doesn't come: its countdown stops and shows nothing.
+	 * Held by `TutorialService` till its players are ready. Releasing it starts that countdown.
+	 * A player who may call waves (see `canCall`) can still start the first.
+	 */
+	readonly holdAtom = atom(false);
+	/** Asked before a CallWave from a player is obeyed, if set. Set by `TutorialService`. */
+	canCall?: (player: Player) => boolean;
 	private readonly alienCount = atom(0);
 	private readonly state = computed((): BaseState => {
 		const pool = this.baseService.poolAtom();
@@ -736,7 +746,8 @@ export class WaveService implements OnStart {
 			baseMessaging.client.emit(player, BaseMessage.State, this.state());
 			this.baseService.sendInventory(player);
 		});
-		baseMessaging.server.on(BaseMessage.CallWave, () => {
+		baseMessaging.server.on(BaseMessage.CallWave, (player) => {
+			if (this.canCall?.(player) === false) return;
 			if (os.clock() - this.lastCall < CALL_DEBOUNCE) return;
 			this.lastCall = os.clock();
 			this.launch();
@@ -765,10 +776,11 @@ export class WaveService implements OnStart {
 		const wave = this.wave() + 1;
 		const waves = this.waves();
 		if (this.baseService.phase() !== "active" || wave > waves) return false;
-		this.wave(wave);
-		this.nextWaveAt(0);
+		// Aliens queued before the atoms change: an effect that errors in a setter can't leave a wave with none.
 		const stage = stageOf(wave, waves, this.maxStage);
 		for (const kind of composition(wave, stage, wave === waves)) this.pending.push({ kind });
+		this.nextWaveAt(0);
+		this.wave(wave);
 		this.logger.Info("Wave {Wave} of {Waves} launched", wave, this.waves());
 		return true;
 	}
@@ -780,6 +792,11 @@ export class WaveService implements OnStart {
 		this.wave(launched);
 		this.nextWaveAt(launched < this.waves() ? Workspace.GetServerTimeNow() + WAVE_SECONDS : 0);
 		return true;
+	}
+
+	/** Whether no aliens are waiting to spawn or alive. */
+	isClear(): boolean {
+		return this.pending.isEmpty() && this.aliens.isEmpty();
 	}
 
 	/** Queues aliens to spawn as if a wave sent them, or around `at` instead. False when no mission is running. */
@@ -895,7 +912,7 @@ export class WaveService implements OnStart {
 		}
 		this.wave(0);
 		this.waves(planet ? BASE_WAVES + WAVES_PER_DIFFICULTY * planet.difficulty : 0);
-		this.nextWaveAt(planet ? Workspace.GetServerTimeNow() + GRACE_SECONDS : 0);
+		this.nextWaveAt(planet && !this.holdAtom() ? Workspace.GetServerTimeNow() + GRACE_SECONDS : 0);
 	}
 
 	/** Shows the result for a while, then liberates the planet (the team stays on) or retreats the team. */
@@ -928,10 +945,15 @@ export class WaveService implements OnStart {
 		if (!map || this.baseService.phase() !== "active") return;
 
 		const cleared = this.pending.isEmpty() && this.aliens.isEmpty();
-		if (this.wave() < this.waves()) {
-			// The countdown runs once the last wave is cleared (the first's from the start, see `begin`).
-			if (this.nextWaveAt() === 0 && cleared) this.nextWaveAt(Workspace.GetServerTimeNow() + WAVE_SECONDS);
-			else if (this.nextWaveAt() > 0 && Workspace.GetServerTimeNow() >= this.nextWaveAt()) this.launch();
+		const now = Workspace.GetServerTimeNow();
+		if (this.holdAtom() && this.wave() === 0) {
+			if (this.nextWaveAt() !== 0) this.nextWaveAt(0);
+		} else if (this.wave() < this.waves()) {
+			// The countdown runs once the last wave is cleared: the first's from the start (see `begin`), or from
+			// when the hold lifts.
+			if (this.nextWaveAt() === 0 && (cleared || this.wave() === 0))
+				this.nextWaveAt(now + (this.wave() === 0 ? HELD_SECONDS : WAVE_SECONDS));
+			else if (this.nextWaveAt() > 0 && now >= this.nextWaveAt()) this.launch();
 		}
 		this.spawnPending(map, dt);
 		this.refreshField();

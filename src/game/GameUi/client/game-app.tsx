@@ -66,6 +66,12 @@ import { ResearchMessage, researchMessaging } from "game/Research/shared/researc
 import { TerrainDebugPanel } from "game/Terrain/client/components/terrain-debug";
 import { terrainDebugAtom, terrainDebugOpenAtom } from "game/Terrain/client/terrain-debug-state";
 import { TerrainMessage, terrainMessaging } from "game/Terrain/shared/terrain-network";
+import { TutorialArrow } from "game/Tutorial/client/components/tutorial-arrow";
+import { TutorialHighlight } from "game/Tutorial/client/components/tutorial-highlight";
+import { TutorialPanel } from "game/Tutorial/client/components/tutorial-panel";
+import { tutorialHintAtom, unlockedAtom } from "game/Tutorial/client/tutorial-state";
+import { TUTORIAL_STEPS } from "game/Tutorial/shared/tutorial";
+import { TutorialMessage, tutorialMessaging } from "game/Tutorial/shared/tutorial-network";
 
 /**
  * Everything on screen that only exists in a world server. Core's `App` still
@@ -97,6 +103,7 @@ export function GameApp() {
 	const discovered = useAtom(discoveredAtom);
 	const researchOpen = useAtom(researchOpenAtom);
 	const info = useAtom(infoAtom);
+	const tutorial = useAtom(tutorialHintAtom);
 
 	// The team between planets, for the local player once they're down there.
 	const travel = () => (deployed() ? world()?.travel : undefined);
@@ -111,6 +118,8 @@ export function GameApp() {
 		return phase === "won" || phase === "lost" ? phase : undefined;
 	};
 	const plan = () => (deployed() ? world()?.plan : undefined);
+	// The overlay's up, which hides the tutorial rather than leave its arrow pointing at nothing.
+	const hint = () => (travel()?.stage === "transit" || (awaiting() && !deployed()) ? undefined : tutorial());
 	// Derived from research and the sandbox flag alone, not the whole base state, which changes several times a second.
 	const sandbox = derive(() => base()?.sandbox === true);
 	const buildable = derive(() => BUILDABLE.filter((kind) => canBuild(levels(), kind, sandbox())));
@@ -258,6 +267,7 @@ export function GameApp() {
 												state={state}
 												show={() => show() && shown()}
 												onCallWave={() => baseMessaging.server.emit(BaseMessage.CallWave)}
+												canCall={() => unlockedAtom("callWave")}
 											/>,
 											EXIT_TIME,
 										)
@@ -346,6 +356,29 @@ export function GameApp() {
 				<ScreenEffect />
 			</screengui>
 
+			{/* Over the effects, and under the travel overlay. */}
+			<screengui Name="Tutorial" DisplayOrder={8} Enabled={visible} IgnoreGuiInset={true} ResetOnSpawn={false}>
+				<Show when={hint}>
+					{(current, show) =>
+						$tuple(
+							<>
+								<TutorialPanel
+									step={() => current().step}
+									steps={TUTORIAL_STEPS.size()}
+									title={() => current().title}
+									text={() => current().text}
+									progress={() => current().progress}
+									onSkip={() => tutorialMessaging.server.emit(TutorialMessage.Skip)}
+									show={show}
+								/>
+								<TutorialArrow gui={() => current().gui} world={() => current().world} show={show} />
+							</>,
+							EXIT_TIME,
+						)
+					}
+				</Show>
+			</screengui>
+
 			{/* Over everything, the HUD toggle included: it hides the next planet generating. */}
 			<screengui Name="TravelOverlay" DisplayOrder={20} IgnoreGuiInset={true} ResetOnSpawn={false}>
 				<Show
@@ -381,6 +414,13 @@ export function GameApp() {
 					)}
 				</Show>
 			</screengui>
+
+			{/* An outline in the world, so it is not UI either, but it follows the HUD toggle. */}
+			<Show when={() => (visible() ? hint() : undefined)}>
+				{(current, show) =>
+					$tuple(<TutorialHighlight target={() => (show() ? current().world : undefined)} />, EXIT_TIME)
+				}
+			</Show>
 
 			{/* The 3D map is not UI, so the HUD toggle leaves it be. */}
 			<Show when={browsing}>

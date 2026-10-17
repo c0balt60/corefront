@@ -138,6 +138,8 @@ interface MissionProps {
 
 interface WavePanelProps extends MissionProps {
 	readonly onCallWave: () => void;
+	/** Whether the player may call a wave early. The button is hidden while it's false. Always, if left out. */
+	readonly canCall?: () => boolean;
 }
 
 /**
@@ -145,7 +147,7 @@ interface WavePanelProps extends MissionProps {
  * many aliens are alive, and a button to launch the next wave now while one is
  * left. Slides in from the right.
  */
-export function WavePanel({ state, show, onCallWave }: WavePanelProps) {
+export function WavePanel({ state, show, onCallWave, canCall }: WavePanelProps) {
 	const slide = useAppear(show, 0.1);
 	const now = useServerTime();
 	const status = () => {
@@ -192,7 +194,7 @@ export function WavePanel({ state, show, onCallWave }: WavePanelProps) {
 				text={() => tostring(state().aliens)}
 				textSize={16}
 			/>
-			<Show when={() => state().phase === "active" && state().wave < state().waves}>
+			<Show when={() => state().phase === "active" && state().wave < state().waves && (canCall?.() ?? true)}>
 				{() => (
 					<Button
 						anchorPoint={new Vector2(0, 1)}

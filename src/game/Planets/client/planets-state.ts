@@ -19,3 +19,6 @@ export const selectedPlanetAtom = atom(0);
 
 /** Index of the planet under the cursor on the star map, if any. */
 export const hoveredPlanetAtom = atom<number>();
+
+/** The Star Map button in the top bar, once `PlanetsController` has made it. */
+export const starMapIconAtom = atom<GuiObject>();

@@ -5,7 +5,7 @@ import { useSpring } from "@rbxts/vide-ripple";
 import { Brackets, EnergyGradient } from "core/Interface/client/components/hud";
 import { Shadow } from "core/Interface/client/components/shadow";
 import { useAppear, useScramble, useSpin } from "core/Interface/client/motion";
-import { COLORS, FONT_DISPLAY, FONT_LABEL, SPRINGS } from "core/Interface/client/theme";
+import { COLORS, FONT_DISPLAY, FONT_LABEL, LEVEL_COLORS, SPRINGS } from "core/Interface/client/theme";
 import { generateStarSystem, type Planet } from "core/Worlds/shared/star-system";
 import type { WorldState } from "game/Planets/shared/planets-network";
 
@@ -108,6 +108,10 @@ interface PlanetLabelProps {
 	readonly index: number;
 	readonly body: Part;
 	readonly unlocked: () => boolean;
+	/** Whether the team has liberated this planet. */
+	readonly liberated: () => boolean;
+	/** Whether the team is on this planet now. */
+	readonly active: () => boolean;
 	readonly selected: () => boolean;
 	/** Whether the cursor is over the planet itself, not just the label. */
 	readonly pointed: () => boolean;
@@ -117,17 +121,31 @@ interface PlanetLabelProps {
 }
 
 /**
- * The clickable name over one planet, on a small chip with energy running
- * round its outline. The name decodes as the planet pops in. Unlocked planets
- * are bigger and white, locked ones dim and tagged. Hovering the chip or the
- * planet grows the chip and lights it, and the selected planet's turns accent
- * and pops.
+ * The clickable tag over one planet: a chip with its name, its kind and a
+ * difficulty rating in pips, and a status line, joined to the planet by a stem.
+ * The chip's bottom edge sits just above the planet at any zoom, and the whole
+ * chip is the click target. The name decodes as the planet pops in. Unlocked
+ * planets are bigger and white, locked ones dim. Hovering the chip or the
+ * planet grows it and lights it, and the selected planet's turns accent and pops.
  */
-function PlanetLabel({ planet, index, body, unlocked, selected, pointed, reveal, onSelect }: PlanetLabelProps) {
+function PlanetLabel({
+	planet,
+	index,
+	body,
+	unlocked,
+	liberated,
+	active,
+	selected,
+	pointed,
+	reveal,
+	onSelect,
+}: PlanetLabelProps) {
 	const hovered = source(false);
-	const active = () => hovered() || pointed();
+	const lit = () => hovered() || pointed();
 	const color = () => (selected() ? COLORS.accent : unlocked() ? COLORS.text : COLORS.subtext);
 	const name = useScramble("chip", () => planet.name, 0.3 + index * 0.08, 0.5);
+	const status = () => (active() ? "YOU ARE HERE" : liberated() ? "LIBERATED" : unlocked() ? "AVAILABLE" : "LOCKED");
+	const statusColor = () => (active() || liberated() ? COLORS.confirm : unlocked() ? COLORS.muted : COLORS.subtext);
 
 	const [lift, liftSpring] = useSpring(0, SPRINGS.responsive);
 	const [scale, scaleSpring] = useSpring(1, SPRINGS.bouncy);
@@ -136,8 +154,8 @@ function PlanetLabel({ planet, index, body, unlocked, selected, pointed, reveal,
 	const [rank, rankSpring] = useSpring(unlocked() ? 1 : 0, SPRINGS.smooth);
 
 	effect(() => {
-		liftSpring.setGoal(active() ? 1 : selected() ? 0.5 : 0);
-		scaleSpring.setGoal(active() ? 1.12 : 1);
+		liftSpring.setGoal(lit() ? 1 : selected() ? 0.5 : 0);
+		scaleSpring.setGoal(lit() ? 1.12 : 1);
 		tintSpring.setGoal(color());
 		rankSpring.setGoal(unlocked() ? 1 : 0);
 	});
@@ -147,72 +165,129 @@ function PlanetLabel({ planet, index, body, unlocked, selected, pointed, reveal,
 
 	return (
 		<billboardgui
+			Active={true}
 			Adornee={body}
 			AlwaysOnTop={true}
 			LightInfluence={0}
 			Name={planet.name}
-			Size={UDim2.fromOffset(200, 40)}
-			StudsOffset={new Vector3(0, planet.size / 2 + 3, 0)}
+			Size={UDim2.fromOffset(190, 78)}
+			SizeOffset={new Vector2(0, 0.5)}
+			StudsOffset={new Vector3(0, planet.size / 2 + 1, 0)}
 		>
 			<frame
-				AnchorPoint={new Vector2(0.5, 0.5)}
+				AnchorPoint={new Vector2(0.5, 1)}
 				BackgroundTransparency={1}
-				Position={UDim2.fromScale(0.5, 0.5)}
-				Size={() => UDim2.fromScale(0.7 + 0.3 * rank(), 0.8 + 0.2 * rank())}
+				Position={UDim2.fromScale(0.5, 1)}
+				Size={() => UDim2.fromScale(0.8 + 0.2 * rank(), 1)}
 			>
 				<uiscale Scale={scale} />
-				<Shadow
-					lift={lift}
-					glow={COLORS.accent}
-					scale={0.5}
-					visibility={() => reveal() * (0.4 + 0.6 * rank())}
+				{/* The stem, from the chip down to the planet. */}
+				<frame
+					AnchorPoint={new Vector2(0.5, 1)}
+					BackgroundColor3={tint}
+					BackgroundTransparency={() => 1 - 0.7 * reveal()}
+					BorderSizePixel={0}
+					Position={UDim2.fromScale(0.5, 1)}
+					Size={new UDim2(0, 2, 0.14, 0)}
 				/>
-				<textbutton
-					AutoButtonColor={false}
-					BackgroundColor3={COLORS.card}
-					BackgroundTransparency={() => 1 - (0.3 + 0.25 * rank()) * reveal()}
-					FontFace={FONT_DISPLAY}
-					Size={UDim2.fromScale(1, 1)}
-					Text={name}
-					TextColor3={tint}
-					TextScaled={true}
-					TextTransparency={() => 1 - reveal()}
-					ZIndex={1}
-					MouseEnter={() => hovered(true)}
-					MouseLeave={() => hovered(false)}
-					Activated={onSelect}
-				>
-					<uicorner CornerRadius={new UDim(0.3, 0)} />
-					<uipadding
-						PaddingBottom={new UDim(0.2, 0)}
-						PaddingLeft={new UDim(0.08, 0)}
-						PaddingRight={new UDim(0.08, 0)}
-						PaddingTop={new UDim(0.2, 0)}
+				<frame BackgroundTransparency={1} Size={UDim2.fromScale(1, 0.86)}>
+					<Shadow
+						lift={lift}
+						glow={COLORS.accent}
+						scale={0.5}
+						visibility={() => reveal() * (0.4 + 0.6 * rank())}
 					/>
-					<uistroke
-						ApplyStrokeMode={Enum.ApplyStrokeMode.Border}
-						Color={COLORS.text}
-						Thickness={1.5}
-						Transparency={() => 1 - reveal()}
+					<textbutton
+						AutoButtonColor={false}
+						BackgroundColor3={COLORS.card}
+						BackgroundTransparency={() => 1 - (0.3 + 0.25 * rank()) * reveal()}
+						Size={UDim2.fromScale(1, 1)}
+						Text=""
+						ZIndex={1}
+						MouseEnter={() => hovered(true)}
+						MouseLeave={() => hovered(false)}
+						Activated={onSelect}
 					>
-						<EnergyGradient
-							kind="chip"
-							base={() => COLORS.stroke.Lerp(COLORS.accent, math.clamp(lift(), 0, 1) * 0.8)}
-							charge={lift}
+						<uicorner CornerRadius={new UDim(0.18, 0)} />
+						<uipadding
+							PaddingBottom={new UDim(0.08, 0)}
+							PaddingLeft={new UDim(0.06, 0)}
+							PaddingRight={new UDim(0.06, 0)}
+							PaddingTop={new UDim(0.08, 0)}
 						/>
-					</uistroke>
-				</textbutton>
-				<textlabel
-					AnchorPoint={new Vector2(0.5, 0)}
-					BackgroundTransparency={1}
-					FontFace={FONT_LABEL}
-					Position={new UDim2(0.5, 0, 1, 3)}
-					Size={UDim2.fromScale(0.5, 0.38)}
-					Text="LOCKED"
-					TextColor3={COLORS.subtext}
-					TextScaled={true}
-					TextTransparency={() => 1 - reveal() * (1 - rank())}
-				/>
+						<uistroke
+							ApplyStrokeMode={Enum.ApplyStrokeMode.Border}
+							Color={COLORS.text}
+							Thickness={1.5}
+							Transparency={() => 1 - reveal()}
+						>
+							<EnergyGradient
+								kind="chip"
+								base={() => COLORS.stroke.Lerp(COLORS.accent, math.clamp(lift(), 0, 1) * 0.8)}
+								charge={lift}
+							/>
+						</uistroke>
+						<textlabel
+							BackgroundTransparency={1}
+							FontFace={FONT_DISPLAY}
+							Size={UDim2.fromScale(1, 0.44)}
+							Text={name}
+							TextColor3={tint}
+							TextScaled={true}
+							TextTransparency={() => 1 - reveal()}
+						>
+							<uitextsizeconstraint MaxTextSize={22} />
+						</textlabel>
+						<textlabel
+							BackgroundTransparency={1}
+							FontFace={FONT_LABEL}
+							Position={UDim2.fromScale(0, 0.48)}
+							Size={UDim2.fromScale(0.55, 0.24)}
+							Text={planet.kind.upper()}
+							TextColor3={COLORS.muted}
+							TextScaled={true}
+							TextTransparency={() => 1 - reveal()}
+							TextXAlignment={Enum.TextXAlignment.Left}
+						>
+							<uitextsizeconstraint MaxTextSize={13} />
+						</textlabel>
+						{/* Difficulty pips, lit up to the planet's level in the planet panel's colours. */}
+						<frame
+							AnchorPoint={new Vector2(1, 0)}
+							BackgroundTransparency={1}
+							Position={UDim2.fromScale(1, 0.52)}
+							Size={UDim2.fromScale(0.4, 0.18)}
+						>
+							<uilistlayout
+								FillDirection={Enum.FillDirection.Horizontal}
+								HorizontalAlignment={Enum.HorizontalAlignment.Right}
+								Padding={new UDim(0, 3)}
+								VerticalAlignment={Enum.VerticalAlignment.Center}
+							/>
+							{LEVEL_COLORS.map((pip, level) => (
+								<frame
+									BackgroundColor3={level <= planet.difficulty ? pip : COLORS.stroke}
+									BackgroundTransparency={() => 1 - (level <= planet.difficulty ? 1 : 0.5) * reveal()}
+									BorderSizePixel={0}
+									Size={new UDim2(0, 7, 1, 0)}
+								/>
+							))}
+						</frame>
+						<textlabel
+							BackgroundTransparency={1}
+							FontFace={FONT_LABEL}
+							Position={UDim2.fromScale(0, 0.76)}
+							Size={UDim2.fromScale(1, 0.24)}
+							Text={status}
+							TextColor3={statusColor}
+							TextScaled={true}
+							TextTransparency={() => 1 - reveal()}
+							TextXAlignment={Enum.TextXAlignment.Left}
+						>
+							<uitextsizeconstraint MaxTextSize={12} />
+						</textlabel>
+					</textbutton>
+				</frame>
 			</frame>
 		</billboardgui>
 	);
@@ -448,6 +523,8 @@ export function StarMap({
 						index={index}
 						body={bodies[index]}
 						unlocked={() => world().unlocked.includes(index)}
+						liberated={() => world().conquered.includes(index)}
+						active={() => world().active === index}
 						selected={() => selected() === index}
 						pointed={() => hovered() === index}
 						reveal={() => math.clamp(reveals[index](), 0, 1)}

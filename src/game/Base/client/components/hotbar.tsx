@@ -29,6 +29,7 @@ function Slot({ tool, slot, equipped, onClick }: SlotProps) {
 
 	return (
 		<textbutton
+			Name={() => `Slot_${tool().Name}`}
 			AutoButtonColor={false}
 			BackgroundColor3={() => COLORS.card.Lerp(COLORS.cardHover, glow())}
 			BackgroundTransparency={CARD_TRANSPARENCY}

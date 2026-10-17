@@ -1,5 +1,5 @@
 import { Controller, OnStart } from "@flamework/core";
-import { Players, UserInputService, Workspace } from "@rbxts/services";
+import { Players, TweenService, UserInputService, Workspace } from "@rbxts/services";
 
 import { BaseMessage, baseMessaging } from "game/Base/shared/base-network";
 import { levelsAtom } from "game/Research/client/research-state";
@@ -9,6 +9,12 @@ import { statValue } from "game/Research/shared/research";
 const FIRE_SLACK = 0.02;
 /** How far the Blaster aims, in studs. Past anything, it aims at the end of this. */
 const AIM_RANGE = 300;
+
+/** How far the gun jerks back in the hand on a shot, in studs, and how far it tips up, in degrees. */
+const KICK_BACK = 0.25;
+const KICK_TIP = 6;
+/** The longest a kick takes to settle, in seconds. It settles in under the cooldown, so each shot kicks from rest. */
+const KICK_SECONDS = 0.12;
 
 /** Where the mouse points: the first thing under it that isn't the character, or `AIM_RANGE` along its ray. */
 function aim(character: Model) {
@@ -53,11 +59,27 @@ export class BlasterController implements OnStart {
 		this.hooked.add(tool);
 		tool.Destroying.Connect(() => this.hooked.delete(tool));
 
+		const rest = tool.Grip;
+		let settle: Tween | undefined;
+		/** Jerks the gun back and lets it ease home before the next shot. */
+		const kick = (seconds: number) => {
+			settle?.Cancel();
+			tool.Grip = rest.mul(new CFrame(0, 0, -KICK_BACK)).mul(CFrame.Angles(math.rad(KICK_TIP), 0, 0));
+			settle = TweenService.Create(tool, new TweenInfo(math.min(seconds, KICK_SECONDS), Enum.EasingStyle.Quad), {
+				Grip: rest,
+			});
+			settle.Play();
+		};
+
 		let held = false;
 		let firing = false;
 		const release = () => {
 			held = false;
 		};
+		tool.Unequipped.Connect(() => {
+			settle?.Cancel();
+			tool.Grip = rest;
+		});
 		tool.Deactivated.Connect(release);
 		tool.Unequipped.Connect(release);
 		tool.Activated.Connect(() => {
@@ -68,8 +90,12 @@ export class BlasterController implements OnStart {
 			task.spawn(() => {
 				while (held && tool.Parent === character) {
 					const target = aim(character);
-					if (target) baseMessaging.server.emit(BaseMessage.Fire, { target });
-					task.wait(statValue(levelsAtom(), "blasterCooldown") + FIRE_SLACK);
+					const cooldown = statValue(levelsAtom(), "blasterCooldown");
+					if (target) {
+						baseMessaging.server.emit(BaseMessage.Fire, { target });
+						kick(cooldown * 0.8);
+					}
+					task.wait(cooldown + FIRE_SLACK);
 				}
 				firing = false;
 			});
