@@ -1,4 +1,4 @@
-import Vide, { Show } from "@rbxts/vide";
+import Vide, { Show, source } from "@rbxts/vide";
 import { useAtom } from "@rbxts/vide-charm";
 
 import { EXIT_TIME } from "core/Interface/client/motion";
@@ -7,8 +7,9 @@ import { MainMenu } from "lobby/Menu/client/components/main-menu";
 import { menuOpenAtom, menuPageAtom } from "lobby/Menu/client/menu-state";
 import { CreatePage } from "lobby/Servers/client/components/create-page";
 import { JoinPage } from "lobby/Servers/client/components/join-page";
+import { SavesPage } from "lobby/Servers/client/components/saves-page";
 import { StatusOverlay } from "lobby/Servers/client/components/status-overlay";
-import { statusAtom, worldsAtom } from "lobby/Servers/client/servers-state";
+import { savesAtom, statusAtom, worldsAtom } from "lobby/Servers/client/servers-state";
 import { ServersMessage, serversMessaging } from "lobby/Servers/shared/servers-network";
 
 /**
@@ -16,7 +17,7 @@ import { ServersMessage, serversMessaging } from "lobby/Servers/shared/servers-n
  * the shared HUD and loading screen. This is where lobby features' components
  * are wired to their atoms and messages. It sits above the HUD (DisplayOrder 10)
  * and below the loading screen, and the menu inside covers the whole screen.
- * The menu and its Create and Join pages stay mounted for `EXIT_TIME` after they
+ * The menu and its Saves, Create and Join pages stay mounted for `EXIT_TIME` after they
  * are closed, so their exit animations can play.
  */
 export function LobbyApp() {
@@ -24,7 +25,10 @@ export function LobbyApp() {
 	const open = useAtom(menuOpenAtom);
 	const page = useAtom(menuPageAtom);
 	const worlds = useAtom(worldsAtom);
+	const saves = useAtom(savesAtom);
 	const status = useAtom(statusAtom);
+	// The empty slot the Create page fills.
+	const slot = source(1);
 
 	return (
 		<screengui Name="LobbyApp" DisplayOrder={10} Enabled={visible} IgnoreGuiInset={true} ResetOnSpawn={false}>
@@ -32,18 +36,45 @@ export function LobbyApp() {
 				{(_, menuShown) =>
 					$tuple(
 						<MainMenu page={page} onPage={(target) => menuPageAtom(target)} show={menuShown}>
+							<Show when={() => page() === "saves"}>
+								{(_, pageShown) =>
+									$tuple(
+										<SavesPage
+											saves={saves}
+											onLoad={(target) => {
+												statusAtom({ kind: "busy", text: "Loading your world..." });
+												serversMessaging.server.emit(ServersMessage.Load, { slot: target });
+											}}
+											onCreate={(target) => {
+												slot(target);
+												menuPageAtom("create");
+											}}
+											onDelete={(target) => {
+												statusAtom({ kind: "busy", text: "Deleting save..." });
+												serversMessaging.server.emit(ServersMessage.Delete, { slot: target });
+											}}
+											onRefresh={() => serversMessaging.server.emit(ServersMessage.RequestSaves)}
+											onReturn={() => menuPageAtom("deploy")}
+											show={pageShown}
+										/>,
+										EXIT_TIME,
+									)
+								}
+							</Show>
 							<Show when={() => page() === "create"}>
 								{(_, pageShown) =>
 									$tuple(
 										<CreatePage
-											onCreate={(seed, isPrivate) => {
+											slot={slot()}
+											onCreate={(settings, isPrivate) => {
 												statusAtom({ kind: "busy", text: "Creating your world..." });
 												serversMessaging.server.emit(ServersMessage.Create, {
-													seed,
+													slot: slot(),
+													settings,
 													isPrivate,
 												});
 											}}
-											onReturn={() => menuPageAtom("deploy")}
+											onReturn={() => menuPageAtom("saves")}
 											show={pageShown}
 										/>,
 										EXIT_TIME,

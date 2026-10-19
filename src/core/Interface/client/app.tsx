@@ -3,10 +3,9 @@ import Vide, { cleanup, Show, source } from "@rbxts/vide";
 import { useAtom } from "@rbxts/vide-charm";
 
 import { playerDataAtom } from "core/Data/client/data-state";
-import { CoinCounter } from "core/Interface/client/components/coin-counter";
 import { LoadingScreen } from "core/Interface/client/components/loading-screen";
 import { IMAGES } from "core/Interface/client/theme";
-import { hudVisibleAtom, loadedAtom } from "core/Interface/client/ui-state";
+import { loadedAtom } from "core/Interface/client/ui-state";
 
 /** The loading screen stays at least this long, so the tips can be read and the bar does not jump. */
 const MIN_LOADING_SECONDS = 2;
@@ -18,7 +17,6 @@ const MIN_LOADING_SECONDS = 2;
  */
 export function App() {
 	const data = useAtom(playerDataAtom);
-	const visible = useAtom(hudVisibleAtom);
 	const loaded = useAtom(loadedAtom);
 
 	// Loading means every UI image preloaded, the player's data arrived and the minimum time passed.
@@ -44,10 +42,6 @@ export function App() {
 
 	return (
 		<>
-			<screengui Name="App" Enabled={visible} ResetOnSpawn={false}>
-				<CoinCounter coins={() => data()?.coins ?? 0} />
-			</screengui>
-
 			{/* Places spawn characters only after data loads, so this covers the wait. */}
 			<screengui
 				Name="Loading"

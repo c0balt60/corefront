@@ -4,6 +4,7 @@
 	"description": "Multi-place Roblox game template: roblox-ts + Rogen feature folders + Flamework",
 	"private": true,
 	"packageManager": "pnpm@10.18.3",
+	"type": "module",
 	"scripts": {
 		"build": "node scripts/place.mjs build",
 		"watch": "node scripts/place.mjs watch",

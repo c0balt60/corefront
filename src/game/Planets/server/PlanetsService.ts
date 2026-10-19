@@ -1,28 +1,58 @@
 import { OnStart, Service } from "@flamework/core";
-import { subscribe } from "@rbxts/charm";
+import { atom, computed, subscribe } from "@rbxts/charm";
 import type { Logger } from "@rbxts/log";
 import { Players } from "@rbxts/services";
 import { t } from "@rbxts/t";
 
+import { generateStarSystem, type Mission, type Planet } from "core/Worlds/shared/star-system";
 import { ArrivalService } from "game/Arrival/server/ArrivalService";
-import { PlanetsMessage, planetsMessaging, type WorldState } from "game/Planets/shared/planets-network";
+import {
+	type LaunchPlan,
+	MIN_GENERATING_SECONDS,
+	PlanetsMessage,
+	planetsMessaging,
+	type Travel,
+	type WorldState,
+} from "game/Planets/shared/planets-network";
+import type { PlanetMap } from "game/Terrain/server/planet-map";
+import { TerrainService } from "game/Terrain/server/TerrainService";
 
 const isDeployData = t.interface({ planet: t.integer });
 
+/** Players appear this far from the landing, so never inside the Core, and this high above the ground. */
+const SPAWN_RADIUS = 14;
+const SPAWN_HEIGHT = 5;
+
 /**
- * Tells players about the world and spawns them on a planet when they deploy.
- * `CharacterAutoLoads` is off in this place (see `places/game/.rogen.json`), so a
- * player only gets a character once they pick a planet, and respawns from here.
+ * The world's campaign. One planet is active at a time: the team is there, and
+ * players who haven't deployed yet may only deploy there. Characters spawn and
+ * respawn at its landing. Winning it conquers it and unlocks the next; the team
+ * stays until `TravelService` moves it. `CharacterAutoLoads` is off in this place
+ * (see `places/game/.rogen.json`), so characters only ever come from here.
  */
 @Service()
 export class PlanetsService implements OnStart {
-	// TODO: unlock a planet once the world conquers it, then send everyone the new state.
+	/** The planet the team is on. Only this service writes it. */
+	readonly activeAtom = atom<number>();
+	/** The active planet's map, once generated. Each new one is a fresh planet. */
+	readonly currentMap = computed(() => {
+		const map = this.terrainService.mapAtom();
+		return map && map.planet === this.activeAtom() ? map : undefined;
+	});
+	/** The team between planets. `TravelService` writes it. */
+	readonly travelAtom = atom<Travel>();
+	/** The launch waiting on ready-ups. `TravelService` writes it; `needed` is filled in here. */
+	readonly planAtom = atom<Omit<LaunchPlan, "needed">>();
 	private readonly unlocked = [0];
+	private readonly conquered = new Array<number>();
 	private readonly deployed = new Set<Player>();
+	/** Missions forced by admins, by planet index. Not saved. */
+	private readonly missions = new Map<number, Mission>();
 
 	constructor(
 		private readonly logger: Logger,
 		private readonly arrivalService: ArrivalService,
+		private readonly terrainService: TerrainService,
 	) {}
 
 	onStart() {
@@ -32,38 +62,173 @@ export class PlanetsService implements OnStart {
 		});
 		planetsMessaging.server.on(PlanetsMessage.Deploy, (player, data) => this.deploy(player, data));
 
-		// Clients that asked before the world was known get it the moment it is.
-		subscribe(this.arrivalService.worldAtom, () => {
-			const state = this.getState();
-			if (state) planetsMessaging.client.emitAll(PlanetsMessage.State, state);
+		// `SaveService` starts the campaign once the world is known: on its first planet, or where its save left off.
+
+		// A regenerated map moves the landing: bring everyone standing on the old one to the new.
+		subscribe(this.currentMap, (map) => {
+			if (!map) return;
+			for (const player of this.deployed) {
+				const character = player.Character;
+				const humanoid = character?.FindFirstChildOfClass("Humanoid");
+				if (character && humanoid && humanoid.Health > 0) this.pivot(character, map);
+			}
 		});
 
-		Players.PlayerRemoving.Connect((player) => this.deployed.delete(player));
+		// Characters stand still, anchored, from lift-off until the core has landed.
+		subscribe(
+			() => this.travelAtom() !== undefined,
+			(travelling) => {
+				for (const player of this.deployed) if (player.Character) this.hold(player.Character, travelling);
+			},
+		);
+		subscribe(this.travelAtom, () => this.broadcast());
+		subscribe(this.planAtom, () => this.broadcast());
+
+		Players.PlayerRemoving.Connect((player) => {
+			this.deployed.delete(player);
+			this.broadcast();
+		});
+	}
+
+	/** A planet of this world's star system, once the world is known. */
+	getPlanet(index: number): Planet | undefined {
+		return this.getPlanets()[index];
+	}
+
+	getPlanets(): ReadonlyArray<Planet> {
+		const world = this.arrivalService.getWorld();
+		return world ? generateStarSystem(world).planets : [];
+	}
+
+	/** The mission planet `index` plays: a forced one if set, else the one it rolled. */
+	missionOf(index: number): Mission {
+		return this.missions.get(index) ?? this.getPlanet(index)?.mission ?? "defend";
+	}
+
+	/** Plays planet `index` as `mission` from its next landing (Studio testing). Not saved. */
+	forceMission(index: number, mission: Mission) {
+		this.missions.set(index, mission);
+	}
+
+	isConquered(planet: number): boolean {
+		return this.conquered.includes(planet);
+	}
+
+	getConquered(): ReadonlyArray<number> {
+		return this.conquered;
+	}
+
+	isUnlocked(planet: number): boolean {
+		return this.unlocked.includes(planet);
+	}
+
+	getUnlocked(): ReadonlyArray<number> {
+		return this.unlocked;
+	}
+
+	/** Puts a saved campaign's planets back. Call it before the first `activate`. */
+	restore(unlocked: ReadonlyArray<number>, conquered: ReadonlyArray<number>) {
+		this.unlocked.clear();
+		this.conquered.clear();
+		for (const planet of unlocked) if (this.getPlanet(planet)) this.unlocked.push(planet);
+		for (const planet of conquered) if (this.getPlanet(planet)) this.conquered.push(planet);
+		if (!this.unlocked.includes(0)) this.unlocked.push(0);
+	}
+
+	isDeployed(player: Player): boolean {
+		return this.deployed.has(player);
+	}
+
+	/** UserIds of everyone on the planet, who must all ready up for a launch. */
+	getDeployedIds(): Array<number> {
+		return [...this.deployed].map((player) => player.UserId);
+	}
+
+	/** Marks the active planet conquered and unlocks the next one. The team stays. */
+	conquer() {
+		const planet = this.activeAtom();
+		if (planet === undefined) return;
+		if (!this.conquered.includes(planet)) this.conquered.push(planet);
+		if (this.getPlanet(planet + 1) && !this.unlocked.includes(planet + 1)) this.unlocked.push(planet + 1);
+		this.broadcast();
+		this.logger.Info("Planet {Planet} conquered", planet);
+	}
+
+	/** Makes `planet` the active one and (re)generates its terrain, even if it already was. Deployed players come along. */
+	activate(planet: number) {
+		this.activeAtom(planet);
+		// Deferred, so generation never runs inside a Charm callback or before every service has started.
+		task.defer(() => this.terrainService.generate(planet, this.missionOf(planet)));
+		this.broadcast();
+		this.logger.Info("Planet {Planet} is now active", planet);
 	}
 
 	private getState(): WorldState | undefined {
 		const world = this.arrivalService.getWorld();
-		return world && { ...world, unlocked: [...this.unlocked] };
+		const plan = this.planAtom();
+		return (
+			world && {
+				...world,
+				unlocked: [...this.unlocked],
+				conquered: [...this.conquered],
+				active: this.activeAtom(),
+				travel: this.travelAtom(),
+				plan: plan && { ...plan, needed: this.getDeployedIds() },
+			}
+		);
+	}
+
+	private broadcast() {
+		const state = this.getState();
+		if (state) planetsMessaging.client.emitAll(PlanetsMessage.State, state);
 	}
 
 	private deploy(player: Player, data: unknown) {
 		if (!this.arrivalService.isArrived(player) || this.deployed.has(player)) return;
-		if (!isDeployData(data) || !this.unlocked.includes(data.planet)) return;
+		if (!isDeployData(data) || data.planet !== this.activeAtom()) return;
 
 		this.deployed.add(player);
+		this.broadcast();
 		this.logger.Info("{Player} deployed to planet {Planet}", player.Name, data.planet);
+		task.spawn(() => {
+			// Onto a planet still generating: the client's overlay stays up a while however quick that is.
+			if (!this.currentMap()) task.wait(MIN_GENERATING_SECONDS);
+			this.spawn(player);
+		});
+	}
 
-		player.CharacterAdded.Connect((character) => {
-			const humanoid = character.WaitForChild("Humanoid") as Humanoid;
-			humanoid.Died.Connect(() => {
-				task.delay(Players.RespawnTime, () => {
-					if (player.Parent === Players) player.LoadCharacter();
-				});
+	/** Waits for the map, then loads the player's character at the landing. They respawn there after dying. */
+	private spawn(player: Player) {
+		// ponytail: polls for the map; a Charm subscription if spawns ever need to be instant.
+		while (this.deployed.has(player) && !this.currentMap()) task.wait(0.25);
+		if (!this.deployed.has(player)) return;
+
+		player.LoadCharacter();
+		const character = player.Character;
+		const humanoid = character?.FindFirstChildOfClass("Humanoid");
+		if (!character || !humanoid) return;
+		// LoadCharacter yields, and the map may have gone meanwhile. The new one re-pivots everyone.
+		const map = this.currentMap();
+		if (map) this.pivot(character, map);
+		if (this.travelAtom()) this.hold(character, true);
+
+		humanoid.Died.Connect(() => {
+			task.delay(Players.RespawnTime, () => {
+				if (player.Character === character && this.deployed.has(player)) this.spawn(player);
 			});
 		});
+	}
 
-		// TODO: generate the planet's terrain with terrain-generator from `planets[data.planet].terrainSeed`
-		// (`generateStarSystem(world.seed)`) and spawn the player there. For now: the place's SpawnLocation.
-		task.spawn(() => player.LoadCharacter());
+	private hold(character: Model, held: boolean) {
+		const root = character.FindFirstChild("HumanoidRootPart");
+		if (root?.IsA("BasePart")) root.Anchored = held;
+	}
+
+	private pivot(character: Model, map: PlanetMap) {
+		const angle = math.random() * 2 * math.pi;
+		const x = map.landing.X + math.cos(angle) * SPAWN_RADIUS;
+		const z = map.landing.Z + math.sin(angle) * SPAWN_RADIUS;
+		const position = new Vector3(x, map.heightAt(x, z) + SPAWN_HEIGHT, z);
+		character.PivotTo(CFrame.lookAt(position, new Vector3(map.landing.X, position.Y, map.landing.Z)));
 	}
 }

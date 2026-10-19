@@ -44,11 +44,16 @@ export function useAppear(show: () => boolean = () => true, delay = 0, options =
 /**
  * An angle in degrees that turns every frame at `speed()` degrees per second.
  * The speed can change at any time without the angle jumping. Drives the
- * rotation of energy borders.
+ * rotation of energy borders. While `active()` is false it holds still, so
+ * nothing bound to it updates.
  */
-export function useSpin(speed: () => number): () => number {
+export function useSpin(speed: () => number, active: () => boolean = () => true): () => number {
 	const angle = source(math.random(0, 359));
-	cleanup(RunService.RenderStepped.Connect((dt) => angle((angle() + dt * speed()) % 360)));
+	cleanup(
+		RunService.RenderStepped.Connect((dt) => {
+			if (active()) angle((angle() + dt * speed()) % 360);
+		}),
+	);
 	return angle;
 }
 
@@ -79,9 +84,13 @@ export function useScramble(kind: UiKind, text: () => string, delay = 0, duratio
 
 	const output = source(delay > 0 ? "" : scramble(untrack(text), 0));
 	let thread: thread | undefined;
+	let last: string | undefined;
 
 	effect(() => {
 		const target = text();
+		// Its sources can fire with the same text (a fresh state object, say): only new text decodes again.
+		if (target === last) return;
+		last = target;
 		if (thread) task.cancel(thread);
 
 		thread = task.defer(() => {

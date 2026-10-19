@@ -4,10 +4,10 @@ A feature is one folder that holds everything for one piece of the game: its ser
 
 ## 1. Pick where it lives
 
-| Use                     | When                                                                     |
-| ----------------------- | ------------------------------------------------------------------------ |
-| `src/core/<Feature>`    | Every place needs it, for example data, admin or character.              |
-| `src/<place>/<Feature>` | Only one place needs it, for example the lobby queue or the match round. |
+| Use                     | When                                                                              |
+| ----------------------- | --------------------------------------------------------------------------------- |
+| `src/core/<Feature>`    | Every place needs it, for example data, admin or character.                       |
+| `src/<place>/<Feature>` | Only one place needs it, for example the lobby world browser or the game's waves. |
 
 A place may import from `core` and from itself, never from another place. The editor won't stop you, because it sees all of `src`, but that place's build will fail.
 
@@ -100,8 +100,8 @@ export interface ShopMessageData {
 
 - Ids must be unique among everything loaded in one place. That means core's messages plus that place's messages.
 - Core's `Message` enum in `core/shared/network.ts` uses the low numbers. A core feature can add its messages there.
-- Place features start at 100. Give each emitter its own block of ids. The lobby's `Queue` uses 100 to 103, so the example `Shop` starts at 110.
-- The lobby and the match never run together, so their ids may overlap.
+- Place features start at 100. Give each emitter its own block of ids. The lobby's `Servers` uses 100 to 104, so the example `Shop` starts at 110.
+- The lobby and the game never run together, so their ids may overlap.
 
 **Sending:**
 
@@ -113,7 +113,7 @@ export interface ShopMessageData {
 
 **Receiving:** listen with `.server.on(...)` on the server and `.client.on(...)` on the client.
 
-**The Request/State pattern** is how features keep client state in sync. See `lobby/Queue` for a complete example.
+**The Request/State pattern** is how features keep client state in sync. See `game/Research` for a complete example.
 
 1. The server pushes `State` whenever the data changes.
 2. The controller listens for `State` and writes it into an atom.
@@ -128,10 +128,10 @@ Feature UI is made of plain Vide components. Only one controller per place mount
 1. **State:** create `client/<feature>-state.ts` with Charm atoms, such as `export const stockAtom = atom<ReadonlyArray<string>>([])`. Your controller writes to them.
 2. **Component:** create `client/components/<name>.tsx`. Pass in every value that changes as a source, and every action as a callback. Don't import atoms or emitters inside the component. That keeps it usable in a story.
 3. **Wire it up** in the place's app:
-    - For a place feature, render it in `lobby/LobbyUi/client/lobby-app.tsx` or `match/MatchUi/client/match-app.tsx`.
+    - For a place feature, render it in `lobby/LobbyUi/client/lobby-app.tsx` or `game/GameUi/client/game-app.tsx`.
     - For a core feature, render it in `core/Interface/client/app.tsx`.
     - In the app, read atoms with `useAtom` from `@rbxts/vide-charm`, and turn callbacks into emits.
-4. **Story:** add `<name>.story.tsx` next to the place's storybook, for example `lobby/LobbyUi/client/stories/`. Use UI Labs controls in place of real data. `mode-select.story.tsx` is a good model.
+4. **Story:** add `<name>.story.tsx` next to the place's storybook, for example `lobby/LobbyUi/client/stories/`. Use UI Labs controls in place of real data. `join-page.story.tsx` is a good model.
 
 Place apps already respect `hudVisibleAtom`, which the topbar HUD button toggles. Core's loading screen covers all UI until the player's data loads.
 

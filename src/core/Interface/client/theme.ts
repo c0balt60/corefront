@@ -8,6 +8,8 @@ export const IMAGES = {
 	/** The red low-poly backdrop behind the loading screen and menus. */
 	background: "rbxassetid://347818442",
 	vignette: "rbxassetid://6221578518",
+	/** One edge of a vignette, a plain white gradient, drawn on all four sides by `ScreenEffect`. */
+	edge: "rbxassetid://131708002708097",
 	/** A soft 9-slice drop shadow (a widely used public asset). Swap for your own upload if it disappears. */
 	shadow: "rbxassetid://6014261993",
 };
@@ -56,7 +58,7 @@ export const EFFECTS = {
 	field: ["energy", "brackets"],
 	/** Rows in the join list. */
 	row: ["energy", "brackets", "decode"],
-	/** Small tags: planet labels on the star map, the planet's status chip and the coin counter. */
+	/** Small tags: planet labels on the star map and the planet's status chip. */
 	chip: ["energy", "brackets", "scan", "decode"],
 	/** Headings, captions and values everywhere else. */
 	text: ["decode"],
@@ -66,6 +68,14 @@ export const EFFECTS = {
 	background: ["scan", "grid"],
 	/** The brackets locked onto the selected planet. */
 	reticle: ["brackets"],
+	/** The in-mission HUD: core status, wave, cargo, toasts and the build menu's tiles. */
+	hud: ["brackets", "decode"],
+	/** The research tree: energy round available nodes and pulses along the traces, and its glitching title. */
+	research: ["energy", "brackets", "decode", "glitch"],
+	/** The big won or lost banner across the screen. */
+	banner: ["brackets", "scan", "decode"],
+	/** Developer panels, like the terrain debug panel: plain, so they stay out of the way. */
+	debug: ["brackets"],
 } satisfies Record<string, readonly Effect[]>;
 
 export type UiKind = keyof typeof EFFECTS;

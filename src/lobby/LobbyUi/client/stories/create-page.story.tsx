@@ -9,7 +9,8 @@ const controls = {};
 export = CreateVideStory({ controls, vide: Vide }, () => (
 	<MainMenu page={() => "create"} onPage={(page) => print(`page ${page}`)}>
 		<CreatePage
-			onCreate={(seed, isPrivate) => print(`create seed ${seed}, private ${isPrivate}`)}
+			slot={1}
+			onCreate={(settings, isPrivate) => print("create", settings, `private ${isPrivate}`)}
 			onReturn={() => print("return")}
 		/>
 	</MainMenu>

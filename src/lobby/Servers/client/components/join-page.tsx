@@ -215,14 +215,15 @@ interface WorldRowProps {
 }
 
 /**
- * One public world: host, star, player count and a JOIN button that greys out when the world is full. The host,
+ * One public world: host, star (or SANDBOX), player count and a JOIN button that greys out when the world is full. The host,
  * star and count decode as the row rises, and again whenever one changes. Its height is a fraction of its width
  * (`RelativeXX`), so rows keep their shape whatever the list's height.
  * Hovering lifts it: it brightens, its shadow glows, brackets lock onto its corners and energy runs round its
  * outline. That energy is only mounted while the row is hovered, so a long list doesn't spin one per row.
  */
 function WorldRow({ world, order, delay, show, onJoin }: WorldRowProps) {
-	const star = derive(() => generateStarSystem(world().seed).star.upper());
+	// A sandbox shows as one, in place of its star.
+	const star = derive(() => (world().sandbox ? "SANDBOX" : generateStarSystem(world()).star.upper()));
 	const host = derive(() => world().hostName);
 	const players = derive(() => `${world().players}/${MAX_PLAYERS}`);
 	const hostText = useScramble("row", host, delay + 0.1, 0.4);
@@ -290,7 +291,7 @@ function WorldRow({ world, order, delay, show, onJoin }: WorldRowProps) {
 						Position={UDim2.fromScale(0.4, 0.5)}
 						Size={UDim2.fromScale(0.24, 0.5)}
 						Text={starText}
-						TextColor3={COLORS.muted}
+						TextColor3={() => (world().sandbox ? COLORS.accent : COLORS.muted)}
 						TextScaled={true}
 						TextXAlignment={Enum.TextXAlignment.Left}
 					/>

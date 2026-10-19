@@ -14,17 +14,20 @@ interface WorldHeaderProps {
 	readonly star: () => string;
 	readonly code: () => string;
 	readonly isPrivate: () => boolean;
+	/** Turns false to lift it away. Return `$tuple(node, EXIT_TIME)` from the Show that renders it. */
+	readonly show?: () => boolean;
 }
 
 /**
- * The world's star and its join code, top left. A private world is shared by
- * code alone, so its code stands out: the header glows with a slow pulse, the
- * code grows and turns accent, and the status dot blinks faster. A public one
- * can be joined by code as well. The header drops in from the top and lifts
- * when hovered, scans once as it opens, and its star and code decode.
+ * The world's star and its join code, top left, while the star map is up. A
+ * private world is shared by code alone, so its code stands out: the header
+ * glows with a slow pulse, the code grows and turns accent, and the status dot
+ * blinks faster. A public one can be joined by code as well. The header drops
+ * in from the top and lifts when hovered, scans once as it opens, and its star
+ * and code decode.
  */
-export function WorldHeader({ star, code, isPrivate }: WorldHeaderProps) {
-	const drop = useAppear(undefined, 0.15);
+export function WorldHeader({ star, code, isPrivate, show }: WorldHeaderProps) {
+	const drop = useAppear(show, 0.15);
 	const hovered = source(false);
 	const [hover, hoverSpring] = useSpring(0, SPRINGS.responsive);
 	const [pulse, pulseSpring] = useSpring(0, PULSE);

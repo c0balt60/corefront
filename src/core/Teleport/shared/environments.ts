@@ -5,6 +5,6 @@
  * your experience > Places > Copy ID.
  */
 export const ENVIRONMENTS = {
-	staging: { universeId: 0, places: { lobby: 0, game: 0 } },
+	testing: { universeId: 10770246373, places: { lobby: 91286833219227, game: 122955839998809 } },
 	production: { universeId: 10770225279, places: { lobby: 110111062529267, game: 139941081711013 } },
 };

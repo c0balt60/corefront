@@ -9,11 +9,14 @@
 export interface PlayerData {
 	coins: number;
 	matchesPlayed: number;
+	/** The tutorial step the player is on, as an index into `TUTORIAL_STEPS`. `TUTORIAL_DONE` once finished. */
+	tutorial: number;
 }
 
 export const DEFAULT_PLAYER_DATA: PlayerData = {
 	coins: 0,
 	matchesPlayed: 0,
+	tutorial: 0,
 };
 
 /** The Charm Sync key a player's data is replicated under. */

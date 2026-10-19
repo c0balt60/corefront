@@ -11,15 +11,19 @@ import { COLORS, hasEffect, type UiKind } from "core/Interface/client/theme";
  */
 
 const clamp01 = (value: number) => math.clamp(value, 0, 1);
+/** A colour spring can overshoot past 0-1, which a ColorSequence rejects. */
+const clampColor = (color: Color3) => new Color3(clamp01(color.R), clamp01(color.G), clamp01(color.B));
 
 interface EnergyGradientProps {
 	readonly kind: UiKind;
 	/** The outline's resting colour. */
 	readonly base: () => Color3;
-	/** The colour of the energy. */
-	readonly energy?: Color3;
+	/** The colour of the energy. Make it `base` to hide it. */
+	readonly energy?: Color3 | (() => Color3);
 	/** 0-1: speeds the energy up and widens it. Drive it from a hover spring. */
 	readonly charge?: () => number;
+	/** Whether it runs. Stop it where it can't be seen, as when `energy` is `base`: it costs a redraw every frame. */
+	readonly spin?: () => boolean;
 }
 
 /**
@@ -28,20 +32,26 @@ interface EnergyGradientProps {
  * multiplies the stroke's colour. Without `energy` for its kind, it holds the
  * outline at `base` and nothing moves.
  */
-export function EnergyGradient({ kind, base, energy = COLORS.accent, charge = () => 0 }: EnergyGradientProps) {
-	if (!hasEffect(kind, "energy")) return <uigradient Color={() => new ColorSequence(base())} />;
+export function EnergyGradient({
+	kind,
+	base,
+	energy = COLORS.accent,
+	charge = () => 0,
+	spin = () => true,
+}: EnergyGradientProps) {
+	if (!hasEffect(kind, "energy")) return <uigradient Color={() => new ColorSequence(clampColor(base()))} />;
 
-	const angle = useSpin(() => 50 + 250 * clamp01(charge()));
+	const angle = useSpin(() => 50 + 250 * clamp01(charge()), spin);
 
 	return (
 		<uigradient
 			Color={() => {
-				const rest = base();
+				const rest = clampColor(base());
 				const width = 0.05 + 0.1 * clamp01(charge());
 				return new ColorSequence([
 					new ColorSequenceKeypoint(0, rest),
 					new ColorSequenceKeypoint(0.5 - width, rest),
-					new ColorSequenceKeypoint(0.5, energy),
+					new ColorSequenceKeypoint(0.5, clampColor(typeIs(energy, "Color3") ? energy : energy())),
 					new ColorSequenceKeypoint(0.5 + width, rest),
 					new ColorSequenceKeypoint(1, rest),
 				]);
@@ -57,7 +67,7 @@ interface BracketsProps {
 	readonly kind: UiKind;
 	/** 0-1: how far the brackets stand off the corners, how long and how bright. Drive it from hover or appear. */
 	readonly open: () => number;
-	readonly color?: Color3;
+	readonly color?: Color3 | (() => Color3);
 	/** Arm length and thickness, in pixels, when fully open. */
 	readonly length?: number;
 	readonly thickness?: number;
@@ -94,6 +104,8 @@ export function Brackets({
 				BackgroundTransparency={1}
 				Position={() => new UDim2(corner.X, out.X * gap(), corner.Y, out.Y * gap())}
 				Size={() => UDim2.fromOffset(arm(), arm())}
+				// Hidden while see-through, as they rest on most tiles and buttons, so they cost nothing to draw.
+				Visible={() => transparency() < 0.99}
 				ZIndex={zIndex}
 			>
 				<frame

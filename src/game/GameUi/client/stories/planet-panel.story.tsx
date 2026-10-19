@@ -12,7 +12,7 @@ const controls = {
 
 export = CreateVideStory({ controls, vide: Vide }, (props: InferVideProps<typeof controls>) => {
 	const planet = () => {
-		const { planets } = generateStarSystem(props.controls.seed());
+		const { planets } = generateStarSystem({ seed: props.controls.seed() });
 		return planets[math.clamp(math.floor(props.controls.planet()), 0, planets.size() - 1)];
 	};
 

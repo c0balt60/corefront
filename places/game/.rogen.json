@@ -37,6 +37,11 @@
 					"CharacterAutoLoads": false
 				}
 			},
+			"StarterPlayer": {
+				"$properties": {
+					"EnableMouseLockOption": false
+				}
+			},
 			"ServerStorage": {
 				"Assets": {
 					"$path": "assets/ServerStorage"

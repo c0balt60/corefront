@@ -45,4 +45,4 @@ To update a packed model, edit it in Studio, then repeat steps 2 and 3, saving o
 - [ ] New `.rbxm` files appear in `git lfs ls-files`.
 - [ ] Code that clones an asset you renamed or moved has been updated.
 
-CI rebuilds every place from the repo on each pull request. When the PR merges, staging gets exactly what's in `assets/`.
+CI rebuilds every place from the repo on each pull request. When the PR merges, testing (`dev`) or production (`main`) gets exactly what's in `assets/`.
