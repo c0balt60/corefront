@@ -4,7 +4,7 @@ import type { Logger } from "@rbxts/log";
 import { Players } from "@rbxts/services";
 import { t } from "@rbxts/t";
 
-import { generateStarSystem, type Planet } from "core/Worlds/shared/star-system";
+import { generateStarSystem, type Mission, type Planet } from "core/Worlds/shared/star-system";
 import { ArrivalService } from "game/Arrival/server/ArrivalService";
 import {
 	type LaunchPlan,
@@ -46,6 +46,8 @@ export class PlanetsService implements OnStart {
 	private readonly unlocked = [0];
 	private readonly conquered = new Array<number>();
 	private readonly deployed = new Set<Player>();
+	/** Missions forced by admins, by planet index. Not saved. */
+	private readonly missions = new Map<number, Mission>();
 
 	constructor(
 		private readonly logger: Logger,
@@ -98,6 +100,16 @@ export class PlanetsService implements OnStart {
 		return world ? generateStarSystem(world).planets : [];
 	}
 
+	/** The mission planet `index` plays: a forced one if set, else the one it rolled. */
+	missionOf(index: number): Mission {
+		return this.missions.get(index) ?? this.getPlanet(index)?.mission ?? "defend";
+	}
+
+	/** Plays planet `index` as `mission` from its next landing (Studio testing). Not saved. */
+	forceMission(index: number, mission: Mission) {
+		this.missions.set(index, mission);
+	}
+
 	isConquered(planet: number): boolean {
 		return this.conquered.includes(planet);
 	}
@@ -146,7 +158,7 @@ export class PlanetsService implements OnStart {
 	activate(planet: number) {
 		this.activeAtom(planet);
 		// Deferred, so generation never runs inside a Charm callback or before every service has started.
-		task.defer(() => this.terrainService.generate(planet));
+		task.defer(() => this.terrainService.generate(planet, this.missionOf(planet)));
 		this.broadcast();
 		this.logger.Info("Planet {Planet} is now active", planet);
 	}

@@ -4,7 +4,7 @@
  * row by row from the -X/-Z corner: `index = gz * GRID_SIZE + gx`.
  */
 export const CHUNK_STUDS = 64;
-export const MAP_CHUNKS = 16;
+export const MAP_CHUNKS = 24;
 export const MAP_STUDS = CHUNK_STUDS * MAP_CHUNKS;
 export const MAP_HALF = MAP_STUDS / 2;
 

@@ -27,6 +27,9 @@ export interface StarSettings {
 }
 export type Mission = "defend" | "attack";
 
+/** Attack missions are off for now: every planet plays as Defense. The admin command `forceattack` still plays one as Attack. */
+export const ATTACK_MISSIONS_ENABLED = false;
+
 export interface Planet {
 	readonly name: string;
 	readonly kind: PlanetKind;
@@ -90,6 +93,8 @@ export function generateStarSystem(settings: StarSettings): StarSystem {
 		const [h, s, v] = KIND_COLORS[kind].ToHSV();
 		const aliens = first ? 0 : level((settings.aliens ?? difficulty) + random.NextInteger(-1, 1));
 		const resources = random.NextInteger(1, 4);
+		// Always rolled, so the rolls after it don't shift when attack missions switch on or off.
+		const missionRoll = random.NextNumber();
 
 		planets.push({
 			name: `${star} ${"bcdefghi".sub(i + 1, i + 1)}`,
@@ -97,7 +102,7 @@ export function generateStarSystem(settings: StarSettings): StarSystem {
 			difficulty,
 			aliens,
 			resources: level(settings.resources ?? resources),
-			mission: first || random.NextNumber() < 0.5 ? "defend" : "attack",
+			mission: !first && ATTACK_MISSIONS_ENABLED && missionRoll < 0.5 ? "attack" : "defend",
 			terrainSeed: random.NextInteger(0, SEED_MAX),
 			orbit: 24 + i * 16 + random.NextNumber(0, 6),
 			angle: random.NextNumber(0, 2 * math.pi),

@@ -10,6 +10,7 @@ import {
 	type BuildMode,
 	buildModeAtom,
 	equippedAtom,
+	isPlayerBuilding,
 	toggleBuildMode,
 } from "game/Base/client/base-state";
 import { BaseMessage, baseMessaging, type Placement } from "game/Base/shared/base-network";
@@ -195,7 +196,7 @@ function buildingAt(point: Vector3, taken = occupancy()) {
 	return cell !== undefined ? taken.get(cell) : undefined;
 }
 
-/** The building under the mouse, unless terrain is in the way. */
+/** The player's building under the mouse, unless terrain is in the way: what R turns and Q picks. */
 function buildingUnderMouse(): Model | undefined {
 	const camera = Workspace.CurrentCamera;
 	const buildings = Workspace.FindFirstChild("Base")?.FindFirstChild("Buildings");
@@ -207,7 +208,8 @@ function buildingUnderMouse(): Model | undefined {
 	params.FilterDescendantsInstances = [Workspace.Terrain, buildings];
 	const hit = Workspace.Raycast(ray.Origin, ray.Direction.mul(RAY_LENGTH), params);
 	// Just inside whatever was hit, so a building's side counts as its own cell, not its neighbour's.
-	return hit && buildingAt(hit.Position.sub(hit.Normal.mul(0.5)));
+	const model = hit && buildingAt(hit.Position.sub(hit.Normal.mul(0.5)));
+	return isPlayerBuilding(model) ? model : undefined;
 }
 
 /**
@@ -253,7 +255,7 @@ export function isBeltModel(model: Model | undefined): model is Model {
 /** Whether `model` is a straight belt running across a belt line heading `rotation`: the server lays a Junction there. */
 function crossable(model: Model | undefined, rotation: number): boolean {
 	const facing = model?.GetAttribute("Rotation");
-	if (!isBeltModel(model) || !typeIs(facing, "number")) return false;
+	if (!isBeltModel(model) || !isPlayerBuilding(model) || !typeIs(facing, "number")) return false;
 	return facing % 2 !== rotation % 2 && model.GetAttribute("Entry") === (facing + 2) % 4;
 }
 
@@ -507,7 +509,12 @@ export class BuildController implements OnStart {
 				const { building: model, prop, cell } = pointedAt(taken);
 				const corner = model?.GetAttribute("Cell");
 				if (model) {
-					if (typeIs(corner, "number") && !isCore(model.GetAttribute("Kind"))) {
+					// Ruins come down; an enemy's buildings don't.
+					if (
+						typeIs(corner, "number") &&
+						!isCore(model.GetAttribute("Kind")) &&
+						model.GetAttribute("Team") !== "enemy"
+					) {
 						highlight.Adornee = model;
 						target = cellCoords(corner);
 					}
@@ -559,15 +566,22 @@ export class BuildController implements OnStart {
 					spent.set(resource, (spent.get(resource) ?? 0) + amount);
 				}
 				// Like the server: a belt line keeps the routers and such it runs through, anything else swaps them.
-				const there = modelOn(taken, x, z)?.GetAttribute("Kind") as BuildingKind | undefined;
-				const swapping = there !== undefined && replaces(kind, there, belt && line.size() > 1);
+				const thereModel = modelOn(taken, x, z);
+				const there = thereModel?.GetAttribute("Kind") as BuildingKind | undefined;
+				const swapping =
+					there !== undefined &&
+					isPlayerBuilding(thereModel) &&
+					replaces(kind, there, belt && line.size() > 1);
 				let free = !crossing;
 				let onOre = false;
 				for (let dz = 0; dz < size; dz++) {
 					for (let dx = 0; dx < size; dx++) {
 						// A Core checks every cell it covers; the rest swap only what's on their own (see `replaces`).
-						const other = modelOn(taken, x + dx, z + dz)?.GetAttribute("Kind") as BuildingKind | undefined;
-						free &&= other === undefined || (isCore(kind) ? replaces(kind, other) : swapping);
+						const otherModel = modelOn(taken, x + dx, z + dz);
+						const other = otherModel?.GetAttribute("Kind") as BuildingKind | undefined;
+						free &&=
+							other === undefined ||
+							(isPlayerBuilding(otherModel) && (isCore(kind) ? replaces(kind, other) : swapping));
 						onOre ||= ores.has(cellIndex(x + dx, z + dz));
 					}
 				}

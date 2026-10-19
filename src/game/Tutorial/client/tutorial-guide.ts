@@ -94,8 +94,10 @@ function route(target: Model, starts: Starts, taken: Taken, zones: ReadonlyArray
 		before.set(cellIndex(x, z), -1);
 		queue.push(cellIndex(x, z));
 	}
-	for (let head = 0; head < queue.size(); head++) {
-		const cell = queue[head];
+	// A while: roblox-ts compiles this `for` to a numeric for that never sees the queue grow.
+	let head = 0;
+	while (head < queue.size()) {
+		const cell = queue[head++];
 		const [x, z] = cellCoords(cell);
 		const into = DIRECTIONS.findIndex(([dx, dz]) => modelOn(taken, x + dx, z + dz) === target);
 		if (into >= 0) {

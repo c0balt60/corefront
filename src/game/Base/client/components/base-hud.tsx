@@ -151,10 +151,11 @@ export function WavePanel({ state, show, onCallWave, canCall }: WavePanelProps) 
 	const slide = useAppear(show, 0.1);
 	const now = useServerTime();
 	const status = () => {
-		const { phase, nextWaveAt, aliens, wave, waves, liberated } = state();
+		const { phase, nextWaveAt, aliens, wave, waves, liberated, attack } = state();
 		if (phase === "generating") return "GENERATING TERRAIN...";
 		if (phase === "travelling") return "IN TRANSIT";
 		if (liberated) return "PLANET LIBERATED";
+		if (attack) return aliens > 0 ? "ALIENS ATTACKING" : "DESTROY THE ENEMY CORES";
 		if (nextWaveAt > 0) return `NEXT WAVE IN ${clock(nextWaveAt - now())}`;
 		if (aliens > 0) return "ALIENS ATTACKING";
 		return wave >= waves ? "FINAL WAVE" : "STANDING BY";
@@ -168,13 +169,16 @@ export function WavePanel({ state, show, onCallWave, canCall }: WavePanelProps) 
 			position={() => new UDim2(1, -EDGE + 280 * (1 - slide()), 0.3, 0)}
 			size={UDim2.fromOffset(220, 132)}
 		>
-			<Label text={useScramble("hud", () => "WAVE", 0.25)} size={new UDim2(1, 0, 0, 14)} />
+			<Label
+				text={useScramble("hud", () => (state().attack ? "ENEMY CORES" : "WAVE"), 0.25)}
+				size={new UDim2(1, 0, 0, 14)}
+			/>
 			<Label
 				color={COLORS.text}
 				font={FONT_DISPLAY}
 				position={UDim2.fromOffset(0, 14)}
 				size={new UDim2(1, 0, 0, 30)}
-				text={() => `${state().wave} / ${state().waves}`}
+				text={() => (state().attack ? tostring(state().enemyCores) : `${state().wave} / ${state().waves}`)}
 				textSize={28}
 			/>
 			<Label
@@ -194,7 +198,14 @@ export function WavePanel({ state, show, onCallWave, canCall }: WavePanelProps) 
 				text={() => tostring(state().aliens)}
 				textSize={16}
 			/>
-			<Show when={() => state().phase === "active" && state().wave < state().waves && (canCall?.() ?? true)}>
+			<Show
+				when={() =>
+					state().phase === "active" &&
+					!state().attack &&
+					state().wave < state().waves &&
+					(canCall?.() ?? true)
+				}
+			>
 				{() => (
 					<Button
 						anchorPoint={new Vector2(0, 1)}

@@ -1,8 +1,7 @@
 import { BIOME_SETS, type Shape } from "game/Terrain/shared/biomes";
 import type { TerrainConfig } from "game/Terrain/shared/config";
-import { MAP_HALF } from "game/Terrain/shared/map";
+import { type Layout, layoutFor } from "game/Terrain/shared/layout";
 import { erodedFbm, erodedRidged, fbm, ridged, simplex2, simplex2d, smoothstep } from "game/Terrain/shared/noise";
-import { Prng } from "game/Terrain/shared/prng";
 
 /**
  * Column sampler: turns a world (x, z) into everything the chunk builder needs
@@ -12,12 +11,13 @@ import { Prng } from "game/Terrain/shared/prng";
  *
  * 1. Land: plains and eroded fractal hills, mixed by a low-frequency relief noise.
  * 2. Mountains: ranges follow the zero lines of warped noise: a broad uplift
- *    with eroded ridged peaks on top. None near the landing pad.
- * 3. Edge cliffs: ridged terrain rises steeply round the map's border.
+ *    with eroded ridged peaks on top. None near the Core, and damped along the paths.
+ * 3. Layout walls: the layout's cliff field rises steeply, with ridged detail on top;
+ *    its mountain field climbs on rough slopes to a craggy peak.
  * 4. Biomes: the kind's tables, by terrain band and climate, blended at edges.
  * 5. Water: rivers where a noise crosses zero and lakes where another peaks,
  *    carved below sea level and fading out as the land rises.
- * 6. Pads: the landing pad and the drop zone pads are flattened last, so
+ * 6. Pads: the landing pad and the spawn pads are flattened last, so
  *    nothing cuts into them.
  */
 
@@ -25,10 +25,9 @@ import { Prng } from "game/Terrain/shared/prng";
 export const WORLD_BOTTOM = -32;
 export const WORLD_TOP = 512;
 
-/** The outer band, in studs, where the edge cliffs rise. */
-export const EDGE_WIDTH = 96;
-/** Drop zone pads are flat out to this radius. */
+/** Drop zone pads are flat out to this radius; an attack base site is flat out to `SITE_FLAT`. */
 export const PAD_FLAT = 24;
+export const SITE_FLAT = 96;
 
 // Salts keep each layer's permutation independent for the same seed.
 const SALT_DETAIL = 2;
@@ -45,7 +44,6 @@ const SALT_SHAPE = 14;
 const SALT_SHAPE_ALT = 15;
 const SALT_LAKE = 20;
 const SALT_EDGE = 21;
-const SALT_PADS = 22;
 
 const MIN_HEIGHT = WORLD_BOTTOM + 8;
 const MAX_HEIGHT = WORLD_TOP - 8;
@@ -73,17 +71,25 @@ const ELEVATION_JITTER = 12;
 // One edge splits each climate noise in two: cold/warm and dry/wet.
 const CLIMATE_EDGES = [0];
 
-// Ridged noise scale of the edge cliffs.
+// Ridged noise scale of the layout walls.
 const EDGE_SCALE = 90;
 // The landing pad: flat to LANDING_FLAT, back to the natural ground by LANDING_FALLOFF.
 const LANDING_FLAT = 48;
 const LANDING_FALLOFF = 96;
-// Mountains, rivers and lakes fade in between these distances from the centre.
+// Mountains, rivers and lakes fade in between these distances from the Core.
 const CALM_INNER = 150;
 const CALM_OUTER = 250;
-// Drop zone pads: this far from the centre, at least a quarter turn apart.
-const PAD_DISTANCE = 400;
-const PAD_FALLOFF = 56;
+// Natural mountains fade out within PATH_CLEAR of a path, back in over PATH_BLEND more.
+const PATH_CLEAR = 40;
+const PATH_BLEND = 60;
+// A pad's flat radius is blended back to the natural ground over this many studs.
+const PAD_BLEND = 32;
+// The wall profile: nothing below WALL_FOOT, full height from WALL_TOP, steep between.
+const WALL_FOOT = 0.1;
+const WALL_TOP = 0.6;
+// Layout mountains peak at this share of the wall height, with crags at this ridged noise scale.
+const MASS_HEIGHT = 1;
+const MASS_CRAG = 140;
 // Pads sit at least this far above sea level, so no water reaches them.
 const PAD_MIN_HEIGHT = 6;
 
@@ -105,8 +111,8 @@ export interface Column {
 
 export interface Sampler {
 	readonly config: TerrainConfig;
-	/** Drop zone pad centres. */
-	readonly pads: ReadonlyArray<{ readonly x: number; readonly z: number }>;
+	/** Where the Core, spawns and cliff walls are. */
+	readonly layout: Layout;
 	readonly sample: (x: number, z: number, column: Column) => Column;
 	/** Heightmap ground height. */
 	readonly height: (x: number, z: number) => number;
@@ -170,6 +176,32 @@ export function newSampler(config: TerrainConfig): Sampler {
 	const invRiver = 1 / config.riverScale;
 	const invLake = 1 / config.lakeScale;
 
+	const layout = layoutFor(config);
+	const core = layout.core;
+	const sheerAt = layout.sheer;
+	const massAt = layout.mountain;
+	// The paths as flat segments (ax, az, bx, bz, ...), for the squared distance test.
+	const segments = new Array<number>();
+	for (const path of layout.paths) {
+		for (let i = 1; i < path.size(); i++) segments.push(path[i - 1].x, path[i - 1].z, path[i].x, path[i].z);
+	}
+	/** Squared distance to the nearest path segment, or `limit` if none is nearer. */
+	const pathDistanceSq = (x: number, z: number, limit: number) => {
+		let best = limit;
+		for (let i = 0; i < segments.size(); i += 4) {
+			const ax = segments[i];
+			const az = segments[i + 1];
+			const dx = segments[i + 2] - ax;
+			const dz = segments[i + 3] - az;
+			const length = dx * dx + dz * dz;
+			const t = length > 0 ? math.clamp(((x - ax) * dx + (z - az) * dz) / length, 0, 1) : 0;
+			const ex = x - ax - dx * t;
+			const ez = z - az - dz * t;
+			best = math.min(best, ex * ex + ez * ez);
+		}
+		return best;
+	};
+
 	const seaLevel = config.seaLevel;
 	const landHeight = config.landHeight;
 	const detailStrength = config.detailStrength;
@@ -178,7 +210,7 @@ export function newSampler(config: TerrainConfig): Sampler {
 	const rangeWidth = config.rangeWidth;
 	const mountainBase = config.mountainBase;
 	const mountainHeight = config.mountainHeight;
-	const edgeHeight = config.edgeHeight;
+	const wallHeight = config.wallHeight;
 	const climateBlend = config.biomeBlend;
 	const temperatureBias = config.temperatureBias;
 	const moistureBias = config.moistureBias;
@@ -278,7 +310,7 @@ export function newSampler(config: TerrainConfig): Sampler {
 	/** Everything but the pads. */
 	const sampleRaw = (x: number, z: number, column: Column): Column => {
 		const detail = fbm(detailNoise, x * invDetail, z * invDetail, 4);
-		const calm = smoothstep(CALM_INNER, CALM_OUTER, math.sqrt(x * x + z * z));
+		const calm = smoothstep(CALM_INNER, CALM_OUTER, math.sqrt((x - core.x) ** 2 + (z - core.z) ** 2));
 
 		// 1. Land: plains where the relief noise is low, eroded hills where it is high.
 		let land = landHeight;
@@ -307,12 +339,23 @@ export function newSampler(config: TerrainConfig): Sampler {
 				mountain += mountainHeight * spine * ridge * ridge;
 			}
 			mountain *= calm;
+			// Natural ranges never block a path.
+			const limit = (PATH_CLEAR + PATH_BLEND) ** 2;
+			const near = pathDistanceSq(x, z, limit);
+			if (near < limit) mountain *= smoothstep(PATH_CLEAR, PATH_CLEAR + PATH_BLEND, math.sqrt(near));
 		}
 
-		// 3. Edge cliffs: ridged walls rising over the outer EDGE_WIDTH studs.
-		const edge = 1 - smoothstep(0, EDGE_WIDTH, MAP_HALF - math.max(math.abs(x), math.abs(z)));
-		if (edge > 0 && edgeHeight > 0) {
-			mountain += edgeHeight * edge * edge * (0.55 + 0.45 * ridged(edgeNoise, x / EDGE_SCALE, z / EDGE_SCALE, 3));
+		// 3. Layout walls: a steep profile, so they read as cliffs, with ridged detail on top. Mountains rise
+		// with their field instead, so they slope, and the higher of the two stands.
+		const wall = smoothstep(WALL_FOOT, WALL_TOP, sheerAt(x, z));
+		const mass = massAt(x, z);
+		if ((wall > 0 || mass > 0) && wallHeight > 0) {
+			const cliff = wall * (0.75 + 0.25 * ridged(edgeNoise, x / EDGE_SCALE, z / EDGE_SCALE, 3));
+			const peak =
+				mass > 0
+					? MASS_HEIGHT * mass * (0.6 + 0.4 * ridged(edgeNoise, x / MASS_CRAG + 17.1, z / MASS_CRAG - 4.2, 4))
+					: 0;
+			mountain += wallHeight * math.max(cliff, peak);
 		}
 
 		// Fine detail grows rougher with height: low ground stays smooth, peaks get craggy.
@@ -407,24 +450,13 @@ export function newSampler(config: TerrainConfig): Sampler {
 	const scratch = newColumn();
 	const padHeight = (x: number, z: number) => math.max(sampleRaw(x, z, scratch).height, seaLevel + PAD_MIN_HEIGHT);
 
-	// The landing pad sits at the map centre; the Core's 2x2 cells meet at (0, 0).
-	const landing = padHeight(0, 0);
+	// The landing pad sits at the Core; its 2x2 cells meet there.
+	const landing = padHeight(core.x, core.z);
 
-	// Up to three drop zone pads at seed-chosen angles. Each gap is a quarter turn plus
-	// a share of the remaining quarter, so every pair is at least 90 degrees apart.
-	const rng = new Prng(seed, SALT_PADS);
-	const quarter = math.pi / 2;
-	const extra1 = rng.nextNumber() * quarter;
-	const extra2 = rng.nextNumber() * (quarter - extra1);
-	const start = rng.nextNumber() * 2 * math.pi;
-	const angles = [start, start + quarter + extra1, start + 2 * quarter + extra1 + extra2];
-	const pads = angles
-		.filter((_, index) => index < config.dropZones)
-		.map((angle) => {
-			const x = math.cos(angle) * PAD_DISTANCE;
-			const z = math.sin(angle) * PAD_DISTANCE;
-			return { x, z, height: padHeight(x, z) };
-		});
+	// Flat pads at the spawns: small for drop zones, wide for enemy base sites.
+	const padFlat = config.mission === "attack" ? SITE_FLAT : PAD_FLAT;
+	const padFalloff = padFlat + PAD_BLEND;
+	const pads = layout.spawns.map((spawn) => ({ x: spawn.x, z: spawn.z, height: padHeight(spawn.x, spawn.z) }));
 
 	// Blends the column to `target` with weight `w`, drying it out as it goes.
 	const flattenTo = (column: Column, target: number, w: number) => {
@@ -435,7 +467,7 @@ export function newSampler(config: TerrainConfig): Sampler {
 
 	const sample = (x: number, z: number, column: Column): Column => {
 		sampleRaw(x, z, column);
-		const fromCentre = math.sqrt(x * x + z * z);
+		const fromCentre = math.sqrt((x - core.x) ** 2 + (z - core.z) ** 2);
 		if (fromCentre < LANDING_FALLOFF) {
 			flattenTo(column, landing, 1 - smoothstep(LANDING_FLAT, LANDING_FALLOFF, fromCentre));
 		}
@@ -443,7 +475,7 @@ export function newSampler(config: TerrainConfig): Sampler {
 			const dx = x - pad.x;
 			const dz = z - pad.z;
 			const distance = math.sqrt(dx * dx + dz * dz);
-			if (distance < PAD_FALLOFF) flattenTo(column, pad.height, 1 - smoothstep(PAD_FLAT, PAD_FALLOFF, distance));
+			if (distance < padFalloff) flattenTo(column, pad.height, 1 - smoothstep(padFlat, padFalloff, distance));
 		}
 		return column;
 	};
@@ -452,7 +484,7 @@ export function newSampler(config: TerrainConfig): Sampler {
 
 	return {
 		config,
-		pads,
+		layout,
 		sample,
 		height,
 		isLiquid: (x, z) => set.liquid && height(x, z) < seaLevel,

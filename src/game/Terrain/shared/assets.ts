@@ -1,9 +1,9 @@
-import { KIND_ORES, RESOURCES, type ResourceId } from "game/Base/shared/resources";
+import { RESOURCES, type ResourceId } from "game/Base/shared/resources";
 import { BIOME_SETS } from "game/Terrain/shared/biomes";
-import { CELL_STUDS, CHUNK_STUDS, MAP_HALF, cellAt, cellCenter, cellCoords, cellIndex } from "game/Terrain/shared/map";
+import { CELL_STUDS, CHUNK_STUDS, MAP_HALF, cellAt, cellCenter, cellIndex } from "game/Terrain/shared/map";
 import { fbm, simplex2, smoothstep } from "game/Terrain/shared/noise";
 import { Prng } from "game/Terrain/shared/prng";
-import { newColumn, PAD_FLAT, type Sampler } from "game/Terrain/shared/sampler";
+import { newColumn, PAD_FLAT, type Sampler, SITE_FLAT } from "game/Terrain/shared/sampler";
 
 /**
  * Prop and ore placement for one chunk. Like the rest of the generator this
@@ -16,10 +16,10 @@ import { newColumn, PAD_FLAT, type Sampler } from "game/Terrain/shared/sampler";
  * kinds. A grove noise redistributes them, so dense biomes get clearings and
  * sparse ones get groves instead of an even scatter.
  *
- * Ores: infinite deposits, one per 8-stud map cell at its centre, in clusters
- * of 3-7 adjacent cells. Each 32-stud block may hold one cluster, so a cluster
- * never leaves its chunk. Two starter clusters (copper and lead) are always
- * near the landing pad. Ores go first and keep props off their cells.
+ * Ores: infinite deposits, one per 8-stud map cell at its centre. They come from the
+ * layout's ore fields (planned once, global): a cell is ore when its centre is inside a
+ * field's ragged circle, so a field can span chunks and every chunk checks the whole list.
+ * Ores go first and keep props off their cells.
  */
 
 export interface Placement {
@@ -40,7 +40,6 @@ export interface Placement {
 const SALT_PROP = 101;
 const SALT_ORE = 102;
 const SALT_GROVE = 103;
-const SALT_STARTER = 104;
 
 // Prop grid cell size in studs; divides CHUNK_STUDS, so every cell belongs to one chunk.
 const PROP_CELL = 16;
@@ -54,22 +53,21 @@ const CLEARING_EXPONENT = 3;
 const GROVE_EXPONENT = 0.25;
 // River or lake channel strength above which nothing is placed.
 const RIVER_LIMIT = 0.05;
-// Ore blocks are this many map cells square; a block divides a chunk.
-const ORE_BLOCK = 4;
 const CELLS_PER_CHUNK = CHUNK_STUDS / CELL_STUDS;
 // Ores need flatter ground than props (a fraction of steepSlope), so a drill sits level.
 const ORE_SLOPE = 0.4;
-// Nothing is placed this close to the map centre, where the Core lands...
+// Nothing is placed this close to the Core...
 const LANDING_CLEAR = 40;
-// ...or to an alien pad's centre.
+// ...or to a spawn's centre (a drop zone pad, or a wider enemy base site).
 const PAD_CLEAR = PAD_FLAT + 8;
-// The starter clusters' first cell is this far from the centre.
-const STARTER_MIN = 64;
-const STARTER_MAX = 136;
-
-// Neighbour offsets for growing ore clusters.
-const STEP_X = [1, -1, 0, 0];
-const STEP_Z = [0, 0, 1, -1];
+const SITE_CLEAR = SITE_FLAT + 8;
+// Ores keep off cliff walls and mountains: below this the layout barely lifts the ground.
+const ORE_WALL = 0.05;
+// How far a field's ragged edge moves, in studs, and its noise scale.
+const ORE_RAG = 6;
+const ORE_RAG_SCALE = 12;
+// Ground this far below sea level (water) is deep: no ore.
+const DEEP_WATER = 3;
 
 /** The template an ore deposit of `resource` clones. */
 export function oreTemplate(resource: ResourceId): string {
@@ -108,45 +106,6 @@ function cellRng(seed: number, salt: number, gx: number, gz: number): Prng {
 	return new Prng(mix(seed + mix(gx + mix(gz + salt))));
 }
 
-/**
- * Rolls a resource from the kind's ore table. Later (rarer) entries favour high
- * ground, like terrain-generator's coal, iron, gold, diamond tiers: in the
- * lowland they come at a quarter of their weight, and the rarer they are, the
- * more they gain going up to the slopes.
- */
-function pickOre(
-	rng: Prng,
-	ores: ReadonlyArray<{ readonly resource: ResourceId; readonly weight: number }>,
-	elevation: number,
-	slopes: number,
-): ResourceId {
-	const rise = smoothstep(slopes * 0.25, slopes, elevation);
-	const weightOf = (i: number) => ores[i].weight * (i < 2 ? 1 : 0.25 + rise * (i - 1));
-	let total = 0;
-	for (let i = 0; i < ores.size(); i++) total += weightOf(i);
-	let roll = rng.nextNumber() * total;
-	for (let i = 0; i < ores.size(); i++) {
-		roll -= weightOf(i);
-		if (roll < 0) return ores[i].resource;
-	}
-	return ores[0].resource;
-}
-
-/** Grows a cluster of up to `size` 4-connected cells from `start`, keeping to cells `inside` allows. */
-function growCluster(rng: Prng, start: number, size: number, inside: (gx: number, gz: number) => boolean) {
-	const cells = [start];
-	for (let attempt = 0; attempt < size * 4 && cells.size() < size; attempt++) {
-		const [gx, gz] = cellCoords(cells[rng.nextInt(cells.size())]);
-		const direction = rng.nextInt(4);
-		const nx = gx + STEP_X[direction];
-		const nz = gz + STEP_Z[direction];
-		if (!inside(nx, nz)) continue;
-		const cell = cellIndex(nx, nz);
-		if (!cells.includes(cell)) cells.push(cell);
-	}
-	return cells;
-}
-
 /** Chunk (cx, cz) counts from the map's -X/-Z corner, 0 to MAP_CHUNKS - 1. */
 export function placeAssets(sampler: Sampler, cx: number, cz: number): Array<Placement> {
 	const config = sampler.config;
@@ -165,19 +124,20 @@ export function placeAssets(sampler: Sampler, cx: number, cz: number): Array<Pla
 		return math.sqrt(dx * dx + dz * dz) / 8;
 	};
 
-	// Away from the landing pad and the alien pads.
+	const layout = sampler.layout;
+	const core = layout.core;
+	const padClear = config.mission === "attack" ? SITE_CLEAR : PAD_CLEAR;
+	// Away from the Core and the spawns.
 	const clear = (x: number, z: number) => {
-		if (x * x + z * z < LANDING_CLEAR * LANDING_CLEAR) return false;
-		for (const pad of sampler.pads) {
+		const cx0 = x - core.x;
+		const cz0 = z - core.z;
+		if (cx0 * cx0 + cz0 * cz0 < LANDING_CLEAR * LANDING_CLEAR) return false;
+		for (const pad of layout.spawns) {
 			const dx = x - pad.x;
 			const dz = z - pad.z;
-			if (dx * dx + dz * dz < PAD_CLEAR * PAD_CLEAR) return false;
+			if (dx * dx + dz * dz < padClear * padClear) return false;
 		}
 		return true;
-	};
-	const clearCell = (gx: number, gz: number) => {
-		const centre = cellCenter(cellIndex(gx, gz));
-		return clear(centre.X, centre.Z);
 	};
 
 	const taken = new Set<number>();
@@ -197,58 +157,33 @@ export function placeAssets(sampler: Sampler, cx: number, cz: number): Array<Pla
 		});
 	};
 
-	// Starter clusters, copper and lead on opposite sides of the landing pad.
-	// Every chunk works them out and keeps the cells that fall inside it.
-	const starterCells = new Set<number>();
-	const starter = new Prng(seed, SALT_STARTER);
-	const angle = starter.nextNumber() * 2 * math.pi;
-	const starters: ReadonlyArray<ResourceId> = ["copper", "lead"];
-	starters.forEach((resource, i) => {
-		const a = angle + i * math.pi + (starter.nextNumber() - 0.5);
-		const r = STARTER_MIN + starter.nextNumber() * (STARTER_MAX - STARTER_MIN);
-		const start = cellAt(math.cos(a) * r, math.sin(a) * r)!;
-		for (const cell of growCluster(starter, start, 5 + starter.nextInt(3), clearCell)) {
-			starterCells.add(cell);
-			const [gx, gz] = cellCoords(cell);
-			if (math.floor(gx / CELLS_PER_CHUNK) === cx && math.floor(gz / CELLS_PER_CHUNK) === cz) {
-				addOre(cell, resource);
-			}
-		}
-	});
-
-	// Regular clusters: one chance per block, more on resource-rich planets.
-	const ores = KIND_ORES[config.kind];
-	const blocks = CELLS_PER_CHUNK / ORE_BLOCK;
-	const oreChance = config.oreDensity / (blocks * blocks);
-	for (let i = 0; i < blocks; i++) {
-		for (let j = 0; j < blocks; j++) {
-			const bx = cx * blocks + i;
-			const bz = cz * blocks + j;
-			const rng = cellRng(seed, SALT_ORE, bx, bz);
-			if (rng.nextNumber() >= oreChance) continue;
-
-			const gx0 = bx * ORE_BLOCK;
-			const gz0 = bz * ORE_BLOCK;
-			const start = cellIndex(gx0 + 1 + rng.nextInt(2), gz0 + 1 + rng.nextInt(2));
-			const cells = growCluster(
-				rng,
-				start,
-				3 + rng.nextInt(5),
-				(gx, gz) => gx >= gx0 && gx < gx0 + ORE_BLOCK && gz >= gz0 && gz < gz0 + ORE_BLOCK,
-			);
-			const centre = cellCenter(start);
-			const resource = pickOre(rng, ores, height(centre.X, centre.Z) - seaLevel, config.slopeElevation);
-
-			for (const cell of cells) {
-				if (starterCells.has(cell)) continue;
+	// Ore fields: each cell of this chunk inside a field's ragged circle becomes ore.
+	const ragged = simplex2(seed, SALT_ORE);
+	const gx0 = cx * CELLS_PER_CHUNK;
+	const gz0 = cz * CELLS_PER_CHUNK;
+	const minX = -MAP_HALF + cx * CHUNK_STUDS;
+	const minZ = -MAP_HALF + cz * CHUNK_STUDS;
+	for (const field of layout.oreFields) {
+		const reach = field.radius + ORE_RAG;
+		if (field.x + reach < minX || field.x - reach > minX + CHUNK_STUDS) continue;
+		if (field.z + reach < minZ || field.z - reach > minZ + CHUNK_STUDS) continue;
+		for (let i = 0; i < CELLS_PER_CHUNK; i++) {
+			for (let j = 0; j < CELLS_PER_CHUNK; j++) {
+				const cell = cellIndex(gx0 + i, gz0 + j);
+				if (taken.has(cell)) continue;
 				const position = cellCenter(cell);
 				const x = position.X;
 				const z = position.Z;
-				if (!clear(x, z)) continue;
-				sampler.sample(x, z, column);
-				if (column.height < dry || column.river >= RIVER_LIMIT) continue;
-				if (slopeAt(x, z) > steep * ORE_SLOPE) continue;
-				addOre(cell, resource);
+				const ex = x - field.x;
+				const ez = z - field.z;
+				const edge = field.radius + fbm(ragged, x / ORE_RAG_SCALE, z / ORE_RAG_SCALE, 2) * ORE_RAG;
+				if (ex * ex + ez * ez > edge * edge) continue;
+				if (!clear(x, z) || layout.wall(x, z) >= ORE_WALL || slopeAt(x, z) > steep * ORE_SLOPE) continue;
+				// Deep liquid: lava anywhere below sea level, water more than DEEP_WATER under it.
+				const h = height(x, z);
+				if (set.liquid && h < seaLevel && (set.fluid !== Enum.Material.Water || h < seaLevel - DEEP_WATER))
+					continue;
+				addOre(cell, field.resource);
 			}
 		}
 	}

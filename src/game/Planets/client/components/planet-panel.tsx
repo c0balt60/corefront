@@ -478,7 +478,7 @@ export function PlanetPanel({
 							delay={stagger(6)}
 							label="MISSION"
 							reveal={reveal(6)}
-							value={() => planet().mission.upper()}
+							value={() => (planet().mission === "attack" ? "ATTACK" : "DEFENSE")}
 						/>
 					</frame>
 

@@ -68,6 +68,11 @@ export function notify(text: string, kind: NoticeKind = "alert") {
 
 export const buildModeAtom = atom<BuildMode>();
 
+/** Whether a building's model is the player's (its `Team` attribute, see `Team`): theirs to open, turn, set, link and move items in and out of. */
+export function isPlayerBuilding(model: Instance | undefined): boolean {
+	return model !== undefined && (model.GetAttribute("Team") ?? "player") === "player";
+}
+
 /** The building whose panel is open, picked by clicking it. */
 export const selectedAtom = atom<Model>();
 /** The turret whose info page is open, from its panel's ? button. */

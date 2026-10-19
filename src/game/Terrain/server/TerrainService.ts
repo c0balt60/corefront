@@ -11,13 +11,24 @@ import {
 	Workspace,
 } from "@rbxts/services";
 
-import { generateStarSystem, type PlanetKind } from "core/Worlds/shared/star-system";
+import { generateStarSystem, type Mission, type PlanetKind } from "core/Worlds/shared/star-system";
 import { ArrivalService } from "game/Arrival/server/ArrivalService";
 import type { ResourceId } from "game/Base/shared/resources";
 import type { OreDeposit, PlanetMap } from "game/Terrain/server/planet-map";
 import { createTemplates } from "game/Terrain/server/prop-templates";
 import { configForPlanet, defaultConfig, type TerrainConfig } from "game/Terrain/shared/config";
-import { CELL_STUDS, cellCoords, MAP_CHUNKS, MAP_HALF, MAP_STUDS } from "game/Terrain/shared/map";
+import { BIOME_SETS } from "game/Terrain/shared/biomes";
+import {
+	CELL_STUDS,
+	cellAt,
+	cellCenter,
+	cellCoords,
+	cellIndex,
+	GRID_SIZE,
+	MAP_CHUNKS,
+	MAP_HALF,
+	MAP_STUDS,
+} from "game/Terrain/shared/map";
 import { newSampler, type Sampler, WORLD_BOTTOM, WORLD_TOP } from "game/Terrain/shared/sampler";
 import type { TerrainDebugState } from "game/Terrain/shared/terrain-network";
 
@@ -36,14 +47,22 @@ const GROUND_STEP = 4;
 const GROUND_POINTS = MAP_STUDS / GROUND_STEP + 1;
 /** Rows of ground raycasts per frame while baking, so it never hitches the server. */
 const BAKE_ROWS = 16;
+/** Studs of height across one cell above which it is a cliff: no building, no walking. */
+const CLIFF_SLOPE = 12;
+/** Layout wall value (0..1) above which a cell is cliff. */
+const CLIFF_WALL = 0.5;
+/** Studs below sea level where water stops being wadeable and buildable. */
+const DEEP_WATER = 3;
 /**
  * Chunks handed to workers a second, at most one a frame, so their terrain writes, and what
- * clients receive of them, are spread out: 256 chunks take at least ~8.5 seconds.
+ * clients receive of them, are spread out: 576 chunks take at least ~14.5 seconds.
  */
-const CHUNKS_PER_SECOND = 30;
+const CHUNKS_PER_SECOND = 40;
 /** The old planet's prop folders destroyed a frame, and the new one's props settled onto the ground a frame. */
 const CLEAR_PER_FRAME = 8;
 const SETTLE_PER_FRAME = 300;
+/** Cells the reach flood fill visits a frame. */
+const REACH_PER_FRAME = 4096;
 /** The share of `progressAtom` the chunks make up, then the ground bake; settling the props is the rest. */
 const CHUNK_SHARE = 0.85;
 const BAKE_SHARE = 0.1;
@@ -74,7 +93,7 @@ interface Job {
 }
 
 /**
- * Generates the active planet's terrain on a finite 1024-stud map: 256 chunks
+ * Generates the active planet's terrain on a finite 1536-stud map: 576 chunks
  * built by a pool of Actor workers (see terrain-worker.server.ts), nearest the
  * centre first, with no streaming. Every generation bumps the epoch, so stale
  * worker results are dropped and the latest call wins.
@@ -148,8 +167,8 @@ export class TerrainService implements OnStart {
 		});
 	}
 
-	/** (Re)generates planet `index` of the world's star system, replacing whatever is there. */
-	generate(index: number): void {
+	/** (Re)generates planet `index` of the world's star system as `mission`, replacing whatever is there. */
+	generate(index: number, mission: Mission): void {
 		const epoch = this.begin(index);
 		task.spawn(() => {
 			let world = this.arrivalService.getWorld();
@@ -164,7 +183,7 @@ export class TerrainService implements OnStart {
 				this.logger.Warn("World {Code} has no planet {Index}", world.code, index);
 				return;
 			}
-			this.run(configForPlanet(planet));
+			this.run(configForPlanet(planet, index, mission));
 		});
 	}
 
@@ -415,18 +434,86 @@ export class TerrainService implements OnStart {
 			}
 		}
 
+		const { core, spawns } = sampler.layout;
+		const set = BIOME_SETS[this.config.kind];
+		const water = set.fluid === Enum.Material.Water;
+		const seaLevel = this.config.seaLevel;
+		const isCliff = (cell: number) => {
+			const center = cellCenter(cell);
+			if (sampler.layout.wall(center.X, center.Z) > CLIFF_WALL) return true;
+			const [low, high] = groundRange(cell, 1);
+			return high - low > CLIFF_SLOPE;
+		};
+
+		// Ore the layout walls off from the Core (ringed by cliffs or mountains) goes. Only the layout counts:
+		// a steep cell or a river is a local bump, and judging by them walled the Core into a pocket with no ore.
+		const reached = new Set<number>();
+		const start = cellAt(core.x - CELL_STUDS / 2, core.z - CELL_STUDS / 2)!;
+		const queue = [start];
+		reached.add(start);
+		// A while, not a for: roblox-ts turns `for (...; head < queue.size(); ...)` into a numeric for, whose bound
+		// is read once, so the queue growing never extends it.
+		let head = 0;
+		while (head < queue.size()) {
+			if (head > 0 && head % REACH_PER_FRAME === 0) {
+				task.wait();
+				if (epoch !== this.epoch) return undefined;
+			}
+			const [x, z] = cellCoords(queue[head++]);
+			for (const [dx, dz] of [
+				[1, 0],
+				[-1, 0],
+				[0, 1],
+				[0, -1],
+			]) {
+				const nx = x + dx;
+				const nz = z + dz;
+				if (nx < 0 || nz < 0 || nx >= GRID_SIZE || nz >= GRID_SIZE) continue;
+				const neighbour = cellIndex(nx, nz);
+				if (reached.has(neighbour)) continue;
+				const center = cellCenter(neighbour);
+				if (sampler.layout.wall(center.X, center.Z) > CLIFF_WALL) continue;
+				reached.add(neighbour);
+				queue.push(neighbour);
+			}
+		}
+		const reachable = ores.filter((ore) => {
+			if (reached.has(ore.cell)) return true;
+			ore.model.Destroy();
+			return false;
+		});
+		this.logger.Info(
+			"Planet {Planet}: {Kept} of {Placed} ore cells reachable",
+			this.planet,
+			reachable.size(),
+			ores.size(),
+		);
+
 		return {
 			epoch: this.epoch,
 			planet: this.planet,
 			kind: this.config.kind,
-			landing: new Vector3(0, heightAt(0, 0), 0),
-			dropZones: sampler.pads.map((pad) => new Vector3(pad.x, heightAt(pad.x, pad.z), pad.z)),
-			ores,
+			layout: sampler.layout,
+			landing: new Vector3(core.x, heightAt(core.x, core.z), core.z),
+			mission: this.config.mission,
+			// An attack mission's spawns are enemy base sites: no drop zones, so nothing is banned or landed on.
+			dropZones:
+				this.config.mission === "attack"
+					? []
+					: spawns.map((spawn) => new Vector3(spawn.x, heightAt(spawn.x, spawn.z), spawn.z)),
+			ores: reachable,
 			props: this.props,
 			heightAt,
 			groundRange,
 			isLiquid(x: number, z: number) {
 				return sampler.isLiquid(x, z);
+			},
+			isDeep(x: number, z: number) {
+				if (!sampler.isLiquid(x, z)) return false;
+				return !water || sampler.height(x, z) < seaLevel - DEEP_WATER;
+			},
+			cliff(cell: number) {
+				return isCliff(cell);
 			},
 		};
 	}

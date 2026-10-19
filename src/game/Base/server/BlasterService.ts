@@ -145,7 +145,13 @@ export class BlasterService implements OnStart {
 			else if (splash !== undefined) this.waveService.blastAliens(to, splash, damage, undefined);
 			else if (model) this.waveService.damageAlien(model, damage);
 			const building = cell !== undefined ? this.baseService.cells.get(cell) : undefined;
-			if (repair !== undefined && building) this.baseService.repair(building, repair);
+			if (!building) return;
+			// Menders mend the team's own; everything else hurts what isn't (an enemy's or a ruin), never the team's.
+			if (building.team === "player") {
+				if (repair !== undefined) this.baseService.repair(building, repair);
+			} else if (repair === undefined) {
+				this.baseService.damage(building, damage, player);
+			}
 		});
 	}
 }

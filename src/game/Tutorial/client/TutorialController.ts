@@ -5,7 +5,15 @@ import { Players, Workspace } from "@rbxts/services";
 import { playerDataAtom } from "core/Data/client/data-state";
 import { COLORS } from "core/Interface/client/theme";
 import { generateStarSystem, type Planet } from "core/Worlds/shared/star-system";
-import { amountOf, baseStateAtom, buildModeAtom, equippedAtom, notify, toolsAtom } from "game/Base/client/base-state";
+import {
+	amountOf,
+	baseStateAtom,
+	buildModeAtom,
+	equippedAtom,
+	isPlayerBuilding,
+	notify,
+	toolsAtom,
+} from "game/Base/client/base-state";
 import { ghostPart } from "game/Base/client/BuildController";
 import {
 	BUILD_CATEGORIES,
@@ -52,10 +60,10 @@ type Draft = Omit<TutorialHint, "step"> & { readonly root?: string; readonly nam
 /** What to say and point at, for a step that wants a tool, then a building picked. */
 type Aim = Pick<Draft, "text" | "root" | "names">;
 
-/** The models in `Workspace.Base.<folder>`: `Buildings` or `Aliens`. */
+/** The models in `Workspace.Base.<folder>`: `Buildings` or `Aliens`. Enemy and derelict buildings are left out: none are the player's to use. */
 function modelsIn(folder: string) {
 	const children = Workspace.FindFirstChild("Base")?.FindFirstChild(folder)?.GetChildren() ?? [];
-	return children.filter((child): child is Model => child.IsA("Model"));
+	return children.filter((child): child is Model => child.IsA("Model") && isPlayerBuilding(child));
 }
 
 /** The buildings of `kind`, oldest first. */

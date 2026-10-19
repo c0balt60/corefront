@@ -17,6 +17,9 @@ const AUTOSAVE_SECONDS = 60;
 /** Reads of the save before the world gives up on it. */
 const READ_TRIES = 5;
 
+/** Bumped when cell indexes change (map size, layout): older saved bases are dropped on load. */
+const MAP_VERSION = 2;
+
 /** A world's progress, as its save slot keeps it. Keyed by strings, not numbers, so it stays JSON-safe. */
 interface Progress {
 	/** The planet the team was on, and the tier of Core they had (see `BaseService.coreAtom`). Saves from before tiers have none. */
@@ -30,6 +33,8 @@ interface Progress {
 	readonly discovered: ReadonlyArray<ResourceId>;
 	/** Bases by planet index. */
 	readonly bases: Readonly<Record<string, SavedBase>>;
+	/** The `MAP_VERSION` the bases were saved under. Saves from before it have none. */
+	readonly mapVersion?: number;
 }
 
 /**
@@ -115,7 +120,17 @@ export class SaveService implements OnStart {
 		teamAtom(progress.team);
 		for (const [userId, levels] of pairs(progress.personal)) personal.set(tonumber(userId)!, levels);
 		const bases = new Map<number, SavedBase>();
-		for (const [planet, base] of pairs(progress.bases)) bases.set(tonumber(planet)!, base);
+		if (progress.mapVersion === MAP_VERSION) {
+			for (const [planet, base] of pairs(progress.bases)) bases.set(tonumber(planet)!, base);
+		} else {
+			let dropped = 0;
+			for (const [planet] of pairs(progress.bases)) if (planet !== undefined) dropped++;
+			this.logger.Info(
+				"Save is from map version {Version}: dropped {Count} saved bases",
+				progress.mapVersion ?? 1,
+				dropped,
+			);
+		}
 		this.baseService.restore(bases);
 		// Last, as setting it sends everyone their research.
 		discoveredAtom(progress.discovered);
@@ -146,6 +161,7 @@ export class SaveService implements OnStart {
 			personal: researched,
 			discovered: discoveredAtom(),
 			bases,
+			mapVersion: MAP_VERSION,
 		};
 
 		this.writing = true;

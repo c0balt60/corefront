@@ -1,9 +1,9 @@
 import type { PlanetMap } from "game/Terrain/server/planet-map";
-import { CELL_STUDS, cellCenter, cellCoords, cellIndex, GRID_SIZE, MAP_HALF } from "game/Terrain/shared/map";
+import { CELL_STUDS, cellAt, cellCenter, cellCoords, cellIndex, GRID_SIZE, MAP_HALF } from "game/Terrain/shared/map";
 
 /** Added to a building's cell: aliens go round when that is cheap enough, and chew through when not. */
 const BUILDING_COST = 25;
-/** Liquid is slow, never impassable, so every spawn always has a path. */
+/** Shallow liquid is slow. Deep liquid and cliffs cost `math.huge` (impassable), unless `secureReach` softens them. */
 const LIQUID_COST = 40;
 const DIAGONAL = math.sqrt(2);
 /** Seconds of work a frame before these yield until the next one, so neither ever hitches the server. */
@@ -47,22 +47,80 @@ export function terrainCosts(map: PlanetMap): Array<number> {
 		const [a, b, c, d] = [corners[i], corners[i + 1], corners[i + side], corners[i + side + 1]];
 		const slope = math.max(a, b, c, d) - math.min(a, b, c, d);
 		const center = cellCenter(cell);
-		costs.push(map.isLiquid(center.X, center.Z) ? LIQUID_COST : slope < 2.5 ? 1 : slope < 6 ? 6 : 30);
+		if (map.cliff(cell) || map.isDeep(center.X, center.Z)) costs.push(math.huge);
+		else costs.push(map.isLiquid(center.X, center.Z) ? LIQUID_COST : slope < 2.5 ? 1 : slope < 6 ? 6 : 30);
 	}
 	return costs;
+}
+
+/**
+ * Safety net, once per map after `terrainCosts`: floods out from the Core's cells over passable
+ * ground, and if any drop zone / spawn isn't reached, makes cliffs cost 30 and deep liquid
+ * `LIQUID_COST` (in place) so nothing soft-locks. Returns how many spawns were unreachable.
+ */
+export function secureReach(map: PlanetMap, costs: Array<number>): number {
+	const blocked = (gx: number, gz: number) => costs[cellIndex(gx, gz)] === math.huge;
+	const reached = new Set<number>();
+	const queue = new Array<number>();
+	for (const [ox, oz] of [
+		[-1, -1],
+		[-1, 1],
+		[1, -1],
+		[1, 1],
+	]) {
+		const cell = cellAt(map.landing.X + ox, map.landing.Z + oz);
+		if (cell !== undefined) {
+			reached.add(cell);
+			queue.push(cell);
+		}
+	}
+	// A while: roblox-ts compiles this `for` to a numeric for that never sees the queue grow.
+	let head = 0;
+	while (head < queue.size()) {
+		const [ux, uz] = cellCoords(queue[head++]);
+		for (const [dx, dz] of STEPS) {
+			const vx = ux + dx;
+			const vz = uz + dz;
+			if (vx < 0 || vz < 0 || vx >= GRID_SIZE || vz >= GRID_SIZE) continue;
+			const v = cellIndex(vx, vz);
+			if (reached.has(v) || blocked(vx, vz)) continue;
+			if (dx !== 0 && dz !== 0 && (blocked(ux, vz) || blocked(vx, uz))) continue;
+			reached.add(v);
+			queue.push(v);
+		}
+	}
+
+	// Attacking, there are no drop zones: the enemy base sites are what must be reachable. Their buildings
+	// aren't placed yet, and count as open ground for this check.
+	const spawns = map.dropZones.isEmpty()
+		? map.layout.spawns.map((site) => [site.x, site.z])
+		: map.dropZones.map((zone) => [zone.X, zone.Z]);
+	const lost = spawns
+		.filter(([x, z]) => {
+			const cell = cellAt(x, z);
+			return cell === undefined || !reached.has(cell);
+		})
+		.size();
+	if (lost === 0) return 0;
+	for (let cell = 0; cell < costs.size(); cell++) {
+		if (costs[cell] === math.huge) costs[cell] = map.cliff(cell) ? 30 : LIQUID_COST;
+	}
+	return lost;
 }
 
 /**
  * A Mindustry-style flowfield: Dijkstra outward from `targets` (the Core's
  * cells), so one pass steers every alien. Returns, for each cell, the next
  * cell on its cheapest path there, or -1 for the targets themselves.
- * Buildings are passable but dear, and diagonal steps never cut a building's corner.
+ * Buildings are passable but dear, and diagonal steps never cut a building's corner. `walls`
+ * (an enemy base's buildings) are not passable at all: nothing steps onto them or cuts their corners.
  * Yields (see `SLICE_SECONDS`), so run it in a thread of its own; `buildings` must not change meanwhile.
  */
 export function buildFlowfield(
 	costs: ReadonlyArray<number>,
 	buildings: ReadonlyMap<number, unknown>,
 	targets: ReadonlyArray<number>,
+	walls: ReadonlySet<number> = new Set(),
 ): Array<number> {
 	const total = GRID_SIZE * GRID_SIZE;
 	const dist = new Array<number>(total, math.huge);
@@ -132,8 +190,12 @@ export function buildFlowfield(
 			if (vx < 0 || vz < 0 || vx >= GRID_SIZE || vz >= GRID_SIZE) continue;
 			const diagonal = dx !== 0 && dz !== 0;
 			if (diagonal && (buildings.has(cellIndex(ux, vz)) || buildings.has(cellIndex(vx, uz)))) continue;
+			// Impassable terrain: never cut its corner either.
+			if (diagonal && (costs[cellIndex(ux, vz)] === math.huge || costs[cellIndex(vx, uz)] === math.huge))
+				continue;
 
 			const v = cellIndex(vx, vz);
+			if (walls.has(v) || (diagonal && (walls.has(cellIndex(ux, vz)) || walls.has(cellIndex(vx, uz))))) continue;
 			const nd = d + enter * (diagonal ? DIAGONAL : 1);
 			if (nd < dist[v]) {
 				dist[v] = nd;

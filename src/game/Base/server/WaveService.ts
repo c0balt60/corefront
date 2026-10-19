@@ -4,7 +4,7 @@ import type { Logger } from "@rbxts/log";
 import { Debris, Players, RunService, Workspace } from "@rbxts/services";
 
 import { BaseService, type Building } from "game/Base/server/BaseService";
-import { buildFlowfield, terrainCosts } from "game/Base/server/flowfield";
+import { buildFlowfield, secureReach, terrainCosts } from "game/Base/server/flowfield";
 import { alienModel, alienTurrets, setHealth, setTarget, shieldBubble } from "game/Base/server/models";
 import { ALIEN_GAITS } from "game/Base/shared/alien-legs";
 import {
@@ -416,6 +416,46 @@ const CALL_DEBOUNCE = 2;
 const MAX_ALIENS = 80;
 const SPAWN_SECONDS = 0.1;
 const SPAWN_SPREAD = 6;
+/**
+ * Attack missions: seconds before an enemy Core's first alien, and between its aliens at the start, less
+ * `ATTACK_PER_MINUTE` for every minute played and `ATTACK_PER_LEVEL` for each level of difficulty, down to `ATTACK_FLOOR`.
+ */
+const ATTACK_GRACE = 45;
+const ATTACK_SECONDS = 20;
+const ATTACK_PER_MINUTE = 1;
+const ATTACK_PER_LEVEL = 1.5;
+const ATTACK_FLOOR = 6;
+/** Seconds played per `composition` stage in an attack mission, up to the planet's `MAX_STAGES`. */
+const ATTACK_STAGE_SECONDS = 120;
+/** A Core too poor to pay for even a crawler sends a free one every this many of its turns, so killing its drills slows an attack but never ends it. */
+const TRICKLE_TURNS = 3;
+/** Studs from an enemy Core's middle, along the axis toward the player's Core, that its aliens come in: just past the wall ring, in its lane (see `enemy-base`). */
+const LANE_STUDS = 88;
+/**
+ * What an alien costs an enemy Core, in what its drills deliver (see `Building.stored`): a crawler a few
+ * ore, a Dreadnought hundreds. Heavier kinds cost more.
+ */
+const ALIEN_COSTS: Record<AlienKind, number> = {
+	crawler: 4,
+	sapper: 8,
+	drone: 10,
+	spitter: 14,
+	wasp: 16,
+	brute: 20,
+	shielder: 24,
+	hornet: 24,
+	strider: 28,
+	aegis: 30,
+	mortar: 36,
+	bomber: 40,
+	hydra: 70,
+	gunship: 80,
+	carrier: 100,
+	fortress: 120,
+	frigate: 140,
+	titan: 220,
+	dreadnought: 400,
+};
 const RESULT_SECONDS = 8;
 const FIELD_SECONDS = 0.5;
 const STATE_SECONDS = 0.2;
@@ -692,6 +732,8 @@ export class WaveService implements OnStart {
 	/** Asked before a CallWave from a player is obeyed, if set. Set by `TutorialService`. */
 	canCall?: (player: Player) => boolean;
 	private readonly alienCount = atom(0);
+	/** Whether the active planet is an attack mission still being fought: enemy Cores send the aliens, and there are no waves. */
+	private readonly attack = atom(false);
 	private readonly state = computed((): BaseState => {
 		const pool = this.baseService.poolAtom();
 		return {
@@ -703,6 +745,8 @@ export class WaveService implements OnStart {
 			waves: this.waves(),
 			nextWaveAt: this.nextWaveAt(),
 			aliens: this.alienCount(),
+			attack: this.attack(),
+			enemyCores: this.baseService.enemyCoresAtom(),
 			coreHealth: this.baseService.coreHealthAtom(),
 			coreMaxHealth: this.baseService.coreMaxHealthAtom(),
 			core: this.baseService.coreAtom(),
@@ -723,6 +767,11 @@ export class WaveService implements OnStart {
 	private pending = new Array<{ readonly kind: AlienKind; readonly at?: Vector3 }>();
 	private healthScale = 1;
 	private maxStage = 1;
+	private difficulty = 0;
+	/** Attack missions: seconds played, seconds till the enemy Cores' next aliens, and how many turns each has been too poor to pay. */
+	private attackElapsed = 0;
+	private attackTimer = 0;
+	private readonly broke = new Map<Building, number>();
 	private spawnIndex = 0;
 	private costs?: { readonly map: PlanetMap; readonly costs: Array<number> };
 	private field = new Array<number>(GRID_SIZE * GRID_SIZE, -1);
@@ -772,11 +821,16 @@ export class WaveService implements OnStart {
 		baseMessaging.client.emitAll(BaseMessage.Pinged);
 	}
 
-	/** Launches the next wave now. False when no mission is running or every wave is out. Its countdown stops till it's cleared. */
+	/** Whether the active planet is an attack mission still being fought, which has no waves. */
+	isAttack(): boolean {
+		return this.attack();
+	}
+
+	/** Launches the next wave now. False when no mission is running, it's an attack mission or every wave is out. Its countdown stops till it's cleared. */
 	launch(): boolean {
 		const wave = this.wave() + 1;
 		const waves = this.waves();
-		if (this.baseService.phase() !== "active" || wave > waves) return false;
+		if (this.baseService.phase() !== "active" || this.attack() || wave > waves) return false;
 		// Aliens queued before the atoms change: an effect that errors in a setter can't leave a wave with none.
 		const stage = stageOf(wave, waves, this.maxStage);
 		for (const kind of composition(wave, stage, wave === waves)) this.pending.push({ kind });
@@ -786,9 +840,9 @@ export class WaveService implements OnStart {
 		return true;
 	}
 
-	/** Sets how many waves have launched, so the next one is `wave + 1`. False when no mission is running. */
+	/** Sets how many waves have launched, so the next one is `wave + 1`. False when no mission is running or it's an attack mission. */
 	setWave(wave: number): boolean {
-		if (this.baseService.phase() !== "active") return false;
+		if (this.baseService.phase() !== "active" || this.attack()) return false;
 		const launched = math.clamp(wave, 0, this.waves());
 		this.wave(launched);
 		this.nextWaveAt(launched < this.waves() ? Workspace.GetServerTimeNow() + WAVE_SECONDS : 0);
@@ -809,6 +863,7 @@ export class WaveService implements OnStart {
 
 	/** Stops the waves, here and on every planet after (see `BaseService.sandbox`): aliens only come when called. */
 	startSandbox() {
+		this.attack(false);
 		this.liberated(true);
 		this.wave(0);
 		this.waves(0);
@@ -869,10 +924,12 @@ export class WaveService implements OnStart {
 		if (!cover) return amount;
 
 		const group = [cover];
-		for (let i = 0; i < group.size(); i++) {
+		// A while: roblox-ts compiles this `for` to a numeric for that never sees `group` grow.
+		let i = 0;
+		while (i < group.size()) {
+			const member = group[i++];
 			for (const other of up) {
-				if (!group.includes(other) && apart(group[i], other) <= radius(group[i]) + radius(other))
-					group.push(other);
+				if (!group.includes(other) && apart(member, other) <= radius(member) + radius(other)) group.push(other);
 			}
 		}
 		let pooled = 0;
@@ -900,6 +957,13 @@ export class WaveService implements OnStart {
 			map !== undefined && (this.baseService.sandbox() || this.planetsService.isConquered(map.planet));
 		const planet = map && !liberated ? this.planetsService.getPlanet(map.planet) : undefined;
 		this.liberated(liberated);
+		// An attack mission has no waves: its enemy Cores send aliens for as long as they stand.
+		const attack = planet !== undefined && map?.mission === "attack";
+		this.attack(attack);
+		this.attackElapsed = 0;
+		this.attackTimer = ATTACK_GRACE;
+		this.broke.clear();
+		this.difficulty = planet?.difficulty ?? 0;
 		this.healthScale = planet ? 1 + 0.3 * planet.difficulty + 0.2 * planet.aliens : 1;
 		this.maxStage = planet ? MAX_STAGES[math.clamp(planet.difficulty, 0, MAX_STAGES.size() - 1)] : 1;
 		if (map && this.costs?.map !== map) {
@@ -908,12 +972,21 @@ export class WaveService implements OnStart {
 			this.field = new Array<number>(GRID_SIZE * GRID_SIZE, -1);
 			task.spawn(() => {
 				const costs = terrainCosts(map);
+				const lost = secureReach(map, costs);
+				if (lost > 0) {
+					this.logger.Warn(
+						"Planet {Planet}: {Lost} of {Spawns} spawns can't reach the Core, so cliffs are passable here",
+						map.planet,
+						lost,
+						map.layout.spawns.size(),
+					);
+				}
 				if (this.planetsService.currentMap() === map) this.costs = { map, costs };
 			});
 		}
 		this.wave(0);
-		this.waves(planet ? BASE_WAVES + WAVES_PER_DIFFICULTY * planet.difficulty : 0);
-		this.nextWaveAt(planet && !this.holdAtom() ? Workspace.GetServerTimeNow() + GRACE_SECONDS : 0);
+		this.waves(planet && !attack ? BASE_WAVES + WAVES_PER_DIFFICULTY * planet.difficulty : 0);
+		this.nextWaveAt(planet && !attack && !this.holdAtom() ? Workspace.GetServerTimeNow() + GRACE_SECONDS : 0);
 	}
 
 	/** Shows the result for a while, then liberates the planet (the team stays on) or retreats the team. */
@@ -956,13 +1029,20 @@ export class WaveService implements OnStart {
 				this.nextWaveAt(now + (this.wave() === 0 ? HELD_SECONDS : WAVE_SECONDS));
 			else if (this.nextWaveAt() > 0 && now >= this.nextWaveAt()) this.launch();
 		}
+		if (this.attack()) this.spawnAttackers(map, dt);
 		this.spawnPending(map, dt);
 		this.refreshField();
 		this.moveAliens(map, dt);
 		this.fireTurrets(map, dt);
 		this.landProjectiles();
 
-		if (!this.liberated() && this.wave() >= this.waves() && this.pending.isEmpty() && this.aliens.isEmpty()) {
+		if (
+			!this.liberated() &&
+			!this.attack() &&
+			this.wave() >= this.waves() &&
+			this.pending.isEmpty() &&
+			this.aliens.isEmpty()
+		) {
 			this.baseService.end("won");
 		}
 	}
@@ -987,6 +1067,74 @@ export class WaveService implements OnStart {
 		const x = spawn.X + random.NextNumber(-SPAWN_SPREAD, SPAWN_SPREAD);
 		const z = spawn.Z + random.NextNumber(-SPAWN_SPREAD, SPAWN_SPREAD);
 		this.spawn(map, kind, x, z);
+	}
+
+	/**
+	 * An attack mission's aliens: every so often (see `ATTACK_SECONDS`) each enemy Core sends one, of a kind
+	 * from the `composition` stage the mission has reached, paid for from its stock; too poor for that
+	 * kind it sends a crawler instead, and too poor for a crawler a free one every `TRICKLE_TURNS` turns.
+	 */
+	private spawnAttackers(map: PlanetMap, dt: number) {
+		this.attackElapsed += dt;
+		this.attackTimer -= dt;
+		if (this.attackTimer > 0) return;
+		const minutes = this.attackElapsed / 60;
+		this.attackTimer = math.max(
+			ATTACK_FLOOR,
+			ATTACK_SECONDS - ATTACK_PER_MINUTE * minutes - ATTACK_PER_LEVEL * this.difficulty,
+		);
+		const stage = math.clamp(1 + math.floor(this.attackElapsed / ATTACK_STAGE_SECONDS), 1, this.maxStage);
+		const kinds = composition(stage, stage, false);
+		for (const core of this.baseService.buildings) {
+			if (core.team !== "enemy" || !isCore(core.kind)) continue;
+			if (this.aliens.size() >= MAX_ALIENS) return;
+			let kind = kinds[random.NextInteger(0, kinds.size() - 1)];
+			if (core.stored < ALIEN_COSTS[kind]) kind = "crawler";
+			let cost = ALIEN_COSTS[kind];
+			if (core.stored < cost) {
+				const turns = (this.broke.get(core) ?? 0) + 1;
+				this.broke.set(core, turns);
+				if (turns % TRICKLE_TURNS !== 0) continue;
+				cost = 0;
+			}
+			core.stored -= cost;
+			core.model.SetAttribute("Stored", core.stored);
+			const at = this.laneSpawn(map, core);
+			this.spawn(
+				map,
+				kind,
+				at.X + random.NextNumber(-SPAWN_SPREAD, SPAWN_SPREAD),
+				at.Z + random.NextNumber(-SPAWN_SPREAD, SPAWN_SPREAD),
+			);
+		}
+	}
+
+	/**
+	 * Where an enemy Core's aliens come in: `LANE_STUDS` out along the axis toward the player's Core, the
+	 * way its wall ring is left open, moved on or aside to the nearest open ground (not cliff, deep liquid
+	 * or built over).
+	 */
+	private laneSpawn(map: PlanetMap, core: Building): Vector3 {
+		const toward = map.landing.sub(core.position);
+		const alongX = math.abs(toward.X) >= math.abs(toward.Z);
+		const sign = (alongX ? toward.X : toward.Z) >= 0 ? 1 : -1;
+		const lane = alongX ? new Vector3(sign, 0, 0) : new Vector3(0, 0, sign);
+		const side = alongX ? new Vector3(0, 0, 1) : new Vector3(1, 0, 0);
+		for (const along of [0, 8, 16, 24, 32]) {
+			for (const across of [0, 8, -8, 16, -16]) {
+				const at = core.position.add(lane.mul(LANE_STUDS + along)).add(side.mul(across));
+				const cell = cellAt(at.X, at.Z);
+				if (
+					cell !== undefined &&
+					!map.cliff(cell) &&
+					!map.isDeep(at.X, at.Z) &&
+					!this.baseService.cells.has(cell)
+				) {
+					return at;
+				}
+			}
+		}
+		return core.position.add(lane.mul(LANE_STUDS));
 	}
 
 	/** Brings a `kind` of alien in at (x, z): on the ground there, or flying its height over it. */
@@ -1071,13 +1219,16 @@ export class WaveService implements OnStart {
 		const targets = new Array<number>();
 		// What blocks the way: everything but belts, which aliens walk over.
 		const solid = new Map<number, Building>();
+		// An enemy base's buildings, belts and all, are not chewed through but walked round.
+		const walls = new Set<number>();
 		for (const [cell, building] of this.baseService.cells) {
-			if (isCore(building.kind)) targets.push(cell);
-			if (!BUILDINGS[building.kind].walkable) solid.set(cell, building);
+			if (building.team === "enemy") walls.add(cell);
+			else if (!BUILDINGS[building.kind].walkable) solid.set(cell, building);
+			if (isCore(building.kind) && building.team === "player") targets.push(cell);
 		}
 		this.fieldBuilding = true;
 		task.spawn(() => {
-			const field = buildFlowfield(costs.costs, solid, targets);
+			const field = buildFlowfield(costs.costs, solid, targets, walls);
 			this.fieldBuilding = false;
 			// A new map meanwhile has costs of its own, and a field of its own to come.
 			if (this.costs === costs) this.field = field;
@@ -1144,7 +1295,8 @@ export class WaveService implements OnStart {
 						this.explode(alien);
 						continue;
 					}
-					if (alien.cooldown <= 0) {
+					// Only on a stale field, which still led through a base that has since been built there.
+					if (alien.cooldown <= 0 && building.team !== "enemy") {
 						this.baseService.damage(building, def.damage);
 						alien.cooldown = def.rate;
 					}
@@ -1218,15 +1370,17 @@ export class WaveService implements OnStart {
 	private open(alien: Alien, x: number, z: number): boolean {
 		if (alien.def.air) return true;
 		const cell = cellAt(x, z);
+		// Never into a cliff or deep cell (impassable in the terrain costs).
+		if (cell !== undefined && this.costs?.costs[cell] === math.huge) return false;
 		return (
 			cell !== undefined && (!this.solidAt(cell) || this.solidAt(cellAt(alien.x, alien.z) ?? -1) !== undefined)
 		);
 	}
 
-	/** The building on `cell` that's in aliens' way, if any: anything but what they walk over. */
+	/** The building on `cell` that's in aliens' way, if any: anything but what they walk over, and all of an enemy's. */
 	private solidAt(cell: number): Building | undefined {
 		const building = cell >= 0 ? this.baseService.cells.get(cell) : undefined;
-		return building && !BUILDINGS[building.kind].walkable ? building : undefined;
+		return building && (building.team === "enemy" || !BUILDINGS[building.kind].walkable) ? building : undefined;
 	}
 
 	/**
@@ -1261,7 +1415,7 @@ export class WaveService implements OnStart {
 	private bomb(map: PlanetMap, alien: Alien): boolean {
 		const ground = new Vector3(alien.x, map.heightAt(alien.x, alien.z), alien.z);
 		for (const building of this.baseService.buildings) {
-			if (!reaches(building, ground, alien.def.splash ?? 0)) continue;
+			if (building.team === "enemy" || !reaches(building, ground, alien.def.splash ?? 0)) continue;
 			const from = alien.root.Position;
 			const { damage, splash = 0 } = alien.def;
 			// Straight down: the curve's bend is halfway.
@@ -1299,7 +1453,7 @@ export class WaveService implements OnStart {
 	/** Hurts every building and player within `splash` studs of `at`: an alien's explosion, shell or bomb. */
 	private blastBase(at: Vector3, splash: number, damage: number) {
 		for (const building of this.baseService.buildings) {
-			if (reaches(building, at, splash)) this.baseService.damage(building, damage);
+			if (building.team !== "enemy" && reaches(building, at, splash)) this.baseService.damage(building, damage);
 		}
 		for (const [position, humanoid] of livePlayers()) {
 			if (position.sub(at).Magnitude <= splash) humanoid.TakeDamage(damage);
@@ -1398,7 +1552,7 @@ export class WaveService implements OnStart {
 		}
 		// ponytail: scans every building per shot; bucket buildings by cell if bases grow to thousands.
 		for (const building of this.baseService.buildings) {
-			if (among === "turrets" && !BUILDINGS[building.kind].turret) continue;
+			if (building.team === "enemy" || (among === "turrets" && !BUILDINGS[building.kind].turret)) continue;
 			const distance = flatDistance(building.position, pivot);
 			if (distance >= best || !inArc(mount, building.position, gun.arc)) continue;
 			best = distance;
@@ -1445,11 +1599,17 @@ export class WaveService implements OnStart {
 	 * lightning, which strike at once.
 	 */
 	private fireTurrets(map: PlanetMap, dt: number) {
+		const players = livePlayers();
 		for (const turret of this.baseService.buildings) {
 			const def = BUILDINGS[turret.kind];
 			const gun = def.turret;
 			const head = turret.head;
-			if (!gun || !head) continue;
+			// Derelict turrets are inert, and an enemy's shoot at players, not aliens.
+			if (!gun || !head || turret.team === "derelict") continue;
+			if (turret.team === "enemy") {
+				this.fireAtPlayers(turret, gun, head.Position, players, dt);
+				continue;
+			}
 			const ammo = this.baseService.nextAmmo(turret);
 			const from = head.Position;
 			const range = (def.range ?? 0) + (ammo?.range ?? 0);
@@ -1509,6 +1669,42 @@ export class WaveService implements OnStart {
 				});
 			}
 		}
+	}
+
+	/**
+	 * An enemy base's turret: shoots the nearest player within its range, if it has ammo (or power) and
+	 * can hit the ground, as often as its `seconds` allow, and its head turns after them (see `TurretController`).
+	 * The hit lands at once, as an alien's bullets do, whatever the turret fires.
+	 * ponytail: no projectile, burst, volley or splash for these; make them loft shots at players if they feel flat.
+	 */
+	private fireAtPlayers(
+		turret: Building,
+		gun: TurretDef,
+		from: Vector3,
+		players: ReadonlyArray<[Vector3, Humanoid]>,
+		dt: number,
+	) {
+		const ammo = this.baseService.nextAmmo(turret);
+		const range = (BUILDINGS[turret.kind].range ?? 0) + (ammo?.range ?? 0);
+		let best = range;
+		let mark: [Vector3, Humanoid] | undefined;
+		if (ammo && gun.targets !== "air") {
+			for (const entry of players) {
+				const distance = flatDistance(entry[0], from);
+				if (distance >= best) continue;
+				best = distance;
+				mark = entry;
+			}
+		}
+		turret.engaged = mark !== undefined;
+		setTarget(turret.model, mark?.[1].Parent as Model | undefined);
+		if (!ammo) return;
+		turret.cooldown -= dt * (gun.energy ? turret.power : 1);
+		if (!mark || turret.cooldown > 0) return;
+		turret.cooldown = gun.seconds / (ammo.rate ?? 1);
+		this.baseService.shoot(turret);
+		shotMessaging.client.emitAll(ShotMessage.Hit, { from, to: mark[0], size: 1, hostile: true });
+		mark[1].TakeDamage(ammo.damage);
 	}
 
 	/**

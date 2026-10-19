@@ -1,4 +1,8 @@
-import type { Planet, PlanetKind } from "core/Worlds/shared/star-system";
+import type { Mission, Planet, PlanetKind } from "core/Worlds/shared/star-system";
+
+/** The map shapes `layoutFor` can build (see layout.ts). */
+export const ARCHETYPES = ["plains", "corridor", "crater", "split", "islands", "canyons"] as const;
+export type Archetype = (typeof ARCHETYPES)[number];
 
 /**
  * One tunable terrain setting. `TERRAIN_FIELDS` is the single schema: it gives
@@ -32,8 +36,16 @@ export interface TerrainConfig {
 	/** Picks the biome set, the fluid and the props (see biomes.ts). */
 	readonly kind: PlanetKind;
 	readonly edgeHeight: number;
-	/** How many flat pads near the edge enemies land on (see `inDropZone`). */
-	readonly dropZones: number;
+
+	/** The map shape; "auto" picks one from the seed and the kind. */
+	readonly archetype: Archetype | "auto";
+	/** The share of the full map that is playable; the rest is cliff. */
+	readonly mapScale: number;
+	/** 0-4, see `LEVEL_NAMES`. With the mission it sets how many drop zones or enemy bases there are. */
+	readonly difficulty: number;
+	readonly mission: Mission;
+	/** How high the layout's cliff walls rise, in studs. */
+	readonly wallHeight: number;
 
 	readonly seaLevel: number;
 	readonly landHeight: number;
@@ -87,6 +99,7 @@ function number(
 /** Panel sections, in order. Every field's `group` is one of these. */
 export const TERRAIN_GROUPS: ReadonlyArray<string> = [
 	"World",
+	"Layout",
 	"Shape",
 	"Mountains",
 	"Biomes",
@@ -95,7 +108,7 @@ export const TERRAIN_GROUPS: ReadonlyArray<string> = [
 	"Assets",
 ];
 
-// Scaled down from terrain-generator's open world to a 1024-stud map.
+// Scaled down from terrain-generator's open world to a 1536-stud map.
 export const TERRAIN_FIELDS: ReadonlyArray<ConfigField> = [
 	number("World", "seed", "Seed", 1337, 0, 2147483646, 1),
 	{
@@ -107,7 +120,26 @@ export const TERRAIN_FIELDS: ReadonlyArray<ConfigField> = [
 		options: ["Habitable", "Barren", "Frozen", "Volcanic"],
 	},
 	number("World", "edgeHeight", "Edge cliff height", 140, 0, 300, 1),
-	number("World", "dropZones", "Drop zones", 1, 1, 3, 1),
+
+	{
+		kind: "choice",
+		group: "Layout",
+		key: "archetype",
+		label: "Map shape",
+		default: "auto",
+		options: ["auto", ...ARCHETYPES],
+	},
+	number("Layout", "mapScale", "Playable share of the map", 1, 0.5, 1, 0.01),
+	number("Layout", "difficulty", "Difficulty", 2, 0, 4, 1),
+	{
+		kind: "choice",
+		group: "Layout",
+		key: "mission",
+		label: "Mission",
+		default: "defend",
+		options: ["defend", "attack"],
+	},
+	number("Layout", "wallHeight", "Cliff wall height", 90, 40, 200, 1),
 
 	// Sea level is also the lava level and the frozen lakes' ice level. Keep it on the 4-stud voxel grid.
 	number("Shape", "seaLevel", "Sea level", 0, -16, 64, 4),
@@ -145,7 +177,7 @@ export const TERRAIN_FIELDS: ReadonlyArray<ConfigField> = [
 
 	// Groves and clearings move props around, so dense biomes average about 8 per chunk at 12.
 	number("Assets", "propDensity", "Props per chunk (dense biomes)", 12, 0, 32, 0.5),
-	number("Assets", "oreDensity", "Ore clusters per chunk", 0.75, 0, 4, 0.05),
+	number("Assets", "oreDensity", "Ore field density", 0.75, 0, 4, 0.05),
 ];
 
 /** Ore clusters per chunk at each `Planet.resources` level (0-4). */
@@ -191,10 +223,11 @@ export function sanitizeConfig(input: unknown, base: TerrainConfig): TerrainConf
 
 /**
  * The config a planet generates with: its terrain seed and kind, ore clusters
- * from its resources level, and rougher hills and peaks the harder it is.
- * Medium planets and harder have a second drop zone.
+ * from its resources level, and rougher hills and peaks the harder it is. A
+ * bigger planet has more of the map playable. The first planet (`index` 0) is
+ * always plains, so the tutorial map stays stable.
  */
-export function configForPlanet(planet: Planet): TerrainConfig {
+export function configForPlanet(planet: Planet, index: number, mission: Mission): TerrainConfig {
 	const base = defaultConfig();
 	// 0.7x the default relief at difficulty 0, 1.3x at 4.
 	const rugged = 0.7 + 0.15 * planet.difficulty;
@@ -206,7 +239,11 @@ export function configForPlanet(planet: Planet): TerrainConfig {
 			oreDensity: ORE_DENSITY[planet.resources] ?? base.oreDensity,
 			hillHeight: base.hillHeight * rugged,
 			mountainHeight: base.mountainHeight * rugged,
-			dropZones: planet.difficulty >= 2 ? 2 : 1,
+			archetype: index === 0 ? "plains" : "auto",
+			// Size 2.5 (smallest) plays on 60% of the map, 7 on all of it.
+			mapScale: 0.6 + (0.4 * (planet.size - 2.5)) / 4.5,
+			difficulty: planet.difficulty,
+			mission,
 		},
 		base,
 	);

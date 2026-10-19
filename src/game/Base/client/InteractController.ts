@@ -10,6 +10,7 @@ import {
 	coreNow,
 	equippedAtom,
 	inventoryAtom,
+	isPlayerBuilding,
 	nearSelectedAtom,
 	notify,
 	selectedAtom,
@@ -97,7 +98,9 @@ export class InteractController implements OnStart {
 		let clearRing = () => {};
 
 		const frame = RunService.RenderStepped.Connect(() => {
-			const { building, prop } = pointedAt();
+			const { building: pointed, prop } = pointedAt();
+			// Enemy and derelict buildings have no panel and nothing to move in or out.
+			const building = isPlayerBuilding(pointed) ? pointed : undefined;
 			const ore = prop && CollectionService.HasTag(prop, "Ore") ? (prop as Model) : undefined;
 			const reachable = ore && this.distanceTo(cellCenter(ore.GetAttribute("Cell") as number)) <= TRANSFER_RANGE;
 			hovered = { building, ore: reachable ? ore : undefined };

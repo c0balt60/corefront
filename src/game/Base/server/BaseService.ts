@@ -16,6 +16,7 @@ import {
 	setHealth,
 	setPower,
 } from "game/Base/server/models";
+import { planEnemyBase, PLACE_MAX_SLOPE } from "game/Base/server/enemy-base";
 import { BaseMessage, baseMessaging, BeltMessage, beltMessaging, type Phase } from "game/Base/shared/base-network";
 import { alongPath, type BeltPath, DIRECTIONS, entryOf, feedsBelt, runPaths } from "game/Base/shared/belts";
 import {
@@ -47,6 +48,7 @@ import { levelsOf, statOf } from "game/Research/server/research-store";
 import { canBuild } from "game/Research/shared/research";
 import type { OreDeposit, PlanetMap } from "game/Terrain/server/planet-map";
 import { CELL_STUDS, cellAt, cellCenter, cellCoords, cellIndex, GRID_SIZE } from "game/Terrain/shared/map";
+import { Prng } from "game/Terrain/shared/prng";
 
 /** Resource amounts by id. A missing key is zero. */
 export type Stock = Partial<Record<ResourceId, number>>;
@@ -60,9 +62,26 @@ export interface Item {
 	readonly from?: Building;
 }
 
+/**
+ * Whose a building is. The team's own is `"player"`; an `"enemy"` base fights them (its turrets shoot
+ * players, aliens leave it alone and can't walk through it); `"derelict"` ruins are nobody's: aliens and
+ * players can both wear them down, but they never act.
+ */
+export type Team = "player" | "enemy" | "derelict";
+
+/** Scrap a deconstructed or shot-down derelict gives the player who did it: from this many to that many. */
+const SALVAGE_MIN = 2;
+const SALVAGE_MAX = 6;
+
+/** Its own Prng stream per ruin (see `placeRuins`), and the lowest-tier turrets a ruin may hold. */
+const SALT_RUIN = 60;
+const RUIN_TURRETS: ReadonlyArray<BuildableKind> = ["turret", "scatter", "hail"];
+
 /** A building on the map. Its model carries the same facts as attributes, for the client. */
 export interface Building {
 	readonly kind: BuildingKind;
+	/** Whose it is. Its model's `Team` attribute says so too, for the client. */
+	readonly team: Team;
 	/** Stays for the building's life: turning it or reshaping a belt remakes the parts inside. */
 	readonly model: Model;
 	/** The -X/-Z corner cell. */
@@ -158,6 +177,8 @@ function holds(def: BuildingDef, resource: ResourceId): boolean {
 export interface SavedBase {
 	readonly buildings: ReadonlyArray<
 		Pick<Building, "kind" | "cell" | "rotation" | "owner" | "health" | "stored" | "filter" | "input"> & {
+			/** Missing means `"player"`: saves from before teams. Enemy buildings are never saved. */
+			readonly team?: Team;
 			/** The cells of what it's power-linked to. */
 			readonly linked: ReadonlyArray<number>;
 		}
@@ -170,8 +191,6 @@ export interface SavedBase {
 const START_POOL: Stock = { copper: 80, lead: 40 };
 /** Seconds of network jitter a held mine click is allowed, so ordinary lag doesn't drop ore. */
 const MINE_SLACK = 0.05;
-/** Most height difference across a footprint, in studs. */
-const MAX_SLOPE = 6;
 /** How far a foundation's top stands above the highest ground under it, so it never shares a plane with the terrain. */
 const GROUND_CLEARANCE = 0.5;
 const FULL = "Your pack is full. Deposit at the Core.";
@@ -249,6 +268,8 @@ export class BaseService implements OnStart {
 	readonly buildings = new Set<Building>();
 	/** The building covering each cell. */
 	readonly cells = new Map<number, Building>();
+	/** How many enemy Cores stand: an attack mission is won when the last falls. Zero on a defend mission. */
+	readonly enemyCoresAtom = atom(0);
 	/** Bumps whenever a building appears or goes, so the flowfield knows to rebuild. */
 	revision = 0;
 	core?: Building;
@@ -343,6 +364,7 @@ export class BaseService implements OnStart {
 		this.buildings.clear();
 		this.cells.clear();
 		this.core = undefined;
+		this.enemyCoresAtom(0);
 		this.revision++;
 		this.ores.clear();
 		for (const player of Players.GetPlayers()) this.setInventory(player, {});
@@ -372,15 +394,21 @@ export class BaseService implements OnStart {
 		for (const ore of map.ores) this.ores.set(ore.cell, ore);
 
 		this.placeCore(map, this.coreAtom());
+		// A fresh attack mission has its enemy base built first, so ruins go round it. A liberated planet's is gone for good.
+		if (!saved && map.mission === "attack" && !this.sandbox() && !this.planetsService.isConquered(map.planet)) {
+			this.placeEnemyBase(map);
+		}
+		// Ruins are part of the saved base, so cleared ones stay cleared.
+		if (!saved) this.placeRuins(map);
 
 		const rebuilt = new Map<number, Building>();
 		for (const old of saved?.buildings ?? []) {
 			// A bigger Core than the one that left may stand there now.
 			if (footprint(old.cell, BUILDINGS[old.kind].size).some((covered) => this.cells.has(covered))) {
-				this.pay(BUILDINGS[old.kind].cost, REFUND);
+				if (old.team === undefined) this.pay(BUILDINGS[old.kind].cost, REFUND);
 				continue;
 			}
-			const building = this.build(map, old.kind, old.cell, old.rotation, old.owner);
+			const building = this.build(map, old.kind, old.cell, old.rotation, old.owner, old.team);
 			rebuilt.set(old.cell, building);
 			building.health = math.min(old.health, building.maxHealth);
 			building.stored = old.stored;
@@ -442,11 +470,23 @@ export class BaseService implements OnStart {
 
 	private capture(): SavedBase {
 		const buildings = new Array<SavedBase["buildings"][number]>();
-		for (const { kind, cell, rotation, owner, health, stored, filter, input, links } of this.buildings) {
-			if (isCore(kind)) continue;
+		for (const { kind, team, cell, rotation, owner, health, stored, filter, input, links } of this.buildings) {
+			// The player's Core left with them, and an enemy base is built afresh (see `Team`).
+			if (isCore(kind) || team === "enemy") continue;
 			const linked = new Array<number>();
 			for (const other of links) linked.push(other.cell);
-			buildings.push({ kind, cell, rotation, owner, health, stored, filter, input: { ...input }, linked });
+			buildings.push({
+				kind,
+				team: team === "player" ? undefined : team,
+				cell,
+				rotation,
+				owner,
+				health,
+				stored,
+				filter,
+				input: { ...input },
+				linked,
+			});
 		}
 		return { buildings, pool: { ...this.poolAtom() } };
 	}
@@ -481,8 +521,8 @@ export class BaseService implements OnStart {
 		return true;
 	}
 
-	/** Hurts a building. At zero it is gone for good, and losing the Core loses the planet. */
-	damage(building: Building, amount: number) {
+	/** Hurts a building. At zero it is gone for good, and losing the Core loses the planet. A `shooter` who fells a derelict salvages it. */
+	damage(building: Building, amount: number, shooter?: Player) {
 		if (!this.buildings.has(building)) return;
 		// A sandbox's Core holds at 1.
 		building.health = math.max(building.health - amount, this.sandbox() && building === this.core ? 1 : 0);
@@ -491,7 +531,15 @@ export class BaseService implements OnStart {
 		if (building.health > 0) return;
 
 		this.demolish(building);
-		if (isCore(building.kind)) this.end("lost");
+		if (shooter && building.team === "derelict") this.salvage(shooter);
+		if (isCore(building.kind) && building.team === "player") this.end("lost");
+		// The last enemy Core down wins the mission.
+		if (isCore(building.kind) && building.team === "enemy" && this.enemyCoresAtom() === 0) this.end("won");
+	}
+
+	/** Gives a player scrap for salvaging a derelict (`SALVAGE_MIN` to `SALVAGE_MAX`), what doesn't fit in their pack lost. */
+	salvage(player: Player) {
+		this.give(player, "scrap", math.random(SALVAGE_MIN, SALVAGE_MAX));
 	}
 
 	/** Heals a building, up to its max health. */
@@ -519,6 +567,11 @@ export class BaseService implements OnStart {
 		if (building === this.core) {
 			if ((this.poolAtom()[resource] ?? 0) >= this.stats().capacity) return false;
 			this.pay([{ resource, amount: 1 }], 1);
+		} else if (isCore(building.kind)) {
+			// An enemy Core keeps what it's given as its own stock (see `Building.stored`), which pays for its aliens.
+			if (building.stored >= coreStats(building.kind).capacity) return false;
+			building.stored++;
+			building.model.SetAttribute("Stored", building.stored);
 		} else if (def.turret) {
 			const shots = def.turret.ammo[resource]?.shots;
 			if (shots === undefined || building.totalAmmo + shots > def.turret.maxAmmo) return false;
@@ -681,7 +734,7 @@ export class BaseService implements OnStart {
 
 	/** The straight belt on cell (x, z) running across a line heading `rotation`, which a Junction can stand in for. */
 	private crossable(x: number, z: number, rotation: number): Building | undefined {
-		const belt = this.buildingOn(x, z);
+		const belt = this.playerBuilding(x, z);
 		if (!belt || !isBelt(belt.kind) || belt.rotation % 2 === rotation % 2) return undefined;
 		return belt.entry === (belt.rotation + 2) % 4 ? belt : undefined;
 	}
@@ -727,16 +780,10 @@ export class BaseService implements OnStart {
 		if (!this.inReach(player, cellCenter(cell, def.size))) return "That's too far away to build.";
 		const cells = footprint(cell, def.size);
 		const there = this.cells.get(cell);
-		const replaced = there && replaces(kind, there.kind, line) ? there : undefined;
+		const replaced = there?.team === "player" && replaces(kind, there.kind, line) ? there : undefined;
 		if (cells.some((covered) => this.cells.has(covered) && this.cells.get(covered) !== replaced)) return OCCUPIED;
-		// Waves land there, so they can't be walled in at the source.
-		if (inDropZone(cell, def.size, map.dropZones)) return "You can't build in a drop zone.";
-		if (cells.some((covered) => map.isLiquid(cellCenter(covered).X, cellCenter(covered).Z))) {
-			return "You can't build on liquid.";
-		}
-		// Belts go anywhere: they keep their grade and stand on their supports (see `runPaths`).
-		const [low, high] = map.groundRange(cell, def.size);
-		if (!isBelt(kind) && high - low > MAX_SLOPE) return "The ground is too steep there.";
+		const unfit = this.terrainBlock(map, kind, cell);
+		if (unfit !== undefined) return unfit;
 		if (def.drill && !cells.some((covered) => this.ores.has(covered))) return "Drills must go on ore.";
 		const short = this.shortOf(def.cost);
 		if (short !== undefined) return short;
@@ -756,6 +803,99 @@ export class BaseService implements OnStart {
 		return undefined;
 	}
 
+	/** Why the ground under a `kind` with its corner on `cell` won't take it (drop zone, cliff, deep liquid, slope), if it won't. */
+	private terrainBlock(map: PlanetMap, kind: BuildingKind, cell: number): string | undefined {
+		const size = BUILDINGS[kind].size;
+		const cells = footprint(cell, size);
+		// Waves land there, so they can't be walled in at the source.
+		if (inDropZone(cell, size, map.dropZones)) return "You can't build in a drop zone.";
+		if (cells.some((covered) => map.cliff(covered))) return "You can't build on a cliff.";
+		// Shallow water is fine; the foundation sits on the bed (the ground raycast ignores water).
+		if (cells.some((covered) => map.isDeep(cellCenter(covered).X, cellCenter(covered).Z))) {
+			return "You can't build on deep liquid.";
+		}
+		// Belts go anywhere: they keep their grade and stand on their supports (see `runPaths`).
+		const [low, high] = map.groundRange(cell, size);
+		if (!isBelt(kind) && high - low > PLACE_MAX_SLOPE) return "The ground is too steep there.";
+		return undefined;
+	}
+
+	/**
+	 * Builds the enemy base at every attack site (`layout.spawns`), on the "enemy" team: each planned
+	 * building made in order without the player's checks, then the power links between them. An entry whose
+	 * cells are already taken is skipped, and so are its links.
+	 */
+	private placeEnemyBase(map: PlanetMap) {
+		const planet = this.planetsService.getPlanet(map.planet);
+		const difficulty = planet?.difficulty ?? 0;
+		map.layout.spawns.forEach((site, index) => {
+			const plan = planEnemyBase(map, site, difficulty, (planet?.terrainSeed ?? map.planet) + index);
+			const made = new Map<number, Building>();
+			for (const entry of plan) {
+				if (footprint(entry.cell, BUILDINGS[entry.kind].size).some((covered) => this.cells.has(covered)))
+					continue;
+				made.set(entry.cell, this.build(map, entry.kind, entry.cell, entry.rotation, 0, "enemy"));
+			}
+			for (const entry of plan) {
+				const node = made.get(entry.cell);
+				for (const cell of entry.links) {
+					const other = made.get(cell);
+					if (node && other && !node.links.has(other)) this.link(node, other);
+				}
+			}
+			this.logger.Info(
+				"Enemy base at site {Site}: {Count} of {Planned} buildings",
+				index,
+				made.size(),
+				plan.size(),
+			);
+		});
+	}
+
+	/**
+	 * Fills `layout.ruins` with derelicts: rows of old walls with gaps, ore cells of covered fields mostly
+	 * walled over, and a few inert turrets, at 30-70% health. Same ground rules as a player's, free.
+	 */
+	private placeRuins(map: PlanetMap) {
+		for (const ruin of map.layout.ruins) {
+			const rng = new Prng(math.floor(ruin.x * 31 + ruin.z * 17), SALT_RUIN);
+			const center = cellAt(ruin.x, ruin.z);
+			if (center === undefined) continue;
+			const [cx, cz] = cellCoords(center);
+			const reach = math.ceil(ruin.radius / CELL_STUDS);
+			const free = new Array<number>();
+			const put = (kind: BuildingKind, cell: number) => {
+				const def = BUILDINGS[kind];
+				const [x, z] = cellCoords(cell);
+				if (x + def.size > GRID_SIZE || z + def.size > GRID_SIZE) return;
+				if (footprint(cell, def.size).some((covered) => this.cells.has(covered))) return;
+				if (this.terrainBlock(map, kind, cell) !== undefined) return;
+				const building = this.build(map, kind, cell, rng.nextInt(4), 0, "derelict");
+				building.health = math.max(1, math.round(building.maxHealth * (0.3 + 0.4 * rng.nextNumber())));
+				setHealth(building.model, building.health, building.maxHealth);
+			};
+			for (let dz = -reach; dz <= reach; dz++) {
+				for (let dx = -reach; dx <= reach; dx++) {
+					const x = cx + dx;
+					const z = cz + dz;
+					if (x < 0 || z < 0 || x >= GRID_SIZE || z >= GRID_SIZE || dx * dx + dz * dz > reach * reach)
+						continue;
+					const cell = cellIndex(x, z);
+					free.push(cell);
+					const over = ruin.covered && this.ores.has(cell) && rng.nextNumber() < 0.7;
+					// Every third row is a wall with gaps in it.
+					if (over || (dz % 3 === 0 && rng.nextNumber() < 0.65)) {
+						put(rng.nextNumber() < 0.25 ? "titaniumWall" : "wall", cell);
+					}
+				}
+			}
+			const turrets = 1 + rng.nextInt(3);
+			for (let i = 0; i < turrets && !free.isEmpty(); i++) {
+				put(RUIN_TURRETS[rng.nextInt(RUIN_TURRETS.size())], free[rng.nextInt(free.size())]);
+			}
+		}
+	}
+
 	/**
 	 * Builds a higher tier of Core over the one standing, Mindustry style, paid from the pool. Its
 	 * bigger footprint may cover belt pieces, refunded, but nothing else. Returns why not, if it can't.
@@ -769,7 +909,9 @@ export class BaseService implements OnStart {
 		if (!this.inReach(player, cellCenter(cell, def.size))) return "That's too far away to build.";
 		for (const covered of footprint(cell, def.size)) {
 			const there = this.cells.get(covered);
-			if (there && !replaces(kind, there.kind)) return "Clear the space round the Core first.";
+			if (there && (there.team !== "player" || !replaces(kind, there.kind))) {
+				return "Clear the space round the Core first.";
+			}
 		}
 		const short = this.shortOf(def.cost);
 		if (short !== undefined) return short;
@@ -788,7 +930,7 @@ export class BaseService implements OnStart {
 			const there = this.cells.get(covered);
 			if (!there) continue;
 			this.demolish(there);
-			if (!isCore(there.kind)) this.pay(BUILDINGS[there.kind].cost, REFUND);
+			if (!isCore(there.kind) && there.team === "player") this.pay(BUILDINGS[there.kind].cost, REFUND);
 		}
 		const core = this.build(map, kind, cell, 0, 0);
 		this.core = core;
@@ -809,7 +951,7 @@ export class BaseService implements OnStart {
 		if (!isCellData(data)) return;
 		const map = this.map;
 		if (!map || this.phase() !== "active") return this.notify(player, "You can't turn anything right now.");
-		const building = this.buildingOn(data.x, data.z);
+		const building = this.playerBuilding(data.x, data.z);
 		if (!building || isCore(building.kind)) return;
 		if (!this.inReach(player, building.position)) return this.notify(player, "That's too far away to turn.");
 
@@ -822,7 +964,7 @@ export class BaseService implements OnStart {
 	/** Sets the ore a Sorter lets straight through, a Source hands out or an Unloader takes, or none. */
 	private configure(player: Player, data: unknown) {
 		if (!isCellOreData(data) || this.phase() !== "active") return;
-		const building = this.buildingOn(data.x, data.z);
+		const building = this.playerBuilding(data.x, data.z);
 		if (!building || !FILTERED.has(building.kind)) return;
 		if (!this.inReach(player, building.position)) return this.notify(player, "That's too far away to set.");
 		building.filter = data.resource;
@@ -832,8 +974,8 @@ export class BaseService implements OnStart {
 	/** Links a power node to a building in its range, or unlinks them if they're linked. */
 	private toggleLink(player: Player, data: unknown) {
 		if (!isLinkData(data) || this.phase() !== "active") return;
-		const node = this.buildingOn(data.x, data.z);
-		const other = this.buildingOn(data.toX, data.toZ);
+		const node = this.playerBuilding(data.x, data.z);
+		const other = this.playerBuilding(data.toX, data.toZ);
 		if (!node || !other || node === other || BUILDINGS[node.kind].node === undefined || !isPowered(other.kind))
 			return;
 		if (!this.inReach(player, node.position)) return this.notify(player, "That's too far away to link.");
@@ -854,7 +996,7 @@ export class BaseService implements OnStart {
 		if (!isPowered(building.kind)) return;
 		const near = new Array<Building>();
 		for (const other of this.buildings) {
-			if (other === building || !isPowered(other.kind)) continue;
+			if (other === building || other.team !== building.team || !isPowered(other.kind)) continue;
 			if (linkReach(building.kind, building.cell, other.kind, other.cell)) near.push(other);
 		}
 		const distance = (other: Building) => other.position.sub(building.position).Magnitude;
@@ -876,7 +1018,9 @@ export class BaseService implements OnStart {
 		return most !== undefined && building.links.size() >= most;
 	}
 
+	/** Power links only join a team's own buildings. */
 	private link(a: Building, b: Building) {
+		if (a.team !== b.team) return;
 		a.links.add(b);
 		b.links.add(a);
 		this.drawLinks(a);
@@ -924,22 +1068,36 @@ export class BaseService implements OnStart {
 			}
 			return;
 		}
+		if (building.team === "enemy") return refuse("You can't take that down by hand.");
 		if (isCore(building.kind)) return refuse("The Core can't be removed.");
 		if (!this.inReach(player, building.position)) return refuse("That's too far away to remove.");
 
 		this.demolish(building);
-		this.pay(BUILDINGS[building.kind].cost, REFUND);
+		// Ruins give scrap, not a refund.
+		if (building.team === "derelict") this.salvage(player);
+		else this.pay(BUILDINGS[building.kind].cost, REFUND);
 	}
 
 	/** Builds without any checks; `place` does those. */
-	private build(map: PlanetMap, kind: BuildingKind, cell: number, rotation: number, owner: number): Building {
+	private build(
+		map: PlanetMap,
+		kind: BuildingKind,
+		cell: number,
+		rotation: number,
+		owner: number,
+		team: Team = "player",
+	): Building {
 		const def = BUILDINGS[kind];
-		const maxHealth = isCore(kind) ? def.health : math.round(def.health * statOf(owner, "buildingHealth"));
+		// Only a player's buildings follow their research.
+		const maxHealth =
+			isCore(kind) || team !== "player" ? def.health : math.round(def.health * statOf(owner, "buildingHealth"));
 		const model = new Instance("Model");
 		model.SetAttribute("Kind", kind);
+		model.SetAttribute("Team", team);
 		model.SetAttribute("Cell", cell);
 		const building: Building = {
 			kind,
+			team,
 			model,
 			cell,
 			position: cellCenter(cell, def.size),
@@ -981,6 +1139,7 @@ export class BaseService implements OnStart {
 		for (const [resource] of pairs(def.generator?.fuel ?? {})) model.SetAttribute(`Input_${resource}`, 0);
 		this.buildings.add(building);
 		for (const covered of footprint(cell, def.size)) this.cells.set(covered, building);
+		if (isCore(kind) && team === "enemy") this.enemyCoresAtom(this.enemyCoresAtom() + 1);
 		this.revision++;
 
 		const [low, high] = map.groundRange(cell, def.size);
@@ -1200,6 +1359,12 @@ export class BaseService implements OnStart {
 		return this.cells.get(cellIndex(x, z));
 	}
 
+	/** The building covering cell (x, z), if it's the player's: what their own actions (turning, setting, linking, moving items) act on. */
+	private playerBuilding(x: number, z: number): Building | undefined {
+		const building = this.buildingOn(x, z);
+		return building?.team === "player" ? building : undefined;
+	}
+
 	private demolish(building: Building) {
 		for (const other of building.links) {
 			other.links.delete(building);
@@ -1210,6 +1375,7 @@ export class BaseService implements OnStart {
 		this.buildings.delete(building);
 		for (const covered of footprint(building.cell, BUILDINGS[building.kind].size)) this.cells.delete(covered);
 		if (building === this.core) this.core = undefined;
+		if (isCore(building.kind) && building.team === "enemy") this.enemyCoresAtom(this.enemyCoresAtom() - 1);
 		this.revision++;
 		this.refreshAround(building);
 	}
@@ -1252,10 +1418,10 @@ export class BaseService implements OnStart {
 		if (this.give(player, ore.resource, 1) === 0) this.notify(player, FULL);
 	}
 
-	/** The building covering a cell a player wants to move items in or out of, if they're close enough to. */
+	/** The player's building covering a cell a player wants to move items in or out of, if they're close enough to. */
 	reachable(player: Player, data: unknown): Building | undefined {
 		if (!isCellData(data) || this.phase() !== "active") return undefined;
-		const building = this.buildingOn(data.x, data.z);
+		const building = this.playerBuilding(data.x, data.z);
 		const range = building && isCore(building.kind) ? this.stats().reach : TRANSFER_RANGE;
 		if (building && !this.inReach(player, building.position, range)) {
 			this.notify(player, "That's too far away. Move closer.");
@@ -1418,7 +1584,7 @@ export class BaseService implements OnStart {
 			}
 			if (def.repair !== undefined && def.range !== undefined && share > 0) {
 				for (const other of this.buildings) {
-					if (other.position.sub(building.position).Magnitude <= def.range) {
+					if (other.team === building.team && other.position.sub(building.position).Magnitude <= def.range) {
 						this.repair(other, def.repair * share);
 					}
 				}

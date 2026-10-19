@@ -51,6 +51,10 @@ export interface BaseState {
 	/** `Workspace.GetServerTimeNow()` when the next wave launches, or 0 when none is coming. An f64: a plain number goes as an f32, which rounds a time this big to 128 s. */
 	readonly nextWaveAt: f64;
 	readonly aliens: number;
+	/** An attack mission, still being fought: no waves, and the enemy Cores send the aliens. */
+	readonly attack: boolean;
+	/** How many enemy Cores stand. The mission is won when it reaches zero. */
+	readonly enemyCores: number;
 	readonly coreHealth: number;
 	readonly coreMaxHealth: number;
 	/** The Core's tier, which sets every character's stats (see `CoreDef`). */

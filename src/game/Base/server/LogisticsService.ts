@@ -142,7 +142,7 @@ export class LogisticsService implements OnStart {
 		for (let i = 0; i < around.size(); i++) {
 			const index = (unloader.turn + i) % around.size();
 			const [store] = around[index];
-			if (!isStorage(store.kind)) continue;
+			if (!isStorage(store.kind) || store.team !== unloader.team) continue;
 			const stock = this.baseService.stock(store);
 			const has = (resource: ResourceId) => (stock[resource] ?? 0) > 0;
 			const wanted =
@@ -173,6 +173,8 @@ export class LogisticsService implements OnStart {
 		origin: number,
 		hops = 0,
 	): boolean {
+		// Ore never crosses from one team's buildings to another's.
+		if (target.team !== from.team) return false;
 		// The side of `target` it comes in by.
 		const face = (side + 2) % 4;
 		let joined = 0;

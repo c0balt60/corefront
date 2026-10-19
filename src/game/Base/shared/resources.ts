@@ -82,6 +82,17 @@ export const KIND_ORES: Record<
 	],
 };
 
+/** How far out an ore is found: 0 near the Core, 1 mid-map, 2 far out toward the spawns. Made resources have no tier. */
+export const ORE_TIER: Partial<Record<ResourceId, number>> = {
+	copper: 0,
+	lead: 0,
+	coal: 1,
+	sand: 1,
+	scrap: 1,
+	titanium: 2,
+	thorium: 2,
+};
+
 /** Fuel per destination index, per point of an ore's weight. */
 const FUEL_RATE = 1.5;
 
